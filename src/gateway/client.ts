@@ -255,7 +255,13 @@ function mapWebChatEvent(frame: RebornWebChatEventFrame | null, threadId: string
         thread_id: threadId,
       }
     case "failed":
-      return { type: "error", message: "run failed", thread_id: threadId }
+      return {
+        type: "run_status",
+        status: frame.run_state?.status ?? "failed",
+        run_id: frame.run_state?.run_id,
+        failure_category: frame.run_state?.failure?.category,
+        thread_id: threadId,
+      }
     case "projection_snapshot":
     case "projection_update":
       return projectionEvent(frame, threadId)
@@ -277,6 +283,7 @@ function projectionEvent(frame: RebornWebChatEventFrame, threadId: string): AppE
       type: "run_status",
       status: runStatus.status,
       run_id: runStatus.run_id,
+      failure_category: runStatus.failure_category,
       thread_id: threadId,
     }
   }
@@ -296,7 +303,9 @@ function textBodyFromProjectionItem(item: Record<string, unknown>): string[] {
   return []
 }
 
-function runStatusFromProjectionItem(item: Record<string, unknown>): Array<{ run_id?: string | null; status: string }> {
+function runStatusFromProjectionItem(
+  item: Record<string, unknown>,
+): Array<{ run_id?: string | null; status: string; failure_category?: string | null }> {
   const runStatus = item.run_status
   if (runStatus && typeof runStatus === "object") {
     return runStatusFromRecord(runStatus as Record<string, unknown>)
@@ -307,12 +316,19 @@ function runStatusFromProjectionItem(item: Record<string, unknown>): Array<{ run
   return []
 }
 
-function runStatusFromRecord(record: Record<string, unknown>): Array<{ run_id?: string | null; status: string }> {
+function runStatusFromRecord(
+  record: Record<string, unknown>,
+): Array<{ run_id?: string | null; status: string; failure_category?: string | null }> {
   if (typeof record.status !== "string") return []
+  const failure = record.failure
   return [
     {
       run_id: typeof record.run_id === "string" ? record.run_id : null,
       status: record.status,
+      failure_category:
+        failure && typeof failure === "object" && "category" in failure && typeof failure.category === "string"
+          ? failure.category
+          : null,
     },
   ]
 }

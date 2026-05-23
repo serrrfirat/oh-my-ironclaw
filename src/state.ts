@@ -96,6 +96,9 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
     case "status":
       return { ...state, status: event.message }
     case "run_status":
+      if (isFailedRunStatus(event.status)) {
+        return appendRunFailure(state, event)
+      }
       return { ...state, status: event.status }
     case "stream_chunk":
       return appendAssistantChunk(state, event.content, event.thread_id)
@@ -283,6 +286,43 @@ function upsertActivity(items: ActivityItem[], item: ActivityItem): ActivityItem
   const index = items.findIndex((existing) => existing.id === item.id)
   if (index < 0) return pushActivity(items, item)
   return items.map((existing, current) => (current === index ? item : existing))
+}
+
+function appendRunFailure(
+  state: UiState,
+  event: Extract<AppEvent, { type: "run_status" }>,
+): UiState {
+  const id = event.run_id ? `run-${event.run_id}-failed` : `run-failed-${Date.now()}`
+  const detail = event.failure_category ? `Run failed: ${event.failure_category}` : "Run failed before a reply was produced."
+  const transcript = state.transcript.some((item) => item.id === id)
+    ? state.transcript
+    : [
+        ...state.transcript,
+        {
+          id,
+          role: "system" as const,
+          text: detail,
+          threadId: event.thread_id,
+          state: event.status,
+        },
+      ]
+
+  return {
+    ...state,
+    status: event.status,
+    lastError: detail,
+    transcript,
+    activity: upsertActivity(state.activity, {
+      id,
+      label: "run failed",
+      detail,
+      status: "error",
+    }),
+  }
+}
+
+function isFailedRunStatus(status: string): boolean {
+  return status.toLowerCase() === "failed"
 }
 
 export function toolSummary(tool: ToolCallInfo): string {

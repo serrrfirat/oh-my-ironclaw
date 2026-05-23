@@ -80,6 +80,11 @@ export type RebornWebChatEventFrame = {
   reply?: { turn_run_id?: string; text?: string }
   progress?: { turn_run_id?: string; kind?: string }
   prompt?: { turn_run_id?: string; gate_ref?: string; headline?: string; body?: string }
+  run_state?: {
+    run_id?: string | null
+    status?: string | null
+    failure?: { category?: string | null } | null
+  }
   ack?: RebornSubmitTurnResponse
   response?: unknown
   state?: { thread_id?: string; items?: Array<Record<string, unknown>> }
@@ -165,7 +170,7 @@ export type PlanStepDto = {
 
 export type AppEvent =
   | { type: "response"; content: string; thread_id: string }
-  | { type: "run_status"; status: string; run_id?: string | null; thread_id?: string | null }
+  | { type: "run_status"; status: string; run_id?: string | null; thread_id?: string | null; failure_category?: string | null }
   | { type: "thinking"; message: string; thread_id?: string | null }
   | { type: "tool_started"; name: string; detail?: string | null; call_id?: string | null; thread_id?: string | null }
   | { type: "tool_completed"; name: string; success: boolean; error?: string | null; parameters?: string | null; call_id?: string | null; duration_ms?: number | null; thread_id?: string | null }
