@@ -33,7 +33,12 @@ export class GatewayClient {
   }
 
   async threads(): Promise<ThreadListResponse> {
-    const response = await this.requestJson<RebornListThreadsResponse>("/api/webchat/v2/threads", { method: "GET" })
+    const response = await this.requestJson<RebornListThreadsResponse>("/api/webchat/v2/threads", { method: "GET" }).catch(
+      (error: unknown) => {
+        if (isUnavailableThreadList(error)) return { threads: [] }
+        throw error
+      },
+    )
     const threads = response.threads.map(mapThread)
     return {
       threads,
@@ -148,10 +153,29 @@ export class GatewayClient {
 
     if (!response.ok) {
       const text = await response.text()
-      throw new Error(`HTTP ${response.status}: ${text || response.statusText}`)
+      throw new GatewayHttpError(response.status, text || response.statusText)
     }
 
     return response
+  }
+}
+
+class GatewayHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string,
+  ) {
+    super(`HTTP ${status}: ${body}`)
+  }
+}
+
+function isUnavailableThreadList(error: unknown): boolean {
+  if (!(error instanceof GatewayHttpError) || error.status !== 503) return false
+  try {
+    const body = JSON.parse(error.body) as { error?: string; kind?: string; retryable?: boolean }
+    return body.error === "unavailable" && body.kind === "service_unavailable" && body.retryable === true
+  } catch {
+    return false
   }
 }
 
