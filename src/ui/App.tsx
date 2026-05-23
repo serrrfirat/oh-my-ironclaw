@@ -50,6 +50,12 @@ export function App({ config }: AppProps) {
         return
       }
     }
+    if (isPlainEnter(key)) {
+      key.preventDefault()
+      key.stopPropagation()
+      void submit()
+      return
+    }
     if (key.name === "up") {
       setSelectedThreadIndex((index) => Math.max(0, index - 1))
       return
@@ -375,6 +381,13 @@ function Composer({
           textColor="#d9d9d9"
           focusedTextColor="#f2f2f2"
           placeholderColor="#8a8a8a"
+          keyBindings={[
+            { name: "return", action: "submit" },
+            { name: "kpenter", action: "submit" },
+            { name: "linefeed", action: "submit" },
+            { name: "return", shift: true, action: "newline" },
+            { name: "kpenter", shift: true, action: "newline" },
+          ]}
           onContentChange={onInputChange}
           onSubmit={onSubmit}
           style={{ height: 3 }}
@@ -511,6 +524,26 @@ function clamp(value: number, min: number, max: number): number {
 function truncate(value: string, max: number): string {
   if (value.length <= max) return value
   return `${value.slice(0, Math.max(0, max - 3))}...`
+}
+
+function isPlainEnter(key: {
+  name: string
+  ctrl: boolean
+  meta: boolean
+  shift: boolean
+  option: boolean
+  super?: boolean
+  hyper?: boolean
+}): boolean {
+  return (
+    (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") &&
+    !key.ctrl &&
+    !key.meta &&
+    !key.shift &&
+    !key.option &&
+    !key.super &&
+    !key.hyper
+  )
 }
 
 function errorMessage(error: unknown): string {
