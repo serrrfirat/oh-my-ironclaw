@@ -233,9 +233,9 @@ function WelcomeSurface({
     <box style={{ width, height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505" }}>
       <box style={{ height: topSpacer }} />
       {height >= 15 ? (
-        <ascii-font text="openclaw" font="block" color={["#646464", "#e7e7e7"]} backgroundColor="#050505" />
+        <ascii-font text="ironclaw" font="block" color={["#0f7a3a", "#8cffb0"]} backgroundColor="#050505" />
       ) : (
-        <text fg="#a3a3a3">openclaw</text>
+        <text fg="#8cffb0">ironclaw</text>
       )}
       <box style={{ height: 2 }} />
       <Composer
@@ -295,14 +295,14 @@ function ConversationSurface({
   return (
     <box style={{ height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505", paddingTop: 1 }}>
       <box style={{ width: contentWidth, height: 1, flexDirection: "row" }}>
-        <text fg="#bdbdbd">open_ironclaw</text>
+        <text fg="#8cffb0">ironclaw</text>
         <text fg="#4c4c4c"> | </text>
-        <text fg="#6aa9ff">build</text>
+        <text fg="#2ee66b">build</text>
       </box>
       <scrollbox style={{ width: contentWidth, height: transcriptHeight, paddingTop: 1, paddingBottom: 1 }}>
         {transcript.map((item) => (
           <box key={item.id} style={{ flexDirection: "column", marginBottom: 1 }}>
-            <text fg={item.role === "user" ? "#58a6ff" : item.role === "assistant" ? "#e6edf3" : "#d29922"}>
+            <text fg={item.role === "user" ? "#2ee66b" : item.role === "assistant" ? "#e6edf3" : "#d29922"}>
               {item.role}
             </text>
             <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
@@ -349,7 +349,7 @@ function Composer({
 }) {
   return (
     <box style={{ width, height: 6, flexDirection: "row", backgroundColor: "#1f1f1f" }}>
-      <box style={{ width: 1, backgroundColor: "#2f81f7" }} />
+      <box style={{ width: 1, backgroundColor: "#00d26a" }} />
       <box style={{ flexDirection: "column", flexGrow: 1, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
         <textarea
           ref={inputRef}
@@ -366,7 +366,7 @@ function Composer({
           style={{ height: 3 }}
         />
         <box style={{ height: 1, flexDirection: "row" }}>
-          <text fg="#58a6ff">Build</text>
+          <text fg="#2ee66b">Build</text>
           <text fg="#777777"> . </text>
           <text fg="#d0d0d0">GPT-5.5</text>
           <text fg="#858585"> OpenAI</text>
