@@ -1,6 +1,6 @@
 import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
-import { useEffect, useMemo, useReducer, useRef, useState } from "react"
+import { useEffect, useMemo, useReducer, useRef, useState, type RefObject } from "react"
 import type { ClientConfig } from "../config"
 import { GatewayClient } from "../gateway/client"
 import type { PendingGateInfo, ThreadInfo } from "../gateway/types"
@@ -165,119 +165,245 @@ export function App({ config }: AppProps) {
     }
   }
 
-  const narrow = width < 105
-  const leftWidth = narrow ? 24 : 32
-  const rightWidth = narrow ? 0 : 36
-  const transcriptHeight = Math.max(8, height - 9)
+  const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
+  const composerWidth = clamp(width - 8, 42, 82)
+  const contentWidth = clamp(width - 8, 48, 100)
 
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: "#0b0f12" }}>
-      <Header connected={state.connected} status={state.status} baseUrl={config.baseUrl} />
-      <box style={{ flexDirection: "row", flexGrow: 1 }}>
-        <ThreadList
-          threads={state.threads}
-          activeThreadId={state.activeThreadId}
-          selectedIndex={selectedThreadIndex}
-          width={leftWidth}
+    <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505" }}>
+      {hasConversation ? (
+        <ConversationSurface
+          contentWidth={contentWidth}
+          composerWidth={composerWidth}
+          height={height}
+          inputRef={textareaRef}
+          lastError={state.lastError}
+          markdownStyle={markdownStyle}
+          pendingGate={state.pendingGate ?? null}
+          selectedGateAction={selectedGateAction}
+          transcript={state.transcript}
+          onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
+          onResolve={(action) => void resolveGate(action)}
+          onSelectGateAction={setSelectedGateAction}
+          onSubmit={submit}
         />
-        <box style={{ flexDirection: "column", flexGrow: 1, minWidth: 35 }}>
-          <scrollbox style={{ height: transcriptHeight, flexGrow: 1, paddingLeft: 1, paddingRight: 1 }}>
-            {state.transcript.length === 0 ? (
-              <text fg="#7b8794">No messages yet.</text>
-            ) : (
-              state.transcript.map((item) => (
-                <box key={item.id} style={{ flexDirection: "column", marginBottom: 1 }}>
-                  <text fg={item.role === "user" ? "#7dd3fc" : item.role === "assistant" ? "#f8fafc" : "#c084fc"}>
-                    {item.role}
-                  </text>
-                  <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
-                </box>
-              ))
-            )}
-          </scrollbox>
-          {state.pendingGate ? (
-            <GatePanel
-              gate={state.pendingGate}
-              selectedAction={selectedGateAction}
-              onSelect={setSelectedGateAction}
-              onResolve={(action) => void resolveGate(action)}
-            />
-          ) : (
-            <box style={{ height: 1 }}>
-              <text fg="#475569">Ctrl+N new thread | Ctrl+Enter open selected thread | Ctrl+C quit</text>
-            </box>
-          )}
-          <box title="Message" style={{ border: true, height: 5, borderColor: "#334155" }}>
-            <textarea
-              ref={textareaRef}
-              focused={!state.pendingGate}
-              placeholder="Message IronClaw..."
-              initialValue=""
-              onContentChange={() => setInput(textareaRef.current?.plainText ?? "")}
-              onSubmit={submit}
-            />
-          </box>
-        </box>
-        {!narrow && <ActivityList width={rightWidth} items={state.activity} />}
-      </box>
-      {state.lastError ? (
-        <box style={{ height: 1, backgroundColor: "#450a0a" }}>
-          <text fg="#fecaca">{state.lastError}</text>
+      ) : (
+        <WelcomeSurface
+          baseUrl={config.baseUrl}
+          composerWidth={composerWidth}
+          connected={state.connected}
+          height={height}
+          inputRef={textareaRef}
+          lastError={state.lastError}
+          status={state.status}
+          width={width}
+          onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
+          onSubmit={submit}
+        />
+      )}
+    </box>
+  )
+}
+
+function WelcomeSurface({
+  baseUrl,
+  composerWidth,
+  connected,
+  height,
+  inputRef,
+  lastError,
+  status,
+  width,
+  onInputChange,
+  onSubmit,
+}: {
+  baseUrl: string
+  composerWidth: number
+  connected: boolean
+  height: number
+  inputRef: RefObject<TextareaRenderable | null>
+  lastError?: string | null
+  status: string
+  width: number
+  onInputChange: () => void
+  onSubmit: () => void
+}) {
+  const topSpacer = Math.max(1, Math.floor(height * 0.32) - 5)
+  return (
+    <box style={{ width, height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505" }}>
+      <box style={{ height: topSpacer }} />
+      {height >= 15 ? (
+        <ascii-font text="openclaw" font="block" color={["#646464", "#e7e7e7"]} backgroundColor="#050505" />
+      ) : (
+        <text fg="#a3a3a3">openclaw</text>
+      )}
+      <box style={{ height: 2 }} />
+      <Composer
+        focused
+        inputRef={inputRef}
+        width={composerWidth}
+        onInputChange={onInputChange}
+        onSubmit={onSubmit}
+      />
+      <HintLine width={composerWidth} />
+      <box style={{ height: 3 }} />
+      <text fg="#777777">
+        <span fg="#f6ad3c">* Tip</span> Press <span fg="#cfcfcf">ctrl+z</span> to suspend the terminal and return to your shell
+      </text>
+      {lastError ? (
+        <box style={{ height: 1, width: composerWidth }}>
+          <text fg="#696969">
+            {connected ? "online" : "offline"} | {status} | {truncate(baseUrl, Math.max(0, composerWidth - 18))}
+          </text>
         </box>
       ) : null}
     </box>
   )
 }
 
-function Header({ connected, status, baseUrl }: { connected: boolean; status: string; baseUrl: string }) {
+function ConversationSurface({
+  composerWidth,
+  contentWidth,
+  height,
+  inputRef,
+  lastError,
+  markdownStyle,
+  pendingGate,
+  selectedGateAction,
+  transcript,
+  onInputChange,
+  onResolve,
+  onSelectGateAction,
+  onSubmit,
+}: {
+  composerWidth: number
+  contentWidth: number
+  height: number
+  inputRef: RefObject<TextareaRenderable | null>
+  lastError?: string | null
+  markdownStyle: SyntaxStyle
+  pendingGate: PendingGateInfo | null
+  selectedGateAction: GateAction
+  transcript: Array<{ id: string; role: string; text: string }>
+  onInputChange: () => void
+  onResolve: (action: GateAction) => void
+  onSelectGateAction: (action: GateAction) => void
+  onSubmit: () => void
+}) {
+  const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 10))
+
   return (
-    <box style={{ height: 3, border: true, borderColor: connected ? "#14532d" : "#7f1d1d", paddingLeft: 1, paddingRight: 1 }}>
-      <text fg="#e2e8f0">
-        open_ironclaw <span fg="#64748b">|</span> <span fg={connected ? "#86efac" : "#fca5a5"}>{connected ? "online" : "offline"}</span>{" "}
-        <span fg="#64748b">|</span> <span fg="#93c5fd">{status}</span> <span fg="#64748b">| {baseUrl}</span>
-      </text>
+    <box style={{ height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505", paddingTop: 1 }}>
+      <box style={{ width: contentWidth, height: 1, flexDirection: "row" }}>
+        <text fg="#bdbdbd">open_ironclaw</text>
+        <text fg="#4c4c4c"> | </text>
+        <text fg="#6aa9ff">build</text>
+      </box>
+      <scrollbox style={{ width: contentWidth, height: transcriptHeight, paddingTop: 1, paddingBottom: 1 }}>
+        {transcript.map((item) => (
+          <box key={item.id} style={{ flexDirection: "column", marginBottom: 1 }}>
+            <text fg={item.role === "user" ? "#58a6ff" : item.role === "assistant" ? "#e6edf3" : "#d29922"}>
+              {item.role}
+            </text>
+            <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
+          </box>
+        ))}
+      </scrollbox>
+      {pendingGate ? (
+        <GatePanel
+          gate={pendingGate}
+          selectedAction={selectedGateAction}
+          width={composerWidth}
+          onSelect={onSelectGateAction}
+          onResolve={onResolve}
+        />
+      ) : (
+        <box style={{ width: composerWidth, height: 1 }}>
+          <text fg="#606060">ctrl+n new thread  |  ctrl+c quit</text>
+        </box>
+      )}
+      <Composer
+        focused={!pendingGate}
+        inputRef={inputRef}
+        width={composerWidth}
+        onInputChange={onInputChange}
+        onSubmit={onSubmit}
+      />
+      {lastError ? <StatusLine connected={false} status="error" message={lastError} width={composerWidth} /> : null}
     </box>
   )
 }
 
-function ThreadList({
-  threads,
-  activeThreadId,
-  selectedIndex,
+function Composer({
+  focused,
+  inputRef,
+  width,
+  onInputChange,
+  onSubmit,
+}: {
+  focused: boolean
+  inputRef: RefObject<TextareaRenderable | null>
+  width: number
+  onInputChange: () => void
+  onSubmit: () => void
+}) {
+  return (
+    <box style={{ width, height: 6, flexDirection: "row", backgroundColor: "#1f1f1f" }}>
+      <box style={{ width: 1, backgroundColor: "#2f81f7" }} />
+      <box style={{ flexDirection: "column", flexGrow: 1, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
+        <textarea
+          ref={inputRef}
+          focused={focused}
+          placeholder={'Ask anything... "What is the tech stack of this project?"'}
+          initialValue=""
+          backgroundColor="#1f1f1f"
+          focusedBackgroundColor="#1f1f1f"
+          textColor="#d9d9d9"
+          focusedTextColor="#f2f2f2"
+          placeholderColor="#8a8a8a"
+          onContentChange={onInputChange}
+          onSubmit={onSubmit}
+          style={{ height: 3 }}
+        />
+        <box style={{ height: 1, flexDirection: "row" }}>
+          <text fg="#58a6ff">Build</text>
+          <text fg="#777777"> . </text>
+          <text fg="#d0d0d0">GPT-5.5</text>
+          <text fg="#858585"> OpenAI</text>
+        </box>
+      </box>
+    </box>
+  )
+}
+
+function HintLine({ width }: { width: number }) {
+  return (
+    <box style={{ width, height: 1, flexDirection: "row", justifyContent: "flex-end" }}>
+      <text fg="#cfcfcf">tab</text>
+      <text fg="#777777"> agents   </text>
+      <text fg="#cfcfcf">ctrl+p</text>
+      <text fg="#777777"> commands</text>
+    </box>
+  )
+}
+
+function StatusLine({
+  baseUrl,
+  connected,
+  message,
+  status,
   width,
 }: {
-  threads: ThreadInfo[]
-  activeThreadId?: string | null
-  selectedIndex: number
+  baseUrl?: string
+  connected: boolean
+  message: string
+  status: string
   width: number
 }) {
   return (
-    <box title="Threads" style={{ border: true, width, borderColor: "#1f2937", flexDirection: "column" }}>
-      {threads.slice(0, 24).map((thread, index) => {
-        const active = thread.id === activeThreadId
-        const selected = index === selectedIndex
-        return (
-          <box key={thread.id} style={{ height: 2, flexDirection: "column", backgroundColor: selected ? "#172554" : undefined }}>
-            <text fg={active ? "#86efac" : "#cbd5e1"}>{truncate(thread.title || thread.thread_type || thread.id, width - 4)}</text>
-            <text fg="#64748b">{thread.state} | {thread.turn_count}</text>
-          </box>
-        )
-      })}
-    </box>
-  )
-}
-
-function ActivityList({ width, items }: { width: number; items: Array<{ id: string; label: string; detail?: string; status: string }> }) {
-  return (
-    <box title="Activity" style={{ border: true, width, borderColor: "#1f2937", flexDirection: "column" }}>
-      {items.slice(-30).map((item) => (
-        <box key={item.id} style={{ flexDirection: "column", marginBottom: 1 }}>
-          <text fg={item.status === "error" ? "#fca5a5" : item.status === "ok" ? "#86efac" : item.status === "running" ? "#facc15" : "#93c5fd"}>
-            {truncate(item.label, width - 4)}
-          </text>
-          {item.detail ? <text fg="#94a3b8">{truncate(item.detail, width - 4)}</text> : null}
-        </box>
-      ))}
+    <box style={{ width, height: 2, flexDirection: "column" }}>
+      <text fg={connected ? "#8fd694" : "#f08a8a"}>{connected ? "online" : "offline"} | {status}</text>
+      <text fg="#777777">{truncate(baseUrl ? `${message} | ${baseUrl}` : message, width)}</text>
     </box>
   )
 }
@@ -285,23 +411,24 @@ function ActivityList({ width, items }: { width: number; items: Array<{ id: stri
 function GatePanel({
   gate,
   selectedAction,
+  width,
   onSelect,
   onResolve,
 }: {
   gate: PendingGateInfo
   selectedAction: GateAction
+  width: number
   onSelect: (action: GateAction) => void
   onResolve: (action: GateAction) => void
 }) {
   return (
     <box
       focused
-      title="Approval"
-      style={{ border: true, height: 8, borderColor: "#a16207", flexDirection: "column", paddingLeft: 1, paddingRight: 1 }}
+      style={{ width, height: 8, backgroundColor: "#181818", flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
     >
-      <text fg="#fde68a">Approval required: {gate.tool_name}</text>
-      <text fg="#e5e7eb">{truncate(gate.description, 100)}</text>
-      <text fg="#94a3b8">{truncate(gate.parameters, 100)}</text>
+      <text fg="#f0b45f">Approval required: {gate.tool_name}</text>
+      <text fg="#d7d7d7">{truncate(gate.description, width - 6)}</text>
+      <text fg="#858585">{truncate(gate.parameters, width - 6)}</text>
       <box style={{ flexDirection: "row", height: 3, marginTop: 1 }}>
         <GateButton
           label="Approve"
@@ -318,7 +445,7 @@ function GatePanel({
           onSelect={onSelect}
           onResolve={onResolve}
         />
-        <text fg="#64748b">  Left/Right select, Enter activate</text>
+        <text fg="#777777">  left/right select, enter activate</text>
       </box>
     </box>
   )
@@ -338,9 +465,9 @@ function GateButton({
   onResolve: (action: GateAction) => void
 }) {
   const isApprove = action === "approved"
-  const backgroundColor = selected ? (isApprove ? "#14532d" : "#7f1d1d") : "#111827"
-  const borderColor = selected ? (isApprove ? "#22c55e" : "#ef4444") : "#334155"
-  const textColor = selected ? "#f8fafc" : isApprove ? "#86efac" : "#fca5a5"
+  const backgroundColor = selected ? (isApprove ? "#12351f" : "#3a1616") : "#242424"
+  const borderColor = selected ? (isApprove ? "#2ea043" : "#f85149") : "#3d3d3d"
+  const textColor = selected ? "#f5f5f5" : isApprove ? "#8fd694" : "#f08a8a"
 
   return (
     <box
@@ -361,6 +488,10 @@ function GateButton({
       <text fg={textColor}>{selected ? "> " : "  "}{label}{selected ? " <" : "  "}</text>
     </box>
   )
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
 }
 
 function truncate(value: string, max: number): string {
