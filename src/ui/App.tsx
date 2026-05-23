@@ -378,7 +378,7 @@ function TranscriptMessage({
   if (item.role === "user") {
     return (
       <box style={{ width, flexDirection: "row", backgroundColor: "#141414", marginBottom: 2 }}>
-        <box style={{ width: 1, backgroundColor: "#58a6ff" }} />
+        <box style={{ width: 1, backgroundColor: "#2ee66b" }} />
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
           <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
         </box>
@@ -405,8 +405,8 @@ function TranscriptMessage({
 function BuildLine() {
   return (
     <box style={{ height: 1, flexDirection: "row", marginTop: 1 }}>
-      <text fg="#58a6ff">▣</text>
-      <text fg="#58a6ff"> Build</text>
+      <text fg="#2ee66b">▣</text>
+      <text fg="#2ee66b"> Build</text>
       <text fg="#777777"> · </text>
       <text fg="#d0d0d0">GPT-5.5</text>
       <text fg="#777777"> · 1.6s</text>
@@ -429,7 +429,7 @@ function Composer({
 }) {
   return (
     <box style={{ width, height: 6, flexDirection: "row", backgroundColor: "#1f1f1f" }}>
-      <box style={{ width: 1, backgroundColor: "#58a6ff" }} />
+      <box style={{ width: 1, backgroundColor: "#2ee66b" }} />
       <box style={{ flexDirection: "column", flexGrow: 1, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
         <textarea
           ref={inputRef}
@@ -453,7 +453,7 @@ function Composer({
           style={{ height: 3 }}
         />
         <box style={{ height: 1, flexDirection: "row" }}>
-          <text fg="#58a6ff">Build</text>
+          <text fg="#2ee66b">Build</text>
           <text fg="#777777"> . </text>
           <text fg="#d0d0d0">GPT-5.5</text>
           <text fg="#858585"> OpenAI</text>
