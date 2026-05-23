@@ -3,12 +3,14 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useReducer, useRef, useState } from "react"
 import type { ClientConfig } from "../config"
 import { GatewayClient } from "../gateway/client"
-import type { ThreadInfo } from "../gateway/types"
+import type { PendingGateInfo, ThreadInfo } from "../gateway/types"
 import { initialUiState, reduceUiState } from "../state"
 
 type AppProps = {
   config: ClientConfig
 }
+
+type GateAction = "approved" | "denied"
 
 export function App({ config }: AppProps) {
   const renderer = useRenderer()
@@ -19,6 +21,7 @@ export function App({ config }: AppProps) {
   const [state, dispatch] = useReducer(reduceUiState, initialUiState)
   const [input, setInput] = useState("")
   const [selectedThreadIndex, setSelectedThreadIndex] = useState(0)
+  const [selectedGateAction, setSelectedGateAction] = useState<GateAction>("approved")
 
   useKeyboard((key) => {
     if ((key.ctrl && key.name === "c") || key.name === "escape") {
@@ -37,6 +40,16 @@ export function App({ config }: AppProps) {
       void resolveGate("denied")
       return
     }
+    if (state.pendingGate) {
+      if (key.name === "left" || key.name === "right" || key.name === "tab") {
+        setSelectedGateAction((action) => (action === "approved" ? "denied" : "approved"))
+        return
+      }
+      if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
+        void resolveGate(selectedGateAction)
+        return
+      }
+    }
     if (key.name === "up") {
       setSelectedThreadIndex((index) => Math.max(0, index - 1))
       return
@@ -50,6 +63,12 @@ export function App({ config }: AppProps) {
       if (thread) void loadThread(thread.id)
     }
   })
+
+  useEffect(() => {
+    if (state.pendingGate) {
+      setSelectedGateAction("approved")
+    }
+  }, [state.pendingGate?.request_id])
 
   useEffect(() => {
     let cancelled = false
@@ -177,7 +196,12 @@ export function App({ config }: AppProps) {
             )}
           </scrollbox>
           {state.pendingGate ? (
-            <GatePanel gate={state.pendingGate} />
+            <GatePanel
+              gate={state.pendingGate}
+              selectedAction={selectedGateAction}
+              onSelect={setSelectedGateAction}
+              onResolve={(action) => void resolveGate(action)}
+            />
           ) : (
             <box style={{ height: 1 }}>
               <text fg="#475569">Ctrl+N new thread | Ctrl+Enter open selected thread | Ctrl+C quit</text>
@@ -186,7 +210,7 @@ export function App({ config }: AppProps) {
           <box title="Message" style={{ border: true, height: 5, borderColor: "#334155" }}>
             <textarea
               ref={textareaRef}
-              focused
+              focused={!state.pendingGate}
               placeholder="Message IronClaw..."
               initialValue=""
               onContentChange={() => setInput(textareaRef.current?.plainText ?? "")}
@@ -258,13 +282,83 @@ function ActivityList({ width, items }: { width: number; items: Array<{ id: stri
   )
 }
 
-function GatePanel({ gate }: { gate: { tool_name: string; description: string; parameters: string } }) {
+function GatePanel({
+  gate,
+  selectedAction,
+  onSelect,
+  onResolve,
+}: {
+  gate: PendingGateInfo
+  selectedAction: GateAction
+  onSelect: (action: GateAction) => void
+  onResolve: (action: GateAction) => void
+}) {
   return (
-    <box style={{ border: true, height: 6, borderColor: "#a16207", flexDirection: "column", paddingLeft: 1, paddingRight: 1 }}>
+    <box
+      focused
+      title="Approval"
+      style={{ border: true, height: 8, borderColor: "#a16207", flexDirection: "column", paddingLeft: 1, paddingRight: 1 }}
+    >
       <text fg="#fde68a">Approval required: {gate.tool_name}</text>
       <text fg="#e5e7eb">{truncate(gate.description, 100)}</text>
       <text fg="#94a3b8">{truncate(gate.parameters, 100)}</text>
-      <text fg="#facc15">Ctrl+A approve | Ctrl+D deny</text>
+      <box style={{ flexDirection: "row", height: 3, marginTop: 1 }}>
+        <GateButton
+          label="Approve"
+          action="approved"
+          selected={selectedAction === "approved"}
+          onSelect={onSelect}
+          onResolve={onResolve}
+        />
+        <box style={{ width: 2 }} />
+        <GateButton
+          label="Deny"
+          action="denied"
+          selected={selectedAction === "denied"}
+          onSelect={onSelect}
+          onResolve={onResolve}
+        />
+        <text fg="#64748b">  Left/Right select, Enter activate</text>
+      </box>
+    </box>
+  )
+}
+
+function GateButton({
+  label,
+  action,
+  selected,
+  onSelect,
+  onResolve,
+}: {
+  label: string
+  action: GateAction
+  selected: boolean
+  onSelect: (action: GateAction) => void
+  onResolve: (action: GateAction) => void
+}) {
+  const isApprove = action === "approved"
+  const backgroundColor = selected ? (isApprove ? "#14532d" : "#7f1d1d") : "#111827"
+  const borderColor = selected ? (isApprove ? "#22c55e" : "#ef4444") : "#334155"
+  const textColor = selected ? "#f8fafc" : isApprove ? "#86efac" : "#fca5a5"
+
+  return (
+    <box
+      focusable
+      onMouseOver={() => onSelect(action)}
+      onMouseDown={() => onSelect(action)}
+      onMouseUp={() => onResolve(action)}
+      style={{
+        border: true,
+        borderColor,
+        backgroundColor,
+        width: 14,
+        height: 3,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <text fg={textColor}>{selected ? "> " : "  "}{label}{selected ? " <" : "  "}</text>
     </box>
   )
 }
