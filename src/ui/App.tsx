@@ -155,17 +155,34 @@ export function App({ config }: AppProps) {
   async function submit() {
     const content = input.trim()
     if (!content) return
+    const previousAssistantCount = state.transcript.filter((item) => item.role === "assistant").length
     setInput("")
     textareaRef.current?.clear()
     dispatch({ type: "user_sent", content, threadId: state.activeThreadId })
     try {
       const response = await client.send(content, state.activeThreadId)
-      if (response.thread_id && response.thread_id !== state.activeThreadId) {
-        dispatch({ type: "threads", threads: state.threads, activeThreadId: response.thread_id })
-        void loadThread(response.thread_id)
+      const threadId = response.thread_id ?? state.activeThreadId
+      if (threadId && threadId !== state.activeThreadId) {
+        dispatch({ type: "threads", threads: state.threads, activeThreadId: threadId })
       }
+      if (threadId) void pollThreadForReply(threadId, previousAssistantCount)
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
+    }
+  }
+
+  async function pollThreadForReply(threadId: string, previousAssistantCount: number) {
+    for (const delay of [750, 1250, 2000, 3000, 5000, 8000, 12000]) {
+      await sleep(delay)
+      try {
+        const history = await client.history(threadId)
+        dispatch({ type: "history", history })
+        const assistantCount = history.turns.filter((turn) => turn.response).length
+        if (assistantCount > previousAssistantCount || history.pending_gate) return
+      } catch (error) {
+        dispatch({ type: "error", message: errorMessage(error) })
+        return
+      }
     }
   }
 
