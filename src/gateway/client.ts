@@ -63,7 +63,7 @@ export class GatewayClient {
     )
     return {
       thread_id: response.thread.thread_id,
-      turns: response.messages.map(mapMessageToTurn),
+      turns: response.messages.flatMap(mapMessageToTurn),
       has_more: Boolean(response.next_cursor),
     }
   }
@@ -192,19 +192,23 @@ function mapThread(thread: RebornThreadRecord): ThreadInfo {
   }
 }
 
-function mapMessageToTurn(message: RebornMessageRecord, index: number): TurnInfo {
+function mapMessageToTurn(message: RebornMessageRecord, index: number): TurnInfo[] {
+  if (message.kind === "checkpoint_reference" || message.kind === "tool_result_reference") return []
+
   const content = message.content ?? ""
   const isAssistant = message.kind === "assistant" || message.kind === "system" || message.kind === "summary"
-  return {
-    turn_number: message.sequence ?? index,
-    user_message_id: message.message_id,
-    user_input: isAssistant ? "" : content,
-    response: isAssistant ? content : null,
-    state: message.status,
-    started_at: "",
-    completed_at: null,
-    tool_calls: [],
-  }
+  return [
+    {
+      turn_number: message.sequence ?? index,
+      user_message_id: message.message_id,
+      user_input: isAssistant ? "" : content,
+      response: isAssistant ? content : null,
+      state: message.status,
+      started_at: "",
+      completed_at: null,
+      tool_calls: [],
+    },
+  ]
 }
 
 function parseWebChatEvent(data: string): RebornWebChatEventFrame | null {
