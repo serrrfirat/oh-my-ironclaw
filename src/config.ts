@@ -14,13 +14,13 @@ export function readConfig(argv = Bun.argv): ClientConfig {
   const baseUrl =
     valueAfter("--url") ??
     process.env.OPEN_IRONCLAW_URL ??
-    process.env.IRONCLAW_GATEWAY_URL ??
+    process.env.IRONCLAW_REBORN_WEBUI_URL ??
     "http://127.0.0.1:3000"
 
   const token =
     valueAfter("--token") ??
     process.env.OPEN_IRONCLAW_TOKEN ??
-    process.env.IRONCLAW_GATEWAY_TOKEN ??
+    process.env.IRONCLAW_REBORN_WEBUI_TOKEN ??
     ""
 
   return {
@@ -29,4 +29,3 @@ export function readConfig(argv = Bun.argv): ClientConfig {
     debugEvents: args.includes("--debug-events") || process.env.OPEN_IRONCLAW_DEBUG === "1",
   }
 }
-

@@ -9,6 +9,9 @@ export type SendMessageRequest = {
 export type SendMessageResponse = {
   message_id: string
   status: string
+  thread_id?: string | null
+  run_id?: string | null
+  response?: unknown
 }
 
 export type ThreadInfo = {
@@ -20,6 +23,66 @@ export type ThreadInfo = {
   title?: string | null
   thread_type?: string | null
   channel?: string | null
+}
+
+export type RebornThreadRecord = {
+  thread_id: string
+  title?: string | null
+  created_by_actor_id?: string | null
+  metadata_json?: string | null
+}
+
+export type RebornMessageRecord = {
+  message_id: string
+  thread_id: string
+  sequence: number
+  kind: "user" | "assistant" | "system" | "summary" | "checkpoint_reference" | "tool_result_reference"
+  status: string
+  content?: string | null
+  turn_id?: string | null
+  turn_run_id?: string | null
+}
+
+export type RebornCreateThreadResponse = {
+  thread: RebornThreadRecord
+}
+
+export type RebornListThreadsResponse = {
+  threads: RebornThreadRecord[]
+  next_cursor?: string | null
+}
+
+export type RebornTimelineResponse = {
+  thread: RebornThreadRecord
+  messages: RebornMessageRecord[]
+  next_cursor?: string | null
+}
+
+export type RebornSubmitTurnResponse =
+  | {
+      outcome: "submitted" | "already_submitted"
+      thread_id: string
+      run_id: string
+      status: string
+      accepted_message_ref: string
+    }
+  | {
+      outcome: "deferred_busy"
+      thread_id: string
+      active_run_id: string
+      status: string
+      accepted_message_ref: string
+    }
+
+export type RebornWebChatEventFrame = {
+  cursor?: unknown
+  type: string
+  reply?: { turn_run_id?: string; text?: string }
+  progress?: { turn_run_id?: string; kind?: string }
+  prompt?: { turn_run_id?: string; gate_ref?: string; headline?: string; body?: string }
+  ack?: RebornSubmitTurnResponse
+  response?: unknown
+  state?: { thread_id?: string; items?: Array<Record<string, unknown>> }
 }
 
 export type ThreadListResponse = {
@@ -54,6 +117,8 @@ export type TurnInfo = {
 export type PendingGateInfo = {
   request_id: string
   thread_id: string
+  run_id?: string | null
+  gate_ref?: string | null
   gate_name: string
   tool_name: string
   description: string
@@ -81,10 +146,10 @@ export type HistoryResponse = {
 }
 
 export type GateResolveRequest =
-  | { request_id: string; thread_id?: string | null; resolution: "approved"; always?: boolean }
-  | { request_id: string; thread_id?: string | null; resolution: "denied" }
-  | { request_id: string; thread_id?: string | null; resolution: "credential_provided"; token: string }
-  | { request_id: string; thread_id?: string | null; resolution: "cancelled" }
+  | { request_id: string; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null; resolution: "approved"; always?: boolean }
+  | { request_id: string; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null; resolution: "denied" }
+  | { request_id: string; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null; resolution: "credential_provided"; token: string }
+  | { request_id: string; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null; resolution: "cancelled" }
 
 export type ToolDecisionDto = {
   tool_name: string
@@ -108,7 +173,7 @@ export type AppEvent =
   | { type: "stream_chunk"; content: string; thread_id?: string | null }
   | { type: "status"; message: string; thread_id?: string | null }
   | { type: "approval_needed"; request_id: string; tool_name: string; description: string; parameters: string; thread_id?: string | null; allow_always: boolean }
-  | { type: "gate_required"; request_id: string; gate_name: string; tool_name: string; description: string; parameters: string; extension_name?: string | null; resume_kind: unknown; thread_id?: string | null }
+  | { type: "gate_required"; request_id: string; gate_name: string; tool_name: string; description: string; parameters: string; extension_name?: string | null; resume_kind: unknown; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null }
   | { type: "gate_resolved"; request_id: string; gate_name: string; tool_name: string; resolution: string; message: string; thread_id?: string | null }
   | { type: "onboarding_state"; extension_name: string; state: "setup_required" | "auth_required" | "pairing_required" | "ready" | "failed"; request_id?: string | null; message?: string | null; instructions?: string | null; auth_url?: string | null; setup_url?: string | null; onboarding?: unknown; thread_id?: string | null }
   | { type: "reasoning_update"; narrative: string; decisions: ToolDecisionDto[]; thread_id?: string | null }

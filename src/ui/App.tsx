@@ -77,18 +77,18 @@ export function App({ config }: AppProps) {
       try {
         await client.health()
         dispatch({ type: "connected", connected: true, status: "connected" })
-        await refreshThreads()
-        if (!cancelled) connectEvents()
+        const threadId = await refreshThreads()
+        if (!cancelled && threadId) connectEvents(threadId)
       } catch (error) {
         dispatch({ type: "error", message: errorMessage(error) })
       }
     }
 
-    function connectEvents() {
+    function connectEvents(threadId: string) {
       void (async () => {
         while (!cancelled) {
           try {
-            for await (const event of client.events()) {
+            for await (const event of client.events(threadId)) {
               if (cancelled) break
               dispatch({ type: "event", event })
             }
@@ -109,12 +109,20 @@ export function App({ config }: AppProps) {
     }
   }, [client])
 
-  async function refreshThreads() {
+  async function refreshThreads(): Promise<string | null> {
     const response = await client.threads()
-    const threads = [response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[]
-    dispatch({ type: "threads", threads, activeThreadId: response.active_thread })
-    const threadId = response.active_thread ?? response.assistant_thread?.id ?? response.threads[0]?.id
+    let threads = [response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[]
+    let threadId = response.active_thread ?? response.assistant_thread?.id ?? response.threads[0]?.id ?? null
+
+    if (!threadId) {
+      const thread = await client.newThread()
+      threads = [thread]
+      threadId = thread.id
+    }
+
+    dispatch({ type: "threads", threads, activeThreadId: threadId })
     if (threadId) await loadThread(threadId)
+    return threadId
   }
 
   async function loadThread(threadId: string) {
@@ -145,7 +153,11 @@ export function App({ config }: AppProps) {
     textareaRef.current?.clear()
     dispatch({ type: "user_sent", content, threadId: state.activeThreadId })
     try {
-      await client.send(content, state.activeThreadId)
+      const response = await client.send(content, state.activeThreadId)
+      if (response.thread_id && response.thread_id !== state.activeThreadId) {
+        dispatch({ type: "threads", threads: state.threads, activeThreadId: response.thread_id })
+        void loadThread(response.thread_id)
+      }
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
     }
@@ -157,6 +169,8 @@ export function App({ config }: AppProps) {
       await client.resolveGate({
         request_id: state.pendingGate.request_id,
         thread_id: state.pendingGate.thread_id,
+        run_id: state.pendingGate.run_id,
+        gate_ref: state.pendingGate.gate_ref,
         resolution,
       })
       dispatch({ type: "gate_cleared" })

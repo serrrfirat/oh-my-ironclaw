@@ -149,6 +149,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
         pendingGate: {
           request_id: event.request_id,
           thread_id: event.thread_id ?? state.activeThreadId ?? "",
+          run_id: "run_id" in event ? event.run_id : null,
+          gate_ref: "gate_ref" in event ? event.gate_ref : null,
           gate_name: event.gate_name,
           tool_name: event.tool_name,
           description: event.description,
@@ -193,15 +195,16 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
 
 function transcriptFromHistory(history: HistoryResponse): TranscriptItem[] {
   return history.turns.flatMap((turn) => {
-    const items: TranscriptItem[] = [
-      {
+    const items: TranscriptItem[] = []
+    if (turn.user_input) {
+      items.push({
         id: turn.user_message_id ?? `turn-${turn.turn_number}-user`,
         role: "user",
         text: turn.user_input,
         threadId: history.thread_id,
         state: turn.state,
-      },
-    ]
+      })
+    }
     if (turn.response) {
       items.push({
         id: `turn-${turn.turn_number}-assistant`,
@@ -285,4 +288,3 @@ export function toolSummary(tool: ToolCallInfo): string {
   if (tool.result_preview) return `${tool.name}: ${tool.result_preview}`
   return tool.name
 }
-
