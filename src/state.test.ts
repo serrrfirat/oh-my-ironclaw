@@ -41,4 +41,26 @@ describe("UI state", () => {
 
     expect(twice.transcript).toHaveLength(1)
   })
+
+  test("renders recovery-required run statuses inline", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "run_status",
+        status: "RecoveryRequired",
+        run_id: "run-2",
+        thread_id: "thread-1",
+        failure_category: "driver_unavailable",
+      },
+    })
+
+    expect(state.lastError).toBe("Run recovery required: driver_unavailable")
+    expect(state.transcript).toContainEqual({
+      id: "run-run-2-recovery_required",
+      role: "system",
+      text: "Run recovery required: driver_unavailable",
+      threadId: "thread-1",
+      state: "RecoveryRequired",
+    })
+  })
 })

@@ -216,7 +216,7 @@ function parseWebChatEvent(data: string): RebornWebChatEventFrame | null {
   return JSON.parse(data) as RebornWebChatEventFrame
 }
 
-function mapWebChatEvent(frame: RebornWebChatEventFrame | null, threadId: string): AppEvent | null {
+export function mapWebChatEvent(frame: RebornWebChatEventFrame | null, threadId: string): AppEvent | null {
   if (!frame) return null
   switch (frame.type) {
     case "keep_alive":
@@ -272,20 +272,20 @@ function mapWebChatEvent(frame: RebornWebChatEventFrame | null, threadId: string
 
 function projectionEvent(frame: RebornWebChatEventFrame, threadId: string): AppEvent | null {
   const items = frame.state?.items ?? []
-  const bodies = items.flatMap(textBodyFromProjectionItem)
-  const body = bodies.at(-1) ?? null
-  if (body) return { type: "response", content: body, thread_id: threadId }
-
-  const runStatuses = items.flatMap(runStatusFromProjectionItem)
-  const runStatus = runStatuses.at(-1) ?? null
-  if (runStatus) {
-    return {
-      type: "run_status",
-      status: runStatus.status,
-      run_id: runStatus.run_id,
-      failure_category: runStatus.failure_category,
-      thread_id: threadId,
+  for (const item of items.toReversed()) {
+    const runStatus = runStatusFromProjectionItem(item)[0]
+    if (runStatus) {
+      return {
+        type: "run_status",
+        status: runStatus.status,
+        run_id: runStatus.run_id,
+        failure_category: runStatus.failure_category,
+        thread_id: threadId,
+      }
     }
+
+    const body = textBodyFromProjectionItem(item)[0]
+    if (body) return { type: "response", content: body, thread_id: threadId }
   }
 
   return { type: "status", message: frame.type, thread_id: threadId }

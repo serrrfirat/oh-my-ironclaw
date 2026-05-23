@@ -292,8 +292,9 @@ function appendRunFailure(
   state: UiState,
   event: Extract<AppEvent, { type: "run_status" }>,
 ): UiState {
-  const id = event.run_id ? `run-${event.run_id}-failed` : `run-failed-${Date.now()}`
-  const detail = event.failure_category ? `Run failed: ${event.failure_category}` : "Run failed before a reply was produced."
+  const status = statusKey(event.status)
+  const id = event.run_id ? `run-${event.run_id}-${status}` : `run-${status}-${Date.now()}`
+  const detail = runFailureMessage(status, event.failure_category)
   const transcript = state.transcript.some((item) => item.id === id)
     ? state.transcript
     : [
@@ -322,7 +323,26 @@ function appendRunFailure(
 }
 
 function isFailedRunStatus(status: string): boolean {
-  return status.toLowerCase() === "failed"
+  return ["failed", "recovery_required", "cancelled", "killed"].includes(statusKey(status))
+}
+
+function runFailureMessage(status: string, category?: string | null): string {
+  if (category) return `Run ${statusLabel(status)}: ${category}`
+  if (status === "recovery_required") return "Run needs recovery before a reply can be produced."
+  if (status === "cancelled") return "Run was cancelled before a reply was produced."
+  if (status === "killed") return "Run was killed before a reply was produced."
+  return "Run failed before a reply was produced."
+}
+
+function statusLabel(status: string): string {
+  return status.replaceAll("_", " ")
+}
+
+function statusKey(status: string): string {
+  return status
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[-\s]+/g, "_")
+    .toLowerCase()
 }
 
 export function toolSummary(tool: ToolCallInfo): string {
