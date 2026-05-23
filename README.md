@@ -1,4 +1,4 @@
-# open_ironclaw
+# oh-my-ironclaw
 
 OpenTUI client for the IronClaw Reborn gateway API.
 
@@ -27,4 +27,3 @@ CLI flags are also supported:
 ```bash
 bun run dev -- --url http://127.0.0.1:3000 --token your-token --debug-events
 ```
-

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "open_ironclaw",
+      "name": "oh-my-ironclaw",
       "dependencies": {
         "@opentui/core": "0.2.15",
         "@opentui/react": "0.2.15",
