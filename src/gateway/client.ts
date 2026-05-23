@@ -261,10 +261,23 @@ function mapWebChatEvent(frame: RebornWebChatEventFrame | null, threadId: string
 }
 
 function projectionEvent(frame: RebornWebChatEventFrame, threadId: string): AppEvent | null {
-  const bodies = frame.state?.items?.flatMap(textBodyFromProjectionItem) ?? []
+  const items = frame.state?.items ?? []
+  const bodies = items.flatMap(textBodyFromProjectionItem)
   const body = bodies.at(-1) ?? null
-  if (!body) return { type: "status", message: frame.type, thread_id: threadId }
-  return { type: "response", content: body, thread_id: threadId }
+  if (body) return { type: "response", content: body, thread_id: threadId }
+
+  const runStatuses = items.flatMap(runStatusFromProjectionItem)
+  const runStatus = runStatuses.at(-1) ?? null
+  if (runStatus) {
+    return {
+      type: "run_status",
+      status: runStatus.status,
+      run_id: runStatus.run_id,
+      thread_id: threadId,
+    }
+  }
+
+  return { type: "status", message: frame.type, thread_id: threadId }
 }
 
 function textBodyFromProjectionItem(item: Record<string, unknown>): string[] {
@@ -277,6 +290,27 @@ function textBodyFromProjectionItem(item: Record<string, unknown>): string[] {
   }
 
   return []
+}
+
+function runStatusFromProjectionItem(item: Record<string, unknown>): Array<{ run_id?: string | null; status: string }> {
+  const runStatus = item.run_status
+  if (runStatus && typeof runStatus === "object") {
+    return runStatusFromRecord(runStatus as Record<string, unknown>)
+  }
+
+  if (item.type === "run_status") return runStatusFromRecord(item)
+
+  return []
+}
+
+function runStatusFromRecord(record: Record<string, unknown>): Array<{ run_id?: string | null; status: string }> {
+  if (typeof record.status !== "string") return []
+  return [
+    {
+      run_id: typeof record.run_id === "string" ? record.run_id : null,
+      status: record.status,
+    },
+  ]
 }
 
 function actionId(prefix: string): string {

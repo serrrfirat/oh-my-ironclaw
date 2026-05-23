@@ -95,6 +95,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
       return { ...state, status: event.message }
     case "status":
       return { ...state, status: event.message }
+    case "run_status":
+      return { ...state, status: event.status }
     case "stream_chunk":
       return appendAssistantChunk(state, event.content, event.thread_id)
     case "response":

@@ -165,6 +165,7 @@ export type PlanStepDto = {
 
 export type AppEvent =
   | { type: "response"; content: string; thread_id: string }
+  | { type: "run_status"; status: string; run_id?: string | null; thread_id?: string | null }
   | { type: "thinking"; message: string; thread_id?: string | null }
   | { type: "tool_started"; name: string; detail?: string | null; call_id?: string | null; thread_id?: string | null }
   | { type: "tool_completed"; name: string; success: boolean; error?: string | null; parameters?: string | null; call_id?: string | null; duration_ms?: number | null; thread_id?: string | null }

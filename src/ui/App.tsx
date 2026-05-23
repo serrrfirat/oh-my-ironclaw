@@ -3,7 +3,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useReducer, useRef, useState, type RefObject } from "react"
 import type { ClientConfig } from "../config"
 import { GatewayClient } from "../gateway/client"
-import type { PendingGateInfo, ThreadInfo } from "../gateway/types"
+import type { AppEvent, PendingGateInfo, ThreadInfo } from "../gateway/types"
 import { initialUiState, reduceUiState } from "../state"
 
 type AppProps = {
@@ -97,6 +97,7 @@ export function App({ config }: AppProps) {
             for await (const event of client.events(threadId)) {
               if (cancelled) break
               dispatch({ type: "event", event })
+              if (isTerminalRunStatusEvent(event)) void refreshThreadFromEvent(event.thread_id)
             }
           } catch (error) {
             if (!cancelled) {
@@ -184,6 +185,12 @@ export function App({ config }: AppProps) {
         return
       }
     }
+  }
+
+  async function refreshThreadFromEvent(threadId?: string | null) {
+    if (!threadId) return
+    await sleep(150)
+    await loadThread(threadId)
   }
 
   async function resolveGate(resolution: "approved" | "denied") {
@@ -561,6 +568,11 @@ function isPlainEnter(key: {
     !key.super &&
     !key.hyper
   )
+}
+
+function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, { type: "run_status" }> {
+  if (event.type !== "run_status") return false
+  return ["completed", "failed", "cancelled", "killed"].includes(event.status)
 }
 
 function errorMessage(error: unknown): string {
