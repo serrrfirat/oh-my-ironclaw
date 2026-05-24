@@ -1,7 +1,7 @@
 import { SyntaxStyle, type ScrollBoxRenderable, type TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useReducer, useRef, useState, type RefObject } from "react"
-import type { ClientConfig } from "../config"
+import type { ClientConfig, ClientMode } from "../config"
 import { GatewayClient } from "../gateway/client"
 import type { AppEvent, PendingGateInfo, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
@@ -12,21 +12,51 @@ type AppProps = {
 }
 
 type GateAction = "approved" | "denied"
-type SlashCommandAction = "threads" | "models" | "cancel-run" | "load-older" | "quit"
+type SlashCommandAction = "threads" | "models" | "cancel-run" | "load-older" | "local-command" | "quit"
+type SlashCommandSource = "remote" | "local" | "tui"
 type SlashCommand = {
   name: string
   description: string
+  source: SlashCommandSource
   action?: SlashCommandAction
+  localArgs?: string[]
 }
 
-const SLASH_COMMANDS: SlashCommand[] = [
-  { name: "/model", description: "Show or switch the active model", action: "models" },
-  { name: "/status", description: "Show Reborn product workflow status" },
-  { name: "/progress", description: "Alias for Reborn product workflow status" },
-  { name: "/threads", description: "Open local thread picker", action: "threads" },
-  { name: "/history", description: "Load older local timeline messages", action: "load-older" },
-  { name: "/run-cancel", description: "Cancel the active WebChat run", action: "cancel-run" },
-  { name: "/quit", description: "Quit this TUI", action: "quit" },
+const REMOTE_PRODUCT_COMMANDS: SlashCommand[] = [
+  { name: "/model", description: "Show or switch the active model", source: "remote", action: "models" },
+  { name: "/status", description: "Show Reborn product workflow status", source: "remote" },
+  { name: "/progress", description: "Alias for Reborn product workflow status", source: "remote" },
+]
+
+const LOCAL_CLI_COMMANDS: SlashCommand[] = [
+  {
+    name: "/doctor",
+    description: "Run local ironclaw-reborn doctor",
+    source: "local",
+    action: "local-command",
+    localArgs: ["doctor"],
+  },
+  {
+    name: "/profile",
+    description: "Run local ironclaw-reborn profile list",
+    source: "local",
+    action: "local-command",
+    localArgs: ["profile", "list"],
+  },
+  {
+    name: "/skills",
+    description: "Run local ironclaw-reborn skills list",
+    source: "local",
+    action: "local-command",
+    localArgs: ["skills", "list"],
+  },
+]
+
+const TUI_CONTROL_COMMANDS: SlashCommand[] = [
+  { name: "/threads", description: "Open local thread picker", source: "tui", action: "threads" },
+  { name: "/history", description: "Load older local timeline messages", source: "tui", action: "load-older" },
+  { name: "/run-cancel", description: "Cancel the active WebChat run", source: "tui", action: "cancel-run" },
+  { name: "/quit", description: "Quit this TUI", source: "tui", action: "quit" },
 ]
 
 export function App({ config }: AppProps) {
@@ -48,7 +78,8 @@ export function App({ config }: AppProps) {
   const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
   const [selectedModel, setSelectedModel] = useState(config.model)
   const activityFrame = useActivityFrame(state.isThinking)
-  const slashCommands = showCommandPalette ? SLASH_COMMANDS : filteredSlashCommands(input)
+  const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
+  const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
 
   useKeyboard((key) => {
@@ -363,6 +394,11 @@ export function App({ config }: AppProps) {
   async function submit() {
     const content = input.trim()
     if (!content) return
+    const localCommand = localCliCommandForInput(content, config.mode)
+    if (localCommand) {
+      await runLocalCliCommand(content, localCommand)
+      return
+    }
     await submitContent(content)
   }
 
@@ -415,12 +451,46 @@ export function App({ config }: AppProps) {
       await loadOlderHistory()
       return
     }
+    if (command.action === "local-command" && command.localArgs && config.mode === "local") {
+      setInput("")
+      setShowCommandPalette(false)
+      textareaRef.current?.clear()
+      await runLocalCliCommand(command.name, command.localArgs)
+      return
+    }
     if (command.action === "quit") {
       renderer.destroy()
       return
     }
     setShowCommandPalette(false)
     await submitContent(command.name)
+  }
+
+  async function runLocalCliCommand(content: string, args: string[]) {
+    const threadId = state.activeThreadId ?? "local"
+    setInput("")
+    textareaRef.current?.clear()
+    dispatch({ type: "user_sent", content, threadId })
+    try {
+      const result = await runRebornCli(config.rebornBin, args)
+      dispatch({
+        type: "event",
+        event: {
+          type: "response",
+          content: formatLocalCliResult(config.rebornBin, args, result),
+          thread_id: threadId,
+        },
+      })
+    } catch (error) {
+      dispatch({
+        type: "event",
+        event: {
+          type: "response",
+          content: `Failed to run ${config.rebornBin} ${args.join(" ")}:\n\n${errorMessage(error)}`,
+          thread_id: threadId,
+        },
+      })
+    }
   }
 
   async function cancelActiveRun() {
@@ -529,6 +599,7 @@ export function App({ config }: AppProps) {
           isThinking={state.isThinking}
           lastError={state.lastError}
           markdownStyle={markdownStyle}
+          mode={config.mode}
           pendingGate={state.pendingGate ?? null}
           railColor={activityFrame.railColor}
           selectedGateAction={selectedGateAction}
@@ -560,6 +631,7 @@ export function App({ config }: AppProps) {
           inputRef={textareaRef}
           isThinking={state.isThinking}
           lastError={state.lastError}
+          mode={config.mode}
           railColor={activityFrame.railColor}
           selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
           selectedModel={selectedModel}
@@ -591,6 +663,7 @@ function WelcomeSurface({
   inputRef,
   isThinking,
   lastError,
+  mode,
   railColor,
   selectedSlashCommandIndex,
   selectedModel,
@@ -616,6 +689,7 @@ function WelcomeSurface({
   inputRef: RefObject<TextareaRenderable | null>
   isThinking: boolean
   lastError?: string | null
+  mode: ClientMode
   railColor: string
   selectedSlashCommandIndex: number
   selectedModel: string
@@ -648,6 +722,7 @@ function WelcomeSurface({
         focused
         inputRef={inputRef}
         isThinking={isThinking}
+        mode={mode}
         railColor={railColor}
         selectedSlashCommandIndex={selectedSlashCommandIndex}
         selectedModel={selectedModel}
@@ -689,6 +764,7 @@ function ConversationSurface({
   isThinking,
   lastError,
   markdownStyle,
+  mode,
   pendingGate,
   railColor,
   selectedGateAction,
@@ -718,6 +794,7 @@ function ConversationSurface({
   isThinking: boolean
   lastError?: string | null
   markdownStyle: SyntaxStyle
+  mode: ClientMode
   pendingGate: PendingGateInfo | null
   railColor: string
   selectedGateAction: GateAction
@@ -787,6 +864,7 @@ function ConversationSurface({
         focused={!pendingGate}
         inputRef={inputRef}
         isThinking={isThinking}
+        mode={mode}
         railColor={railColor}
         selectedSlashCommandIndex={selectedSlashCommandIndex}
         selectedModel={selectedModel}
@@ -885,6 +963,7 @@ function Composer({
   focused,
   inputRef,
   isThinking,
+  mode,
   railColor,
   selectedSlashCommandIndex,
   selectedModel,
@@ -905,6 +984,7 @@ function Composer({
   focused: boolean
   inputRef: RefObject<TextareaRenderable | null>
   isThinking: boolean
+  mode: ClientMode
   railColor: string
   selectedSlashCommandIndex: number
   selectedModel: string
@@ -976,6 +1056,8 @@ function Composer({
             <text fg="#777777"> . </text>
             <text fg="#d0d0d0">{selectedModel}</text>
             <text fg="#858585"> OpenAI</text>
+            <text fg="#777777"> . </text>
+            <text fg={mode === "local" ? "#2ee66b" : "#8cffb0"}>{mode}</text>
             {isThinking ? <text fg={railColor}> {spinner}</text> : null}
           </box>
         </box>
@@ -1141,11 +1223,13 @@ function SlashCommandRow({
 }) {
   const marker = selected ? ">" : " "
   const commandWidth = 12
-  const descriptionWidth = Math.max(10, width - commandWidth - 7)
+  const sourceWidth = 8
+  const descriptionWidth = Math.max(10, width - commandWidth - sourceWidth - 9)
   return (
     <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#111111" }}>
       <text fg={selected ? "#2ee66b" : "#707070"}>{marker} </text>
       <text fg={selected ? "#8cffb0" : "#d0d0d0"}>{padEnd(command.name, commandWidth)}</text>
+      <text fg={sourceColor(command.source)}>{padEnd(command.source, sourceWidth)}</text>
       <text fg="#777777">{truncate(command.description, descriptionWidth)}</text>
     </box>
   )
@@ -1282,6 +1366,12 @@ function padEnd(value: string, length: number): string {
   return value.length >= length ? value.slice(0, length) : value + " ".repeat(length - value.length)
 }
 
+function sourceColor(source: SlashCommandSource): string {
+  if (source === "remote") return "#8cffb0"
+  if (source === "local") return "#2ee66b"
+  return "#777777"
+}
+
 function slashCommandPopupHeight(commands: SlashCommand[]): number {
   return Math.min(commands.length, 6) + 3
 }
@@ -1326,12 +1416,35 @@ function activeThreadFallback(threadId?: string | null): ThreadInfo[] {
   ]
 }
 
-function filteredSlashCommands(input: string): SlashCommand[] {
+function slashCommandsForMode(mode: ClientMode): SlashCommand[] {
+  return [
+    ...REMOTE_PRODUCT_COMMANDS,
+    ...(mode === "local" ? LOCAL_CLI_COMMANDS : []),
+    ...TUI_CONTROL_COMMANDS,
+  ]
+}
+
+function localCliCommandForInput(input: string, mode: ClientMode): string[] | null {
+  if (mode !== "local") return null
+  const trimmed = input.trim()
+  switch (trimmed) {
+    case "/doctor":
+      return ["doctor"]
+    case "/profile":
+      return ["profile", "list"]
+    case "/skills":
+      return ["skills", "list"]
+    default:
+      return null
+  }
+}
+
+function filteredSlashCommands(input: string, commands: SlashCommand[]): SlashCommand[] {
   if (!isSlashCommandInput(input)) return []
   const query = slashCommandQuery(input)
-  if (!query) return SLASH_COMMANDS
-  return SLASH_COMMANDS.filter((command) => {
-    const haystack = `${command.name} ${command.description}`.toLowerCase()
+  if (!query) return commands
+  return commands.filter((command) => {
+    const haystack = `${command.name} ${command.source} ${command.description}`.toLowerCase()
     return haystack.includes(query)
   })
 }
@@ -1374,6 +1487,33 @@ function isPlainEnter(key: {
 function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, { type: "run_status" }> {
   if (event.type !== "run_status") return false
   return ["completed", "failed", "cancelled", "killed"].includes(event.status)
+}
+
+type CliResult = {
+  exitCode: number
+  stdout: string
+  stderr: string
+}
+
+async function runRebornCli(rebornBin: string, args: string[]): Promise<CliResult> {
+  const proc = Bun.spawn([rebornBin, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env,
+  })
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  return { exitCode, stdout, stderr }
+}
+
+function formatLocalCliResult(rebornBin: string, args: string[], result: CliResult): string {
+  const command = `${rebornBin} ${args.join(" ")}`
+  const body = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n\n")
+  const suffix = result.exitCode === 0 ? "" : `\n\n(exit ${result.exitCode})`
+  return `$ ${command}\n\n${body || "(no output)"}${suffix}`
 }
 
 function useActivityFrame(active: boolean): { spinner: string; railColor: string } {

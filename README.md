@@ -4,17 +4,30 @@ OpenTUI client for the IronClaw Reborn gateway API.
 
 ## Run
 
-Start an IronClaw reborn/gateway binary first, then run:
+Start an IronClaw reborn/gateway binary first, then run in remote mode:
 
 ```bash
+OPEN_IRONCLAW_MODE=remote \
 OPEN_IRONCLAW_URL=http://127.0.0.1:3000 \
 OPEN_IRONCLAW_TOKEN=your-token \
 bun run dev
 ```
 
+Remote mode talks only to the WebChat v2/Product Workflow API. Use it when the TUI is pointed at a remote or local Reborn server and should not execute any local machine commands.
+
+Local mode still sends chat through WebChat v2, but also enables local CLI-backed commands such as `/doctor`, `/profile`, and `/skills`:
+
+```bash
+OPEN_IRONCLAW_MODE=local \
+OPEN_IRONCLAW_URL=http://127.0.0.1:3000 \
+OPEN_IRONCLAW_TOKEN=your-token \
+OPEN_IRONCLAW_REBORN_BIN=ironclaw-reborn \
+bun run dev
+```
+
 Use `/model` or `ctrl+m` to ask Reborn for the active model and available models. Selecting a model sends `/model <name>` through the same WebChat v2 message workflow, so the server-side command persists or applies the model choice.
 
-The command palette (`ctrl+p`) submits the Reborn product workflow slash commands that exist today as literal commands: `/model`, `/status`, and `/progress`. The standalone `ironclaw-reborn` binary has other top-level CLI subcommands, but those are not WebChat slash commands. `/threads`, `/history`, `/run-cancel`, and `/quit` are local TUI controls for the WebChat surface.
+The command palette (`ctrl+p`) always includes the Reborn product workflow slash commands that exist today as literal remote commands: `/model`, `/status`, and `/progress`. In local mode it also includes CLI commands that run on the same machine as the TUI: `/doctor`, `/profile`, and `/skills`. `/threads`, `/history`, `/run-cancel`, and `/quit` are local TUI controls for the WebChat surface.
 
 You can still seed the picker before the first server response:
 
@@ -37,5 +50,5 @@ The client uses the Reborn WebChat v2 gateway contract:
 CLI flags are also supported:
 
 ```bash
-bun run dev -- --url http://127.0.0.1:3000 --token your-token --models GPT-5.5,gpt-5.3-codex --model GPT-5.5 --debug-events
+bun run dev -- --mode local --url http://127.0.0.1:3000 --token your-token --reborn-bin ironclaw-reborn --models GPT-5.5,gpt-5.3-codex --model GPT-5.5 --debug-events
 ```
