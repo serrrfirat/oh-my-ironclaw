@@ -4,6 +4,7 @@ import { useEffect, useMemo, useReducer, useRef, useState, type RefObject } from
 import type { ClientConfig } from "../config"
 import { GatewayClient } from "../gateway/client"
 import type { AppEvent, PendingGateInfo, ThreadInfo } from "../gateway/types"
+import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
 import { initialUiState, reduceUiState } from "../state"
 
 type AppProps = {
@@ -25,7 +26,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/status", description: "Ask for runtime and model status", prompt: "Check the current runtime and model status. Summarize any active issues." },
   { name: "/new", description: "Start a new thread", action: "new-thread" },
   { name: "/threads", description: "Switch to another thread", action: "threads" },
-  { name: "/model", description: "Select local model label", action: "models" },
+  { name: "/model", description: "Show or switch the active model", action: "models" },
   { name: "/cancel", description: "Cancel the current run", action: "cancel-run" },
   { name: "/history", description: "Load older messages", action: "load-older" },
   { name: "/clear", description: "Clear the composer", action: "clear-input" },
@@ -46,6 +47,7 @@ export function App({ config }: AppProps) {
   const [showThreadPalette, setShowThreadPalette] = useState(false)
   const [paletteThreads, setPaletteThreads] = useState<ThreadInfo[]>([])
   const [showModelPalette, setShowModelPalette] = useState(false)
+  const [availableModels, setAvailableModels] = useState(config.models)
   const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
   const [selectedModel, setSelectedModel] = useState(config.model)
   const activityFrame = useActivityFrame(state.isThinking)
@@ -67,19 +69,19 @@ export function App({ config }: AppProps) {
       if (key.name === "up") {
         key.preventDefault()
         key.stopPropagation()
-        setSelectedModelIndex((index) => wrapIndex(index - 1, config.models.length))
+        setSelectedModelIndex((index) => wrapIndex(index - 1, availableModels.length))
         return
       }
       if (key.name === "down" || key.name === "tab") {
         key.preventDefault()
         key.stopPropagation()
-        setSelectedModelIndex((index) => wrapIndex(index + 1, config.models.length))
+        setSelectedModelIndex((index) => wrapIndex(index + 1, availableModels.length))
         return
       }
       if (isPlainEnter(key)) {
         key.preventDefault()
         key.stopPropagation()
-        selectModel(selectedModelIndex)
+        void selectModel(selectedModelIndex)
         return
       }
     }
@@ -141,7 +143,7 @@ export function App({ config }: AppProps) {
     if (key.ctrl && key.name === "m") {
       key.preventDefault()
       key.stopPropagation()
-      openModelPalette()
+      void openModelPalette()
       return
     }
     if (key.ctrl && key.name === "x") {
@@ -222,6 +224,7 @@ export function App({ config }: AppProps) {
 
   useEffect(() => {
     setSelectedModel(config.model)
+    setAvailableModels(config.models)
     setSelectedModelIndex(modelIndex(config.models, config.model))
   }, [config.model, config.models])
 
@@ -250,6 +253,7 @@ export function App({ config }: AppProps) {
           try {
             for await (const event of client.events(threadId)) {
               if (cancelled) break
+              if (event.type === "response") applyModelCommandResponse(event.content)
               dispatch({ type: "event", event })
               if (isTerminalRunStatusEvent(event)) void refreshThreadFromEvent(event.thread_id)
             }
@@ -322,17 +326,24 @@ export function App({ config }: AppProps) {
     }
   }
 
-  function openModelPalette() {
-    setSelectedModelIndex(modelIndex(config.models, selectedModel))
+  async function openModelPalette() {
+    if (!availableModels.length) {
+      await submitContent("/model")
+      return
+    }
+    setSelectedModelIndex(modelIndex(availableModels, selectedModel))
     setShowModelPalette(true)
   }
 
-  function selectModel(index: number) {
-    const model = config.models[wrapIndex(index, config.models.length)]
+  async function selectModel(index: number) {
+    const model = availableModels[wrapIndex(index, availableModels.length)]
     if (!model) return
+    const models = withSelectedModel(availableModels, model)
     setSelectedModel(model)
-    setSelectedModelIndex(modelIndex(config.models, model))
+    setAvailableModels(models)
+    setSelectedModelIndex(modelIndex(models, model))
     setShowModelPalette(false)
+    await submitContent(`/model ${model}`)
   }
 
   async function selectThread(index: number) {
@@ -360,6 +371,7 @@ export function App({ config }: AppProps) {
 
   async function submitContent(content: string) {
     const previousAssistantCount = state.transcript.filter((item) => item.role === "assistant").length
+    applyOutgoingModelCommand(content)
     setInput("")
     textareaRef.current?.clear()
     dispatch({ type: "user_sent", content, threadId: state.activeThreadId })
@@ -402,7 +414,7 @@ export function App({ config }: AppProps) {
       setInput("")
       setShowCommandPalette(false)
       textareaRef.current?.clear()
-      openModelPalette()
+      await openModelPalette()
       return
     }
     if (command.action === "cancel-run") {
@@ -449,6 +461,9 @@ export function App({ config }: AppProps) {
       await sleep(delay)
       try {
         const history = await client.history(threadId)
+        for (const turn of history.turns) {
+          if (turn.response) applyModelCommandResponse(turn.response)
+        }
         dispatch({ type: "history", history })
         const assistantCount = history.turns.filter((turn) => turn.response).length
         if (assistantCount > previousAssistantCount || history.pending_gate) return
@@ -463,6 +478,38 @@ export function App({ config }: AppProps) {
     if (!threadId) return
     await sleep(150)
     await loadThread(threadId)
+  }
+
+  function applyOutgoingModelCommand(content: string) {
+    const trimmed = content.trim()
+    if (!trimmed.startsWith("/model ")) return
+    const model = trimmed.slice("/model ".length).trim()
+    if (!model) return
+    setSelectedModel(model)
+    const models = withSelectedModel(availableModels, model)
+    setAvailableModels(models)
+    setSelectedModelIndex(modelIndex(models, model))
+  }
+
+  function applyModelCommandResponse(content: string): boolean {
+    const parsedList = parseModelListResponse(content)
+    if (parsedList) {
+      setSelectedModel(parsedList.activeModel)
+      setAvailableModels(parsedList.models)
+      setSelectedModelIndex(modelIndex(parsedList.models, parsedList.activeModel))
+      setShowModelPalette(parsedList.models.length > 0)
+      setShowCommandPalette(false)
+      setShowThreadPalette(false)
+      return true
+    }
+
+    const switchedModel = selectedModelFromSwitchResponse(content)
+    if (!switchedModel) return false
+    const models = withSelectedModel(availableModels, switchedModel)
+    setSelectedModel(switchedModel)
+    setAvailableModels(models)
+    setSelectedModelIndex(modelIndex(models, switchedModel))
+    return true
   }
 
   async function resolveGate(resolution: "approved" | "denied") {
@@ -510,7 +557,7 @@ export function App({ config }: AppProps) {
           slashCommands={slashCommands}
           spinner={activityFrame.spinner}
           activeThreadId={state.activeThreadId}
-          models={config.models}
+          models={availableModels}
           threads={showThreadPalette ? paletteThreads : state.threads}
           transcript={state.transcript}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
@@ -539,7 +586,7 @@ export function App({ config }: AppProps) {
           spinner={activityFrame.spinner}
           status={state.status}
           activeThreadId={state.activeThreadId}
-          models={config.models}
+          models={availableModels}
           threads={showThreadPalette ? paletteThreads : state.threads}
           width={width}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
@@ -1041,7 +1088,7 @@ function ModelPalette({
         />
       ))}
       <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#606060">{truncate("local label only until Reborn exposes model routing", Math.max(1, width - 4))}</text>
+        <text fg="#606060">{truncate("sends /model through Reborn command workflow", Math.max(1, width - 4))}</text>
       </box>
     </box>
   )

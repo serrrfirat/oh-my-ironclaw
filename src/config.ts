@@ -32,13 +32,13 @@ export function readConfig(argv = Bun.argv): ClientConfig {
     baseUrl: baseUrl.replace(/\/+$/, ""),
     token,
     model,
-    models: models.includes(model) ? models : [model, ...models],
+    models,
     debugEvents: args.includes("--debug-events") || process.env.OPEN_IRONCLAW_DEBUG === "1",
   }
 }
 
 function parseModelList(value?: string): string[] {
-  const models = (value ?? "GPT-5.5,gpt-5.3-codex")
+  const models = (value ?? "")
     .split(",")
     .map((model) => model.trim())
     .filter(Boolean)

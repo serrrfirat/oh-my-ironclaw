@@ -9,11 +9,18 @@ Start an IronClaw reborn/gateway binary first, then run:
 ```bash
 OPEN_IRONCLAW_URL=http://127.0.0.1:3000 \
 OPEN_IRONCLAW_TOKEN=your-token \
-OPEN_IRONCLAW_MODELS=GPT-5.5,gpt-5.3-codex \
 bun run dev
 ```
 
-Use `/model` or `ctrl+m` to choose one of the comma-separated model labels. This is currently a TUI-local selection because the Reborn WebChat v2 API does not expose model listing or per-turn model routing yet.
+Use `/model` or `ctrl+m` to ask Reborn for the active model and available models. Selecting a model sends `/model <name>` through the same WebChat v2 message workflow, so the server-side command persists or applies the model choice.
+
+You can still seed the picker before the first server response:
+
+```bash
+OPEN_IRONCLAW_MODELS=GPT-5.5,gpt-5.3-codex \
+OPEN_IRONCLAW_MODEL=GPT-5.5 \
+bun run dev
+```
 
 The client uses the Reborn WebChat v2 gateway contract:
 
