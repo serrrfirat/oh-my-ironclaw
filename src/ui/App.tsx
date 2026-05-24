@@ -22,6 +22,8 @@ type SlashCommand = {
   localArgs?: string[]
 }
 
+const SLASH_COMMAND_POPUP_LIMIT = 8
+
 const REMOTE_PRODUCT_COMMANDS: SlashCommand[] = [
   { name: "/model", description: "Show or switch the active model", source: "remote", action: "models" },
   { name: "/status", description: "Show Reborn product workflow status", source: "remote" },
@@ -49,6 +51,76 @@ const LOCAL_CLI_COMMANDS: SlashCommand[] = [
     source: "local",
     action: "local-command",
     localArgs: ["skills", "list"],
+  },
+  {
+    name: "/channels",
+    description: "Run local ironclaw-reborn channels list",
+    source: "local",
+    action: "local-command",
+    localArgs: ["channels", "list"],
+  },
+  {
+    name: "/hooks",
+    description: "Run local ironclaw-reborn hooks list",
+    source: "local",
+    action: "local-command",
+    localArgs: ["hooks", "list"],
+  },
+  {
+    name: "/models",
+    description: "Run local ironclaw-reborn models list",
+    source: "local",
+    action: "local-command",
+    localArgs: ["models", "list"],
+  },
+  {
+    name: "/model-status",
+    description: "Run local ironclaw-reborn models status",
+    source: "local",
+    action: "local-command",
+    localArgs: ["models", "status"],
+  },
+  {
+    name: "/logs",
+    description: "Run local ironclaw-reborn logs",
+    source: "local",
+    action: "local-command",
+    localArgs: ["logs"],
+  },
+  {
+    name: "/logs-json",
+    description: "Run local ironclaw-reborn logs --json",
+    source: "local",
+    action: "local-command",
+    localArgs: ["logs", "--json"],
+  },
+  {
+    name: "/config-path",
+    description: "Run local ironclaw-reborn config path",
+    source: "local",
+    action: "local-command",
+    localArgs: ["config", "path"],
+  },
+  {
+    name: "/traces-status",
+    description: "Run local ironclaw-reborn traces status",
+    source: "local",
+    action: "local-command",
+    localArgs: ["traces", "status"],
+  },
+  {
+    name: "/traces-queue",
+    description: "Run local ironclaw-reborn traces queue-status",
+    source: "local",
+    action: "local-command",
+    localArgs: ["traces", "queue-status"],
+  },
+  {
+    name: "/traces-credit",
+    description: "Run local ironclaw-reborn traces credit",
+    source: "local",
+    action: "local-command",
+    localArgs: ["traces", "credit"],
   },
 ]
 
@@ -1193,20 +1265,21 @@ function SlashCommandPopup({
   selectedIndex: number
   width: number
 }) {
-  const visibleCommands = commands.slice(0, 6)
-  const selectedVisibleIndex = wrapIndex(selectedIndex, visibleCommands.length)
+  const selected = wrapIndex(selectedIndex, commands.length)
+  const start = clamp(selected - SLASH_COMMAND_POPUP_LIMIT + 1, 0, Math.max(0, commands.length - SLASH_COMMAND_POPUP_LIMIT))
+  const visibleCommands = commands.slice(start, start + SLASH_COMMAND_POPUP_LIMIT)
   return (
     <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingTop: 1, paddingBottom: 1 }}>
       {visibleCommands.map((command, index) => (
         <SlashCommandRow
           key={command.name}
           command={command}
-          selected={index === selectedVisibleIndex}
+          selected={start + index === selected}
           width={width}
         />
       ))}
       <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#606060">{truncate("up/down select · enter run · esc close", width - 4)}</text>
+        <text fg="#606060">{truncate(commandPopupHint(start, visibleCommands.length, commands.length), width - 4)}</text>
       </box>
     </box>
   )
@@ -1222,7 +1295,7 @@ function SlashCommandRow({
   width: number
 }) {
   const marker = selected ? ">" : " "
-  const commandWidth = 12
+  const commandWidth = 17
   const sourceWidth = 8
   const descriptionWidth = Math.max(10, width - commandWidth - sourceWidth - 9)
   return (
@@ -1372,8 +1445,13 @@ function sourceColor(source: SlashCommandSource): string {
   return "#777777"
 }
 
+function commandPopupHint(start: number, count: number, total: number): string {
+  const range = total > count ? ` · ${start + 1}-${start + count}/${total}` : ""
+  return `up/down select · enter run · esc close${range}`
+}
+
 function slashCommandPopupHeight(commands: SlashCommand[]): number {
-  return Math.min(commands.length, 6) + 3
+  return Math.min(commands.length, SLASH_COMMAND_POPUP_LIMIT) + 3
 }
 
 function threadPaletteHeight(threads: ThreadInfo[]): number {
@@ -1427,16 +1505,8 @@ function slashCommandsForMode(mode: ClientMode): SlashCommand[] {
 function localCliCommandForInput(input: string, mode: ClientMode): string[] | null {
   if (mode !== "local") return null
   const trimmed = input.trim()
-  switch (trimmed) {
-    case "/doctor":
-      return ["doctor"]
-    case "/profile":
-      return ["profile", "list"]
-    case "/skills":
-      return ["skills", "list"]
-    default:
-      return null
-  }
+  const command = LOCAL_CLI_COMMANDS.find((candidate) => candidate.name === trimmed)
+  return command?.localArgs ?? null
 }
 
 function filteredSlashCommands(input: string, commands: SlashCommand[]): SlashCommand[] {
