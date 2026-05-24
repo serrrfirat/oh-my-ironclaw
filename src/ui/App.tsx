@@ -43,6 +43,7 @@ export function App({ config }: AppProps) {
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   const [showCommandPalette, setShowCommandPalette] = useState(false)
   const [showThreadPalette, setShowThreadPalette] = useState(false)
+  const [paletteThreads, setPaletteThreads] = useState<ThreadInfo[]>([])
   const activityFrame = useActivityFrame(state.isThinking)
   const slashCommands = showCommandPalette ? SLASH_COMMANDS : filteredSlashCommands(input)
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
@@ -62,13 +63,13 @@ export function App({ config }: AppProps) {
       if (key.name === "up") {
         key.preventDefault()
         key.stopPropagation()
-        setSelectedThreadIndex((index) => wrapIndex(index - 1, state.threads.length))
+        setSelectedThreadIndex((index) => wrapIndex(index - 1, paletteThreads.length))
         return
       }
       if (key.name === "down" || key.name === "tab") {
         key.preventDefault()
         key.stopPropagation()
-        setSelectedThreadIndex((index) => wrapIndex(index + 1, state.threads.length))
+        setSelectedThreadIndex((index) => wrapIndex(index + 1, paletteThreads.length))
         return
       }
       if (isPlainEnter(key)) {
@@ -268,9 +269,11 @@ export function App({ config }: AppProps) {
   async function openThreadPalette() {
     try {
       const response = await client.threads()
-      const threads = [response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[]
+      const remoteThreads = [response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[]
+      const threads = mergeThreads(remoteThreads, state.threads, activeThreadFallback(state.activeThreadId))
       dispatch({ type: "threads", threads, activeThreadId: state.activeThreadId })
       const activeIndex = threads.findIndex((thread) => thread.id === state.activeThreadId)
+      setPaletteThreads(threads)
       setSelectedThreadIndex(activeIndex >= 0 ? activeIndex : 0)
       setShowThreadPalette(true)
     } catch (error) {
@@ -279,7 +282,7 @@ export function App({ config }: AppProps) {
   }
 
   async function selectThread(index: number) {
-    const thread = state.threads[wrapIndex(index, state.threads.length)]
+    const thread = paletteThreads[wrapIndex(index, paletteThreads.length)]
     if (!thread) return
     setShowThreadPalette(false)
     await loadThread(thread.id)
@@ -443,7 +446,7 @@ export function App({ config }: AppProps) {
           slashCommands={slashCommands}
           spinner={activityFrame.spinner}
           activeThreadId={state.activeThreadId}
-          threads={state.threads}
+          threads={showThreadPalette ? paletteThreads : state.threads}
           transcript={state.transcript}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
           onResolve={(action) => void resolveGate(action)}
@@ -468,7 +471,7 @@ export function App({ config }: AppProps) {
           spinner={activityFrame.spinner}
           status={state.status}
           activeThreadId={state.activeThreadId}
-          threads={state.threads}
+          threads={showThreadPalette ? paletteThreads : state.threads}
           width={width}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
           onSubmit={submit}
@@ -1080,6 +1083,33 @@ function slashCommandPopupHeight(commands: SlashCommand[]): number {
 
 function threadPaletteHeight(threads: ThreadInfo[]): number {
   return Math.min(Math.max(threads.length, 1), 8) + 3
+}
+
+function mergeThreads(...groups: Array<ThreadInfo[]>): ThreadInfo[] {
+  const seen = new Set<string>()
+  const merged: ThreadInfo[] = []
+  for (const thread of groups.flat()) {
+    if (seen.has(thread.id)) continue
+    seen.add(thread.id)
+    merged.push(thread)
+  }
+  return merged
+}
+
+function activeThreadFallback(threadId?: string | null): ThreadInfo[] {
+  if (!threadId) return []
+  return [
+    {
+      id: threadId,
+      state: "active",
+      turn_count: 0,
+      created_at: "",
+      updated_at: "",
+      title: "Current thread",
+      thread_type: "webchat_v2",
+      channel: "webchat_v2",
+    },
+  ]
 }
 
 function filteredSlashCommands(input: string): SlashCommand[] {
