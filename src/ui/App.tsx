@@ -11,6 +11,21 @@ type AppProps = {
 }
 
 type GateAction = "approved" | "denied"
+type SlashCommandAction = "new-thread" | "clear-input"
+type SlashCommand = {
+  name: string
+  description: string
+  prompt?: string
+  action?: SlashCommandAction
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  { name: "/help", description: "Ask IronClaw what it can do", prompt: "What can you help me with in this project?" },
+  { name: "/skills", description: "List available skills and tools", prompt: "List all available skills and tools." },
+  { name: "/status", description: "Ask for runtime and model status", prompt: "Check the current runtime and model status. Summarize any active issues." },
+  { name: "/new", description: "Start a new thread", action: "new-thread" },
+  { name: "/clear", description: "Clear the composer", action: "clear-input" },
+]
 
 export function App({ config }: AppProps) {
   const renderer = useRenderer()
@@ -22,10 +37,24 @@ export function App({ config }: AppProps) {
   const [input, setInput] = useState("")
   const [selectedThreadIndex, setSelectedThreadIndex] = useState(0)
   const [selectedGateAction, setSelectedGateAction] = useState<GateAction>("approved")
+  const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   const activityFrame = useActivityFrame(state.isThinking)
+  const slashCommands = filteredSlashCommands(input)
+  const showSlashCommands = isSlashCommandInput(input) && slashCommands.length > 0
 
   useKeyboard((key) => {
-    if ((key.ctrl && key.name === "c") || key.name === "escape") {
+    if (key.ctrl && key.name === "c") {
+      renderer.destroy()
+      return
+    }
+    if (key.name === "escape") {
+      if (showSlashCommands) {
+        key.preventDefault()
+        key.stopPropagation()
+        setInput("")
+        textareaRef.current?.clear()
+        return
+      }
       renderer.destroy()
       return
     }
@@ -48,6 +77,26 @@ export function App({ config }: AppProps) {
       }
       if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
         void resolveGate(selectedGateAction)
+        return
+      }
+    }
+    if (showSlashCommands) {
+      if (key.name === "up") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedCommandIndex((index) => wrapIndex(index - 1, slashCommands.length))
+        return
+      }
+      if (key.name === "down" || key.name === "tab") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedCommandIndex((index) => wrapIndex(index + 1, slashCommands.length))
+        return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault()
+        key.stopPropagation()
+        void runSlashCommand(slashCommands[selectedCommandIndex] ?? slashCommands[0])
         return
       }
     }
@@ -76,6 +125,10 @@ export function App({ config }: AppProps) {
       setSelectedGateAction("approved")
     }
   }, [state.pendingGate?.request_id])
+
+  useEffect(() => {
+    setSelectedCommandIndex(0)
+  }, [slashCommandQuery(input)])
 
   useEffect(() => {
     let cancelled = false
@@ -157,6 +210,10 @@ export function App({ config }: AppProps) {
   async function submit() {
     const content = input.trim()
     if (!content) return
+    await submitContent(content)
+  }
+
+  async function submitContent(content: string) {
     const previousAssistantCount = state.transcript.filter((item) => item.role === "assistant").length
     setInput("")
     textareaRef.current?.clear()
@@ -170,6 +227,24 @@ export function App({ config }: AppProps) {
       if (threadId) void pollThreadForReply(threadId, previousAssistantCount)
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
+    }
+  }
+
+  async function runSlashCommand(command: SlashCommand | undefined) {
+    if (!command) return
+    if (command.action === "clear-input") {
+      setInput("")
+      textareaRef.current?.clear()
+      return
+    }
+    if (command.action === "new-thread") {
+      setInput("")
+      textareaRef.current?.clear()
+      await createThread()
+      return
+    }
+    if (command.prompt) {
+      await submitContent(command.prompt)
     }
   }
 
@@ -228,6 +303,9 @@ export function App({ config }: AppProps) {
           pendingGate={state.pendingGate ?? null}
           railColor={activityFrame.railColor}
           selectedGateAction={selectedGateAction}
+          selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
+          showSlashCommands={showSlashCommands}
+          slashCommands={slashCommands}
           spinner={activityFrame.spinner}
           transcript={state.transcript}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
@@ -245,6 +323,9 @@ export function App({ config }: AppProps) {
           isThinking={state.isThinking}
           lastError={state.lastError}
           railColor={activityFrame.railColor}
+          selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
+          showSlashCommands={showSlashCommands}
+          slashCommands={slashCommands}
           spinner={activityFrame.spinner}
           status={state.status}
           width={width}
@@ -265,6 +346,9 @@ function WelcomeSurface({
   isThinking,
   lastError,
   railColor,
+  selectedSlashCommandIndex,
+  showSlashCommands,
+  slashCommands,
   spinner,
   status,
   width,
@@ -279,6 +363,9 @@ function WelcomeSurface({
   isThinking: boolean
   lastError?: string | null
   railColor: string
+  selectedSlashCommandIndex: number
+  showSlashCommands: boolean
+  slashCommands: SlashCommand[]
   spinner: string
   status: string
   width: number
@@ -300,6 +387,9 @@ function WelcomeSurface({
         inputRef={inputRef}
         isThinking={isThinking}
         railColor={railColor}
+        selectedSlashCommandIndex={selectedSlashCommandIndex}
+        showSlashCommands={showSlashCommands}
+        slashCommands={slashCommands}
         spinner={spinner}
         width={composerWidth}
         onInputChange={onInputChange}
@@ -332,6 +422,9 @@ function ConversationSurface({
   pendingGate,
   railColor,
   selectedGateAction,
+  selectedSlashCommandIndex,
+  showSlashCommands,
+  slashCommands,
   spinner,
   transcript,
   onInputChange,
@@ -349,6 +442,9 @@ function ConversationSurface({
   pendingGate: PendingGateInfo | null
   railColor: string
   selectedGateAction: GateAction
+  selectedSlashCommandIndex: number
+  showSlashCommands: boolean
+  slashCommands: SlashCommand[]
   spinner: string
   transcript: Array<{ id: string; role: string; text: string }>
   onInputChange: () => void
@@ -356,7 +452,8 @@ function ConversationSurface({
   onSelectGateAction: (action: GateAction) => void
   onSubmit: () => void
 }) {
-  const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8))
+  const slashPopupHeight = showSlashCommands ? slashCommandPopupHeight(slashCommands) : 0
+  const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8) - slashPopupHeight)
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const transcriptEndKey = transcript.map((item) => `${item.id}:${item.text.length}`).join("|")
 
@@ -400,6 +497,9 @@ function ConversationSurface({
         inputRef={inputRef}
         isThinking={isThinking}
         railColor={railColor}
+        selectedSlashCommandIndex={selectedSlashCommandIndex}
+        showSlashCommands={showSlashCommands}
+        slashCommands={slashCommands}
         spinner={spinner}
         width={composerWidth}
         onInputChange={onInputChange}
@@ -476,6 +576,9 @@ function Composer({
   inputRef,
   isThinking,
   railColor,
+  selectedSlashCommandIndex,
+  showSlashCommands,
+  slashCommands,
   spinner,
   width,
   onInputChange,
@@ -485,44 +588,105 @@ function Composer({
   inputRef: RefObject<TextareaRenderable | null>
   isThinking: boolean
   railColor: string
+  selectedSlashCommandIndex: number
+  showSlashCommands: boolean
+  slashCommands: SlashCommand[]
   spinner: string
   width: number
   onInputChange: () => void
   onSubmit: () => void
 }) {
   return (
-    <box style={{ width, height: 6, flexDirection: "row", backgroundColor: "#1f1f1f" }}>
-      <box style={{ width: 1, backgroundColor: isThinking ? railColor : "#2ee66b" }} />
-      <box style={{ flexDirection: "column", flexGrow: 1, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-        <textarea
-          ref={inputRef}
-          focused={focused}
-          placeholder={'Ask anything... "What is the tech stack of this project?"'}
-          initialValue=""
-          backgroundColor="#1f1f1f"
-          focusedBackgroundColor="#1f1f1f"
-          textColor="#d9d9d9"
-          focusedTextColor="#f2f2f2"
-          placeholderColor="#8a8a8a"
-          keyBindings={[
-            { name: "return", action: "submit" },
-            { name: "kpenter", action: "submit" },
-            { name: "linefeed", action: "submit" },
-            { name: "return", shift: true, action: "newline" },
-            { name: "kpenter", shift: true, action: "newline" },
-          ]}
-          onContentChange={onInputChange}
-          onSubmit={onSubmit}
-          style={{ height: 3 }}
+    <box style={{ width, flexDirection: "column" }}>
+      {showSlashCommands ? (
+        <SlashCommandPopup
+          commands={slashCommands}
+          selectedIndex={selectedSlashCommandIndex}
+          width={width}
         />
-        <box style={{ height: 1, flexDirection: "row" }}>
-          <text fg="#2ee66b">Build</text>
-          <text fg="#777777"> . </text>
-          <text fg="#d0d0d0">GPT-5.5</text>
-          <text fg="#858585"> OpenAI</text>
-          {isThinking ? <text fg={railColor}> {spinner}</text> : null}
+      ) : null}
+      <box style={{ width, height: 6, flexDirection: "row", backgroundColor: "#1f1f1f" }}>
+        <box style={{ width: 1, backgroundColor: isThinking ? railColor : "#2ee66b" }} />
+        <box style={{ flexDirection: "column", flexGrow: 1, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
+          <textarea
+            ref={inputRef}
+            focused={focused}
+            placeholder={'Ask anything... "What is the tech stack of this project?"'}
+            initialValue=""
+            backgroundColor="#1f1f1f"
+            focusedBackgroundColor="#1f1f1f"
+            textColor="#d9d9d9"
+            focusedTextColor="#f2f2f2"
+            placeholderColor="#8a8a8a"
+            keyBindings={[
+              { name: "return", action: "submit" },
+              { name: "kpenter", action: "submit" },
+              { name: "linefeed", action: "submit" },
+              { name: "return", shift: true, action: "newline" },
+              { name: "kpenter", shift: true, action: "newline" },
+            ]}
+            onContentChange={onInputChange}
+            onSubmit={onSubmit}
+            style={{ height: 3 }}
+          />
+          <box style={{ height: 1, flexDirection: "row" }}>
+            <text fg="#2ee66b">Build</text>
+            <text fg="#777777"> . </text>
+            <text fg="#d0d0d0">GPT-5.5</text>
+            <text fg="#858585"> OpenAI</text>
+            {isThinking ? <text fg={railColor}> {spinner}</text> : null}
+          </box>
         </box>
       </box>
+    </box>
+  )
+}
+
+function SlashCommandPopup({
+  commands,
+  selectedIndex,
+  width,
+}: {
+  commands: SlashCommand[]
+  selectedIndex: number
+  width: number
+}) {
+  const visibleCommands = commands.slice(0, 6)
+  const selectedVisibleIndex = wrapIndex(selectedIndex, visibleCommands.length)
+  return (
+    <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingTop: 1, paddingBottom: 1 }}>
+      {visibleCommands.map((command, index) => (
+        <SlashCommandRow
+          key={command.name}
+          command={command}
+          selected={index === selectedVisibleIndex}
+          width={width}
+        />
+      ))}
+      <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
+        <text fg="#606060">{truncate("up/down select · enter run · esc close", width - 4)}</text>
+      </box>
+    </box>
+  )
+}
+
+function SlashCommandRow({
+  command,
+  selected,
+  width,
+}: {
+  command: SlashCommand
+  selected: boolean
+  width: number
+}) {
+  const marker = selected ? ">" : " "
+  const commandWidth = 12
+  const descriptionWidth = Math.max(10, width - commandWidth - 7)
+  return (
+    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#111111" }}>
+      <text fg={selected ? "#2ee66b" : "#707070"}>{marker} </text>
+      <text fg={selected ? "#8cffb0" : "#d0d0d0"}>{padEnd(command.name, commandWidth)}</text>
+      <text fg="#777777">{truncate(command.description, descriptionWidth)}</text>
     </box>
   )
 }
@@ -648,6 +812,39 @@ function clamp(value: number, min: number, max: number): number {
 function truncate(value: string, max: number): string {
   if (value.length <= max) return value
   return `${value.slice(0, Math.max(0, max - 3))}...`
+}
+
+function padEnd(value: string, length: number): string {
+  return value.length >= length ? value.slice(0, length) : value + " ".repeat(length - value.length)
+}
+
+function slashCommandPopupHeight(commands: SlashCommand[]): number {
+  return Math.min(commands.length, 6) + 3
+}
+
+function filteredSlashCommands(input: string): SlashCommand[] {
+  if (!isSlashCommandInput(input)) return []
+  const query = slashCommandQuery(input)
+  if (!query) return SLASH_COMMANDS
+  return SLASH_COMMANDS.filter((command) => {
+    const haystack = `${command.name} ${command.description}`.toLowerCase()
+    return haystack.includes(query)
+  })
+}
+
+function isSlashCommandInput(input: string): boolean {
+  const trimmed = input.trimStart()
+  return trimmed.startsWith("/") && !trimmed.includes(" ")
+}
+
+function slashCommandQuery(input: string): string {
+  if (!isSlashCommandInput(input)) return ""
+  return input.trimStart().slice(1).toLowerCase()
+}
+
+function wrapIndex(index: number, length: number): number {
+  if (length <= 0) return 0
+  return ((index % length) + length) % length
 }
 
 function isPlainEnter(key: {
