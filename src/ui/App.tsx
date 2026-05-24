@@ -11,7 +11,7 @@ type AppProps = {
 }
 
 type GateAction = "approved" | "denied"
-type SlashCommandAction = "new-thread" | "clear-input" | "threads" | "cancel-run" | "load-older"
+type SlashCommandAction = "new-thread" | "clear-input" | "threads" | "models" | "cancel-run" | "load-older"
 type SlashCommand = {
   name: string
   description: string
@@ -25,6 +25,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/status", description: "Ask for runtime and model status", prompt: "Check the current runtime and model status. Summarize any active issues." },
   { name: "/new", description: "Start a new thread", action: "new-thread" },
   { name: "/threads", description: "Switch to another thread", action: "threads" },
+  { name: "/model", description: "Select local model label", action: "models" },
   { name: "/cancel", description: "Cancel the current run", action: "cancel-run" },
   { name: "/history", description: "Load older messages", action: "load-older" },
   { name: "/clear", description: "Clear the composer", action: "clear-input" },
@@ -44,6 +45,9 @@ export function App({ config }: AppProps) {
   const [showCommandPalette, setShowCommandPalette] = useState(false)
   const [showThreadPalette, setShowThreadPalette] = useState(false)
   const [paletteThreads, setPaletteThreads] = useState<ThreadInfo[]>([])
+  const [showModelPalette, setShowModelPalette] = useState(false)
+  const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
+  const [selectedModel, setSelectedModel] = useState(config.model)
   const activityFrame = useActivityFrame(state.isThinking)
   const slashCommands = showCommandPalette ? SLASH_COMMANDS : filteredSlashCommands(input)
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
@@ -52,6 +56,32 @@ export function App({ config }: AppProps) {
     if (key.ctrl && key.name === "c") {
       renderer.destroy()
       return
+    }
+    if (showModelPalette) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        setShowModelPalette(false)
+        return
+      }
+      if (key.name === "up") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedModelIndex((index) => wrapIndex(index - 1, config.models.length))
+        return
+      }
+      if (key.name === "down" || key.name === "tab") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedModelIndex((index) => wrapIndex(index + 1, config.models.length))
+        return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault()
+        key.stopPropagation()
+        selectModel(selectedModelIndex)
+        return
+      }
     }
     if (showThreadPalette) {
       if (key.name === "escape") {
@@ -106,6 +136,12 @@ export function App({ config }: AppProps) {
       key.preventDefault()
       key.stopPropagation()
       void openThreadPalette()
+      return
+    }
+    if (key.ctrl && key.name === "m") {
+      key.preventDefault()
+      key.stopPropagation()
+      openModelPalette()
       return
     }
     if (key.ctrl && key.name === "x") {
@@ -183,6 +219,11 @@ export function App({ config }: AppProps) {
       setSelectedGateAction("approved")
     }
   }, [state.pendingGate?.request_id])
+
+  useEffect(() => {
+    setSelectedModel(config.model)
+    setSelectedModelIndex(modelIndex(config.models, config.model))
+  }, [config.model, config.models])
 
   useEffect(() => {
     setSelectedCommandIndex(0)
@@ -281,6 +322,19 @@ export function App({ config }: AppProps) {
     }
   }
 
+  function openModelPalette() {
+    setSelectedModelIndex(modelIndex(config.models, selectedModel))
+    setShowModelPalette(true)
+  }
+
+  function selectModel(index: number) {
+    const model = config.models[wrapIndex(index, config.models.length)]
+    if (!model) return
+    setSelectedModel(model)
+    setSelectedModelIndex(modelIndex(config.models, model))
+    setShowModelPalette(false)
+  }
+
   async function selectThread(index: number) {
     const thread = paletteThreads[wrapIndex(index, paletteThreads.length)]
     if (!thread) return
@@ -342,6 +396,13 @@ export function App({ config }: AppProps) {
       setShowCommandPalette(false)
       textareaRef.current?.clear()
       await openThreadPalette()
+      return
+    }
+    if (command.action === "models") {
+      setInput("")
+      setShowCommandPalette(false)
+      textareaRef.current?.clear()
+      openModelPalette()
       return
     }
     if (command.action === "cancel-run") {
@@ -439,13 +500,17 @@ export function App({ config }: AppProps) {
           railColor={activityFrame.railColor}
           selectedGateAction={selectedGateAction}
           selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
+          selectedModel={selectedModel}
+          selectedModelIndex={selectedModelIndex}
           selectedThreadIndex={selectedThreadIndex}
           showOlderHistoryHint={state.hasOlderHistory}
+          showModelPalette={showModelPalette}
           showSlashCommands={showSlashCommands}
           showThreadPalette={showThreadPalette}
           slashCommands={slashCommands}
           spinner={activityFrame.spinner}
           activeThreadId={state.activeThreadId}
+          models={config.models}
           threads={showThreadPalette ? paletteThreads : state.threads}
           transcript={state.transcript}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
@@ -464,13 +529,17 @@ export function App({ config }: AppProps) {
           lastError={state.lastError}
           railColor={activityFrame.railColor}
           selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
+          selectedModel={selectedModel}
+          selectedModelIndex={selectedModelIndex}
           selectedThreadIndex={selectedThreadIndex}
+          showModelPalette={showModelPalette}
           showSlashCommands={showSlashCommands}
           showThreadPalette={showThreadPalette}
           slashCommands={slashCommands}
           spinner={activityFrame.spinner}
           status={state.status}
           activeThreadId={state.activeThreadId}
+          models={config.models}
           threads={showThreadPalette ? paletteThreads : state.threads}
           width={width}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
@@ -491,13 +560,17 @@ function WelcomeSurface({
   lastError,
   railColor,
   selectedSlashCommandIndex,
+  selectedModel,
+  selectedModelIndex,
   selectedThreadIndex,
+  showModelPalette,
   showSlashCommands,
   showThreadPalette,
   slashCommands,
   spinner,
   status,
   activeThreadId,
+  models,
   threads,
   width,
   onInputChange,
@@ -512,13 +585,17 @@ function WelcomeSurface({
   lastError?: string | null
   railColor: string
   selectedSlashCommandIndex: number
+  selectedModel: string
+  selectedModelIndex: number
   selectedThreadIndex: number
+  showModelPalette: boolean
   showSlashCommands: boolean
   showThreadPalette: boolean
   slashCommands: SlashCommand[]
   spinner: string
   status: string
   activeThreadId?: string | null
+  models: string[]
   threads: ThreadInfo[]
   width: number
   onInputChange: () => void
@@ -540,12 +617,16 @@ function WelcomeSurface({
         isThinking={isThinking}
         railColor={railColor}
         selectedSlashCommandIndex={selectedSlashCommandIndex}
+        selectedModel={selectedModel}
+        selectedModelIndex={selectedModelIndex}
         selectedThreadIndex={selectedThreadIndex}
+        showModelPalette={showModelPalette}
         showSlashCommands={showSlashCommands}
         showThreadPalette={showThreadPalette}
         slashCommands={slashCommands}
         spinner={spinner}
         activeThreadId={activeThreadId}
+        models={models}
         threads={threads}
         width={composerWidth}
         onInputChange={onInputChange}
@@ -579,13 +660,17 @@ function ConversationSurface({
   railColor,
   selectedGateAction,
   selectedSlashCommandIndex,
+  selectedModel,
+  selectedModelIndex,
   selectedThreadIndex,
   showOlderHistoryHint,
+  showModelPalette,
   showSlashCommands,
   showThreadPalette,
   slashCommands,
   spinner,
   activeThreadId,
+  models,
   threads,
   transcript,
   onInputChange,
@@ -604,13 +689,17 @@ function ConversationSurface({
   railColor: string
   selectedGateAction: GateAction
   selectedSlashCommandIndex: number
+  selectedModel: string
+  selectedModelIndex: number
   selectedThreadIndex: number
   showOlderHistoryHint: boolean
+  showModelPalette: boolean
   showSlashCommands: boolean
   showThreadPalette: boolean
   slashCommands: SlashCommand[]
   spinner: string
   activeThreadId?: string | null
+  models: string[]
   threads: ThreadInfo[]
   transcript: Array<{ id: string; role: string; text: string }>
   onInputChange: () => void
@@ -620,7 +709,8 @@ function ConversationSurface({
 }) {
   const slashPopupHeight = showSlashCommands ? slashCommandPopupHeight(slashCommands) : 0
   const threadPopupHeight = showThreadPalette ? threadPaletteHeight(threads) : 0
-  const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8) - slashPopupHeight - threadPopupHeight)
+  const modelPopupHeight = showModelPalette ? modelPaletteHeight(models) : 0
+  const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight)
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const transcriptEndKey = transcript.map((item) => `${item.id}:${item.text.length}`).join("|")
 
@@ -645,9 +735,9 @@ function ConversationSurface({
       >
         {showOlderHistoryHint ? <LoadOlderHint width={contentWidth} /> : null}
         {transcript.map((item) => (
-          <TranscriptMessage key={item.id} item={item} markdownStyle={markdownStyle} width={contentWidth} />
+          <TranscriptMessage key={item.id} item={item} markdownStyle={markdownStyle} selectedModel={selectedModel} width={contentWidth} />
         ))}
-        {isThinking ? <ThinkingMessage spinner={spinner} width={contentWidth} /> : null}
+        {isThinking ? <ThinkingMessage selectedModel={selectedModel} spinner={spinner} width={contentWidth} /> : null}
       </scrollbox>
       {pendingGate ? (
         <GatePanel
@@ -666,12 +756,16 @@ function ConversationSurface({
         isThinking={isThinking}
         railColor={railColor}
         selectedSlashCommandIndex={selectedSlashCommandIndex}
+        selectedModel={selectedModel}
+        selectedModelIndex={selectedModelIndex}
         selectedThreadIndex={selectedThreadIndex}
+        showModelPalette={showModelPalette}
         showSlashCommands={showSlashCommands}
         showThreadPalette={showThreadPalette}
         slashCommands={slashCommands}
         spinner={spinner}
         activeThreadId={activeThreadId}
+        models={models}
         threads={threads}
         width={composerWidth}
         onInputChange={onInputChange}
@@ -685,10 +779,12 @@ function ConversationSurface({
 function TranscriptMessage({
   item,
   markdownStyle,
+  selectedModel,
   width,
 }: {
   item: { id: string; role: string; text: string }
   markdownStyle: SyntaxStyle
+  selectedModel: string
   width: number
 }) {
   if (item.role === "user") {
@@ -706,7 +802,7 @@ function TranscriptMessage({
     return (
       <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
         <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
-        <BuildLine />
+        <BuildLine selectedModel={selectedModel} />
       </box>
     )
   }
@@ -718,26 +814,27 @@ function TranscriptMessage({
   )
 }
 
-function BuildLine() {
+function BuildLine({ selectedModel }: { selectedModel: string }) {
   return (
     <box style={{ height: 1, flexDirection: "row", marginTop: 1 }}>
       <text fg="#2ee66b">▣</text>
       <text fg="#2ee66b"> Build</text>
       <text fg="#777777"> · </text>
-      <text fg="#d0d0d0">GPT-5.5</text>
+      <text fg="#d0d0d0">{selectedModel}</text>
       <text fg="#777777"> · 1.6s</text>
     </box>
   )
 }
 
-function ThinkingMessage({ spinner, width }: { spinner: string; width: number }) {
+function ThinkingMessage({ selectedModel, spinner, width }: { selectedModel: string; spinner: string; width: number }) {
   return (
     <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
       <box style={{ height: 1, flexDirection: "row" }}>
         <text fg="#2ee66b">{spinner}</text>
         <text fg="#2ee66b"> Build</text>
         <text fg="#777777"> · </text>
-        <text fg="#d0d0d0">thinking</text>
+        <text fg="#d0d0d0">{selectedModel}</text>
+        <text fg="#777777"> · thinking</text>
       </box>
     </box>
   )
@@ -757,12 +854,16 @@ function Composer({
   isThinking,
   railColor,
   selectedSlashCommandIndex,
+  selectedModel,
+  selectedModelIndex,
   selectedThreadIndex,
+  showModelPalette,
   showSlashCommands,
   showThreadPalette,
   slashCommands,
   spinner,
   activeThreadId,
+  models,
   threads,
   width,
   onInputChange,
@@ -773,12 +874,16 @@ function Composer({
   isThinking: boolean
   railColor: string
   selectedSlashCommandIndex: number
+  selectedModel: string
+  selectedModelIndex: number
   selectedThreadIndex: number
+  showModelPalette: boolean
   showSlashCommands: boolean
   showThreadPalette: boolean
   slashCommands: SlashCommand[]
   spinner: string
   activeThreadId?: string | null
+  models: string[]
   threads: ThreadInfo[]
   width: number
   onInputChange: () => void
@@ -786,6 +891,14 @@ function Composer({
 }) {
   return (
     <box style={{ width, flexDirection: "column" }}>
+      {showModelPalette ? (
+        <ModelPalette
+          models={models}
+          selectedIndex={selectedModelIndex}
+          selectedModel={selectedModel}
+          width={width}
+        />
+      ) : null}
       {showThreadPalette ? (
         <ThreadPalette
           activeThreadId={activeThreadId}
@@ -828,7 +941,7 @@ function Composer({
           <box style={{ height: 1, flexDirection: "row" }}>
             <text fg="#2ee66b">Build</text>
             <text fg="#777777"> . </text>
-            <text fg="#d0d0d0">GPT-5.5</text>
+            <text fg="#d0d0d0">{selectedModel}</text>
             <text fg="#858585"> OpenAI</text>
             {isThinking ? <text fg={railColor}> {spinner}</text> : null}
           </box>
@@ -899,6 +1012,63 @@ function ThreadRow({
   )
 }
 
+function ModelPalette({
+  models,
+  selectedIndex,
+  selectedModel,
+  width,
+}: {
+  models: string[]
+  selectedIndex: number
+  selectedModel: string
+  width: number
+}) {
+  const visibleModels = models.slice(0, 8)
+  const selectedVisibleIndex = wrapIndex(selectedIndex, visibleModels.length)
+  return (
+    <box style={{ width, flexDirection: "column", backgroundColor: "#101010", paddingTop: 1, paddingBottom: 1 }}>
+      <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
+        <text fg="#8cffb0">models</text>
+        <text fg="#777777"> · up/down select · enter use · esc close</text>
+      </box>
+      {visibleModels.map((model, index) => (
+        <ModelRow
+          key={model}
+          active={model === selectedModel}
+          model={model}
+          selected={index === selectedVisibleIndex}
+          width={width}
+        />
+      ))}
+      <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
+        <text fg="#606060">{truncate("local label only until Reborn exposes model routing", Math.max(1, width - 4))}</text>
+      </box>
+    </box>
+  )
+}
+
+function ModelRow({
+  active,
+  model,
+  selected,
+  width,
+}: {
+  active: boolean
+  model: string
+  selected: boolean
+  width: number
+}) {
+  const marker = selected ? ">" : active ? "*" : " "
+  const suffix = active ? " selected" : ""
+  return (
+    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#101010" }}>
+      <text fg={selected || active ? "#2ee66b" : "#707070"}>{marker} </text>
+      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{truncate(model, Math.max(8, width - suffix.length - 8))}</text>
+      <text fg={active ? "#8cffb0" : "#777777"}>{suffix}</text>
+    </box>
+  )
+}
+
 function SlashCommandPopup({
   commands,
   selectedIndex,
@@ -955,6 +1125,8 @@ function HintLine({ width }: { width: number }) {
       <text fg="#777777"> commands   </text>
       <text fg="#cfcfcf">ctrl+t</text>
       <text fg="#777777"> threads   </text>
+      <text fg="#cfcfcf">ctrl+m</text>
+      <text fg="#777777"> model   </text>
       <text fg="#cfcfcf">ctrl+x</text>
       <text fg="#777777"> cancel</text>
     </box>
@@ -1083,6 +1255,15 @@ function slashCommandPopupHeight(commands: SlashCommand[]): number {
 
 function threadPaletteHeight(threads: ThreadInfo[]): number {
   return Math.min(Math.max(threads.length, 1), 8) + 3
+}
+
+function modelPaletteHeight(models: string[]): number {
+  return Math.min(Math.max(models.length, 1), 8) + 3
+}
+
+function modelIndex(models: string[], model: string): number {
+  const index = models.indexOf(model)
+  return index >= 0 ? index : 0
 }
 
 function mergeThreads(...groups: Array<ThreadInfo[]>): ThreadInfo[] {
