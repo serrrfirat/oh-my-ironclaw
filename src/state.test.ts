@@ -209,4 +209,36 @@ describe("UI state", () => {
     expect(completed.activeRunId).toBe(null)
     expect(completed.isThinking).toBe(false)
   })
+
+  test("tracks thinking progress as activity", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "thinking", message: "reflecting", thread_id: "thread-1" },
+    })
+
+    expect(state.isThinking).toBe(true)
+    expect(state.activity).toContainEqual({
+      id: "progress-thread-1-reflecting",
+      label: "Thinking through the next step",
+      detail: "SSE progress: reflecting",
+      status: "running",
+      kind: "reflecting",
+    })
+  })
+
+  test("tracks tool progress as activity", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "tool_started", name: "tool_running", thread_id: "thread-1" },
+    })
+
+    expect(state.isThinking).toBe(true)
+    expect(state.activity[0]).toMatchObject({
+      id: "progress-thread-1-tool_running",
+      label: "Using tools",
+      detail: "SSE progress: tool_running",
+      status: "running",
+      kind: "tool_running",
+    })
+  })
 })

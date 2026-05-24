@@ -13,6 +13,7 @@ export type ActivityItem = {
   label: string
   detail?: string
   status: "running" | "ok" | "error" | "info"
+  kind?: string
 }
 
 export type UiState = {
@@ -125,7 +126,18 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
     case "heartbeat":
       return { ...state, connected: true }
     case "thinking":
-      return { ...state, status: event.message, isThinking: true }
+      return {
+        ...state,
+        status: event.message,
+        isThinking: true,
+        activity: upsertActivity(state.activity, {
+          id: progressActivityId(event.thread_id ?? state.activeThreadId, event.message),
+          label: progressLabel(event.message),
+          detail: progressDetail(event.message),
+          status: "running",
+          kind: event.message,
+        }),
+      }
     case "status":
       return { ...state, status: event.message }
     case "run_status":
@@ -147,11 +159,12 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
         ...state,
         isThinking: true,
         status: `running ${event.name}`,
-        activity: pushActivity(state.activity, {
-          id: event.call_id ?? `${event.name}-${Date.now()}`,
-          label: event.name,
-          detail: event.detail ?? undefined,
+        activity: upsertActivity(state.activity, {
+          id: event.call_id ?? progressActivityId(event.thread_id ?? state.activeThreadId, event.name),
+          label: progressLabel(event.name),
+          detail: event.detail ?? progressDetail(event.name),
           status: "running",
+          kind: event.name,
         }),
       }
     case "tool_completed":
@@ -362,6 +375,36 @@ function upsertActivity(items: ActivityItem[], item: ActivityItem): ActivityItem
   const index = items.findIndex((existing) => existing.id === item.id)
   if (index < 0) return pushActivity(items, item)
   return items.map((existing, current) => (current === index ? item : existing))
+}
+
+function progressActivityId(threadId: string | null | undefined, kind: string): string {
+  return `progress-${threadId ?? "thread"}-${kind}`
+}
+
+function progressLabel(kind: string): string {
+  switch (statusKey(kind)) {
+    case "typing":
+      return "Writing response"
+    case "reflecting":
+      return "Thinking through the next step"
+    case "tool_running":
+      return "Using tools"
+    default:
+      return kind.replaceAll("_", " ")
+  }
+}
+
+function progressDetail(kind: string): string {
+  switch (statusKey(kind)) {
+    case "typing":
+      return "SSE progress: typing"
+    case "reflecting":
+      return "SSE progress: reflecting"
+    case "tool_running":
+      return "SSE progress: tool_running"
+    default:
+      return `SSE progress: ${kind}`
+  }
 }
 
 function appendRunFailure(

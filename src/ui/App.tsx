@@ -5,7 +5,7 @@ import type { ClientConfig, ClientMode } from "../config"
 import { GatewayClient } from "../gateway/client"
 import type { AppEvent, PendingGateInfo, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
-import { initialUiState, reduceUiState } from "../state"
+import { initialUiState, reduceUiState, type ActivityItem } from "../state"
 
 type AppProps = {
   config: ClientConfig
@@ -686,6 +686,7 @@ export function App({ config }: AppProps) {
           slashCommands={slashCommands}
           spinner={activityFrame.spinner}
           activeThreadId={state.activeThreadId}
+          activity={state.activity}
           models={availableModels}
           threads={showThreadPalette ? paletteThreads : state.threads}
           transcript={state.transcript}
@@ -851,6 +852,7 @@ function ConversationSurface({
   slashCommands,
   spinner,
   activeThreadId,
+  activity,
   models,
   threads,
   transcript,
@@ -881,6 +883,7 @@ function ConversationSurface({
   slashCommands: SlashCommand[]
   spinner: string
   activeThreadId?: string | null
+  activity: ActivityItem[]
   models: string[]
   threads: ThreadInfo[]
   transcript: Array<{ id: string; role: string; text: string }>
@@ -919,7 +922,9 @@ function ConversationSurface({
         {transcript.map((item) => (
           <TranscriptMessage key={item.id} item={item} markdownStyle={markdownStyle} selectedModel={selectedModel} width={contentWidth} />
         ))}
-        {isThinking ? <ThinkingMessage selectedModel={selectedModel} spinner={spinner} width={contentWidth} /> : null}
+        {isThinking ? (
+          <ActivityCards activity={activity} selectedModel={selectedModel} spinner={spinner} width={contentWidth} />
+        ) : null}
       </scrollbox>
       {pendingGate ? (
         <GatePanel
@@ -1009,18 +1014,57 @@ function BuildLine({ selectedModel }: { selectedModel: string }) {
   )
 }
 
-function ThinkingMessage({ selectedModel, spinner, width }: { selectedModel: string; spinner: string; width: number }) {
+function ActivityCards({
+  activity,
+  selectedModel,
+  spinner,
+  width,
+}: {
+  activity: ActivityItem[]
+  selectedModel: string
+  spinner: string
+  width: number
+}) {
+  const running = activity.filter((item) => item.status === "running").slice(-3)
+  const items = running.length
+    ? running
+    : [{ id: "thinking", label: "Thinking", detail: "Waiting for Reborn progress", status: "running" as const }]
+
   return (
-    <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg="#2ee66b">{spinner}</text>
-        <text fg="#2ee66b"> Build</text>
-        <text fg="#777777"> · </text>
-        <text fg="#d0d0d0">{selectedModel}</text>
-        <text fg="#777777"> · thinking</text>
+    <box style={{ width, flexDirection: "column", marginBottom: 2 }}>
+      {items.map((item) => (
+        <ActivityCard key={item.id} item={item} spinner={spinner} width={width} />
+      ))}
+      <BuildLine selectedModel={selectedModel} />
+    </box>
+  )
+}
+
+function ActivityCard({ item, spinner, width }: { item: ActivityItem; spinner: string; width: number }) {
+  return (
+    <box style={{ width, flexDirection: "row", backgroundColor: "#141414", marginBottom: 1 }}>
+      <box style={{ width: 1, backgroundColor: activityColor(item) }} />
+      <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
+        <box style={{ height: 1, flexDirection: "row" }}>
+          <text fg={activityColor(item)}>{spinner}</text>
+          <text fg="#858585"> .: </text>
+          <text fg="#d0d0d0">{truncate(item.label, Math.max(12, width - 12))}</text>
+        </box>
+        {item.detail ? (
+          <box style={{ height: 1, flexDirection: "row", marginTop: 1 }}>
+            <text fg="#8a8a8a">{truncate(item.detail, Math.max(12, width - 6))}</text>
+          </box>
+        ) : null}
       </box>
     </box>
   )
+}
+
+function activityColor(item: ActivityItem): string {
+  if (item.status === "error") return "#f08a8a"
+  if (item.status === "ok") return "#8cffb0"
+  if (item.kind === "tool_running") return "#f6ad3c"
+  return "#2ee66b"
 }
 
 function LoadOlderHint({ width }: { width: number }) {
