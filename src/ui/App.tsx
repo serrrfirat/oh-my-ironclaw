@@ -1,6 +1,6 @@
 import { SyntaxStyle, type ScrollBoxRenderable, type TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
-import { useEffect, useMemo, useReducer, useRef, useState, type ReactNode, type RefObject } from "react"
+import { useEffect, useMemo, useReducer, useRef, useState, type RefObject } from "react"
 import type { ClientConfig, ClientMode } from "../config"
 import { GatewayClient } from "../gateway/client"
 import type { AppEvent, PendingGateInfo, ThreadInfo } from "../gateway/types"
@@ -777,25 +777,35 @@ function SettingsSurface({
   const profileName = config.mode === "local" ? "local-dev" : "remote"
   const serverState = connected ? "online" : "offline"
   const authState = config.token ? "present" : "missing"
-  const secretCount = config.token ? "2 configured" : "1 missing"
+  const secretCount = config.token ? "1 set · 2 unknown" : "1 missing · 2 unknown"
   const sourcePath = config.rebornSource ?? "not configured"
+  const menu = [
+    { label: "Profile", meta: profileName },
+    { label: "Connection", meta: serverState },
+    { label: "Models", meta: selectedModel },
+    { label: "Secrets", meta: secretCount },
+    { label: "Tools", meta: config.mode === "local" ? "local + remote" : "remote" },
+    { label: "Approvals", meta: "ask" },
+  ]
 
   if (narrow) {
     return (
       <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
         <SettingsHeader width={contentWidth} />
         <box style={{ height: 1 }} />
-        <SettingsSummaryRow selected label="Profile" value={profileName} detail={config.mode} width={contentWidth} />
-        <SettingsSummaryRow label="Model" value={selectedModel} detail="OpenAI" width={contentWidth} />
-        <SettingsSummaryRow label="Server" value={serverState} detail={config.baseUrl} width={contentWidth} />
-        <SettingsSummaryRow label="Auth" value={authState} detail="env token" width={contentWidth} />
-        <SettingsSummaryRow label="Secrets" value={secretCount} detail="safe preview" width={contentWidth} />
+        <text fg="#f2f2f2">Settings</text>
         <box style={{ height: 1 }} />
-        <SettingsCard title="Secrets" width={contentWidth}>
-          <SecretRow status={config.token ? "set" : "missing"} name="IRONCLAW_REBORN_WEBUI_TOKEN" source="env" detail="webchat v2" width={contentWidth - 4} />
-          <SecretRow status="unknown" name="IRONCLAW_REBORN_WEBUI_USER_ID" source="env" detail="webchat v2" width={contentWidth - 4} />
-          <SecretRow status="missing" name="GITHUB_TOKEN" source="keychain" detail="github tools" width={contentWidth - 4} />
-        </SettingsCard>
+        <SettingsMenu items={menu} selectedIndex={0} width={contentWidth} />
+        <box style={{ height: 1 }} />
+        <SettingsPreview
+          authState={authState}
+          config={config}
+          connected={connected}
+          selectedModel={selectedModel}
+          sourcePath={sourcePath}
+          status={status}
+          width={contentWidth}
+        />
         <SettingsFooter width={contentWidth} />
       </box>
     )
@@ -805,32 +815,23 @@ function SettingsSurface({
     <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
       <SettingsHeader width={contentWidth} />
       <box style={{ height: 1 }} />
-      <text fg="#f2f2f2">Settings</text>
-      <box style={{ height: 1 }} />
-      <SettingsSummaryRow selected label="Profile" value={profileName} detail="active" width={contentWidth} />
-      <SettingsSummaryRow label="Model" value={selectedModel} detail="OpenAI" width={contentWidth} />
-      <SettingsSummaryRow label="Server" value={config.baseUrl} detail={serverState} width={contentWidth} />
-      <SettingsSummaryRow label="Auth" value="env token" detail={authState} width={contentWidth} />
-      <SettingsSummaryRow label="Secrets" value={secretCount} detail="UI preview only" width={contentWidth} />
-      <SettingsSummaryRow label="Tools" value={config.mode === "local" ? "local + remote" : "remote"} detail="available via commands" width={contentWidth} />
-      <SettingsSummaryRow label="Approvals" value="ask" detail="writes, shell, network" width={contentWidth} />
-      <SettingsDivider width={contentWidth} />
-      <SettingsCard title="Profile" width={contentWidth}>
-        <SettingsField label="Name" value={profileName} width={contentWidth - 4} />
-        <SettingsField label="Mode" value={config.mode} width={contentWidth - 4} />
-        <SettingsField label="Workspace" value="current terminal workspace" width={contentWidth - 4} />
-        <SettingsField label="Reborn source" value={sourcePath} width={contentWidth - 4} />
-        <SettingsField label="Reborn features" value={config.rebornFeatures ?? "not configured"} width={contentWidth - 4} />
-      </SettingsCard>
-      <box style={{ height: 1 }} />
-      <SettingsCard title="Secrets" width={contentWidth}>
-        <SecretRow status={config.token ? "set" : "missing"} name="IRONCLAW_REBORN_WEBUI_TOKEN" source="env" detail="webchat v2" width={contentWidth - 4} />
-        <SecretRow status="unknown" name="IRONCLAW_REBORN_WEBUI_USER_ID" source="env" detail="webchat v2" width={contentWidth - 4} />
-        <SecretRow status="missing" name="GITHUB_TOKEN" source="keychain" detail="github tools" width={contentWidth - 4} />
-        <SecretRow status="unknown" name="OPENAI_API_KEY" source="env" detail="model provider" width={contentWidth - 4} />
-      </SettingsCard>
-      <box style={{ height: 1 }} />
-      <SettingsActionBar width={contentWidth} />
+      <box style={{ width: contentWidth, flexDirection: "row" }}>
+        <box style={{ width: 32, flexDirection: "column" }}>
+          <text fg="#f2f2f2">Settings</text>
+          <box style={{ height: 1 }} />
+          <SettingsMenu items={menu} selectedIndex={0} width={32} />
+        </box>
+        <box style={{ width: 2 }} />
+        <SettingsPreview
+          authState={authState}
+          config={config}
+          connected={connected}
+          selectedModel={selectedModel}
+          sourcePath={sourcePath}
+          status={status}
+          width={Math.max(1, contentWidth - 34)}
+        />
+      </box>
       <SettingsFooter width={contentWidth} />
     </box>
   )
@@ -849,38 +850,78 @@ function SettingsHeader({ width }: { width: number }) {
   )
 }
 
-function SettingsSummaryRow({
-  selected = false,
-  label,
-  value,
-  detail,
+function SettingsMenu({
+  items,
+  selectedIndex,
   width,
 }: {
-  selected?: boolean
-  label: string
-  value: string
-  detail: string
+  items: Array<{ label: string; meta: string }>
+  selectedIndex: number
   width: number
 }) {
-  const labelWidth = 14
-  const valueWidth = Math.max(12, Math.floor(width * 0.24))
-  const detailWidth = Math.max(8, width - labelWidth - valueWidth - 7)
   return (
-    <box style={{ width, height: 1, flexDirection: "row", backgroundColor: selected ? "#101810" : "#050505" }}>
-      <text fg={selected ? "#2ee66b" : "#707070"}>{selected ? "> " : "  "}</text>
-      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{padEnd(label, labelWidth)}</text>
-      <text fg="#d0d0d0">{padEnd(truncate(value, valueWidth), valueWidth)}</text>
-      <text fg="#777777">{truncate(detail, detailWidth)}</text>
+    <box style={{ width, flexDirection: "column" }}>
+      {items.map((item, index) => (
+        <SettingsMenuRow
+          key={item.label}
+          item={item}
+          selected={index === selectedIndex}
+          width={width}
+        />
+      ))}
     </box>
   )
 }
 
-function SettingsCard({ title, width, children }: { title: string; width: number; children: ReactNode }) {
+function SettingsMenuRow({
+  item,
+  selected,
+  width,
+}: {
+  item: { label: string; meta: string }
+  selected: boolean
+  width: number
+}) {
+  const metaWidth = Math.max(0, width - 15)
+  return (
+    <box style={{ width, height: 1, flexDirection: "row", backgroundColor: selected ? "#141414" : "#050505" }}>
+      <box style={{ width: 1, backgroundColor: selected ? "#2ee66b" : "#050505" }} />
+      <text fg={selected ? "#2ee66b" : "#707070"}>{selected ? "> " : "  "}</text>
+      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{padEnd(item.label, 12)}</text>
+      <text fg="#777777">{truncate(item.meta, metaWidth)}</text>
+    </box>
+  )
+}
+
+function SettingsPreview({
+  authState,
+  config,
+  connected,
+  selectedModel,
+  sourcePath,
+  status,
+  width,
+}: {
+  authState: string
+  config: ClientConfig
+  connected: boolean
+  selectedModel: string
+  sourcePath: string
+  status: string
+  width: number
+}) {
   return (
     <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-      <text fg="#f2f2f2">{title}</text>
+      <text fg="#f2f2f2">Profile</text>
       <box style={{ height: 1 }} />
-      {children}
+      <SettingsField label="mode" value={config.mode} width={width - 4} />
+      <SettingsField label="model" value={selectedModel} width={width - 4} />
+      <SettingsField label="server" value={`${connected ? "online" : "offline"} · ${config.baseUrl}`} width={width - 4} />
+      <SettingsField label="auth" value={`env token · ${authState}`} width={width - 4} />
+      <SettingsField label="source" value={sourcePath} width={width - 4} />
+      <SettingsField label="status" value={status} width={width - 4} />
+      <box style={{ height: 1 }} />
+      <text fg="#777777">{truncate("enter opens this section once settings are wired", Math.max(1, width - 4))}</text>
     </box>
   )
 }
@@ -896,51 +937,10 @@ function SettingsField({ label, value, width }: { label: string; value: string; 
   )
 }
 
-function SecretRow({
-  status,
-  name,
-  source,
-  detail,
-  width,
-}: {
-  status: "set" | "missing" | "unknown"
-  name: string
-  source: string
-  detail: string
-  width: number
-}) {
-  const statusText = status === "set" ? "set" : status === "missing" ? "miss" : "unknown"
-  const statusColor = status === "set" ? "#2ee66b" : status === "missing" ? "#f7768e" : "#f6ad3c"
-  const nameWidth = Math.max(18, Math.floor(width * 0.42))
-  const sourceWidth = 12
-  const detailWidth = Math.max(8, width - nameWidth - sourceWidth - 11)
-  return (
-    <box style={{ width, height: 1, flexDirection: "row" }}>
-      <text fg={statusColor}>{status === "set" ? "● " : "○ "}</text>
-      <text fg={statusColor}>{padEnd(statusText, 8)}</text>
-      <text fg="#d0d0d0">{padEnd(truncate(name, nameWidth), nameWidth)}</text>
-      <text fg="#777777">{padEnd(source, sourceWidth)}</text>
-      <text fg="#8a8a8a">{truncate(detail, detailWidth)}</text>
-    </box>
-  )
-}
-
-function SettingsActionBar({ width }: { width: number }) {
-  return (
-    <box style={{ width, height: 3, flexDirection: "column", backgroundColor: "#111111", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <text fg="#f2f2f2">Actions</text>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg="#2ee66b">reveal source</text>
-        <text fg="#777777">   rotate token   add secret   test connection   open config</text>
-      </box>
-    </box>
-  )
-}
-
 function SettingsFooter({ width }: { width: number }) {
   return (
     <box style={{ width, height: 1, flexDirection: "row", marginTop: 1 }}>
-      <text fg="#777777">{truncate("tab section · enter edit · / filter · r refresh · esc back", width)}</text>
+      <text fg="#777777">{truncate("up/down section · enter open · esc back", width)}</text>
     </box>
   )
 }
