@@ -5,6 +5,7 @@ import type { ClientConfig, ClientMode } from "../config"
 import { GatewayClient } from "../gateway/client"
 import type { AppEvent, PendingGateInfo, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
+import { activeProfileFromCliResult, isLocalDevYoloProfile } from "../rebornProfile"
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
 
 type AppProps = {
@@ -152,6 +153,7 @@ export function App({ config }: AppProps) {
   const [showModelPalette, setShowModelPalette] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [selectedSettingsIndex, setSelectedSettingsIndex] = useState(0)
+  const [activeRebornProfile, setActiveRebornProfile] = useState<string | null>(null)
   const [availableModels, setAvailableModels] = useState(config.models)
   const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
   const [selectedModel, setSelectedModel] = useState(config.model)
@@ -160,6 +162,7 @@ export function App({ config }: AppProps) {
   const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
   const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
+  const localDevYolo = isLocalDevYoloProfile(activeRebornProfile)
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
@@ -360,6 +363,30 @@ export function App({ config }: AppProps) {
     setAvailableModels(config.models)
     setSelectedModelIndex(modelIndex(config.models, config.model))
   }, [config.model, config.models])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadActiveProfile() {
+      if (config.mode !== "local") {
+        setActiveRebornProfile(null)
+        return
+      }
+
+      try {
+        const result = await runRebornCli(config, ["profile", "list", "--json"])
+        if (!cancelled) setActiveRebornProfile(activeProfileFromCliResult(result))
+      } catch {
+        if (!cancelled) setActiveRebornProfile(null)
+      }
+    }
+
+    void loadActiveProfile()
+
+    return () => {
+      cancelled = true
+    }
+  }, [config.mode, config.rebornBin, config.rebornFeatures, config.rebornSource])
 
   useEffect(() => {
     setSelectedCommandIndex(0)
@@ -755,6 +782,7 @@ export function App({ config }: AppProps) {
           inputRef={textareaRef}
           isThinking={state.isThinking}
           lastError={state.lastError}
+          localDevYolo={localDevYolo}
           railColor={activityFrame.railColor}
           selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
           selectedModel={selectedModel}
@@ -1085,6 +1113,7 @@ function WelcomeSurface({
   inputRef,
   isThinking,
   lastError,
+  localDevYolo,
   railColor,
   selectedSlashCommandIndex,
   selectedModel,
@@ -1111,6 +1140,7 @@ function WelcomeSurface({
   inputRef: RefObject<TextareaRenderable | null>
   isThinking: boolean
   lastError?: string | null
+  localDevYolo: boolean
   railColor: string
   selectedSlashCommandIndex: number
   selectedModel: string
@@ -1131,13 +1161,14 @@ function WelcomeSurface({
   onSubmit: () => void
 }) {
   const topSpacer = Math.max(1, Math.floor(height * 0.32) - 5)
+  const logoColors = useRainbowLogoColors(localDevYolo)
   return (
     <box style={{ width, height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505" }}>
       <box style={{ height: topSpacer }} />
       {height >= 15 ? (
-        <ascii-font text="ironclaw" font="block" color={["#0f7a3a", "#8cffb0"]} backgroundColor="#050505" />
+        <ascii-font text="ironclaw" font="block" color={logoColors} backgroundColor="#050505" />
       ) : (
-        <text fg="#8cffb0">ironclaw</text>
+        <text fg={logoColors[0] ?? "#8cffb0"}>ironclaw</text>
       )}
       <box style={{ height: 2 }} />
       <Composer
@@ -2032,6 +2063,29 @@ function useActivityFrame(active: boolean): { spinner: string; railColor: string
     spinner: spinnerFrames[frame % spinnerFrames.length],
     railColor: railColors[frame % railColors.length],
   }
+}
+
+function useRainbowLogoColors(active: boolean): string[] {
+  const [frame, setFrame] = useState(0)
+
+  useEffect(() => {
+    if (!active) {
+      setFrame(0)
+      return
+    }
+
+    const timer = setInterval(() => {
+      setFrame((current) => current + 1)
+    }, 90)
+
+    return () => clearInterval(timer)
+  }, [active])
+
+  if (!active) return ["#0f7a3a", "#8cffb0"]
+
+  const rainbow = ["#ff5c7a", "#ffb86b", "#fff36d", "#57f287", "#5fd7ff", "#8a7cff", "#ff7ad9", "#ffffff"]
+  const shine = frame % rainbow.length
+  return rainbow.map((_, index) => rainbow[(index + shine) % rainbow.length] ?? "#ffffff")
 }
 
 function errorMessage(error: unknown): string {
