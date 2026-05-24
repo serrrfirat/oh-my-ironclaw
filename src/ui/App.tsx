@@ -11,7 +11,7 @@ type AppProps = {
 }
 
 type GateAction = "approved" | "denied"
-type SlashCommandAction = "new-thread" | "clear-input"
+type SlashCommandAction = "new-thread" | "clear-input" | "threads" | "cancel-run" | "load-older"
 type SlashCommand = {
   name: string
   description: string
@@ -24,6 +24,9 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/skills", description: "List available skills and tools", prompt: "List all available skills and tools." },
   { name: "/status", description: "Ask for runtime and model status", prompt: "Check the current runtime and model status. Summarize any active issues." },
   { name: "/new", description: "Start a new thread", action: "new-thread" },
+  { name: "/threads", description: "Switch to another thread", action: "threads" },
+  { name: "/cancel", description: "Cancel the current run", action: "cancel-run" },
+  { name: "/history", description: "Load older messages", action: "load-older" },
   { name: "/clear", description: "Clear the composer", action: "clear-input" },
 ]
 
@@ -38,20 +41,49 @@ export function App({ config }: AppProps) {
   const [selectedThreadIndex, setSelectedThreadIndex] = useState(0)
   const [selectedGateAction, setSelectedGateAction] = useState<GateAction>("approved")
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
+  const [showCommandPalette, setShowCommandPalette] = useState(false)
+  const [showThreadPalette, setShowThreadPalette] = useState(false)
   const activityFrame = useActivityFrame(state.isThinking)
-  const slashCommands = filteredSlashCommands(input)
-  const showSlashCommands = isSlashCommandInput(input) && slashCommands.length > 0
+  const slashCommands = showCommandPalette ? SLASH_COMMANDS : filteredSlashCommands(input)
+  const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
       renderer.destroy()
       return
     }
+    if (showThreadPalette) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        setShowThreadPalette(false)
+        return
+      }
+      if (key.name === "up") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedThreadIndex((index) => wrapIndex(index - 1, state.threads.length))
+        return
+      }
+      if (key.name === "down" || key.name === "tab") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedThreadIndex((index) => wrapIndex(index + 1, state.threads.length))
+        return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault()
+        key.stopPropagation()
+        void selectThread(selectedThreadIndex)
+        return
+      }
+    }
     if (key.name === "escape") {
       if (showSlashCommands) {
         key.preventDefault()
         key.stopPropagation()
         setInput("")
+        setShowCommandPalette(false)
         textareaRef.current?.clear()
         return
       }
@@ -60,6 +92,31 @@ export function App({ config }: AppProps) {
     }
     if (key.ctrl && key.name === "n") {
       void createThread()
+      return
+    }
+    if (key.ctrl && key.name === "p") {
+      key.preventDefault()
+      key.stopPropagation()
+      setSelectedCommandIndex(0)
+      setShowCommandPalette(true)
+      return
+    }
+    if (key.ctrl && key.name === "t") {
+      key.preventDefault()
+      key.stopPropagation()
+      void openThreadPalette()
+      return
+    }
+    if (key.ctrl && key.name === "x") {
+      key.preventDefault()
+      key.stopPropagation()
+      void cancelActiveRun()
+      return
+    }
+    if (key.name === "pageup") {
+      key.preventDefault()
+      key.stopPropagation()
+      void loadOlderHistory()
       return
     }
     if (key.ctrl && key.name === "a") {
@@ -128,6 +185,7 @@ export function App({ config }: AppProps) {
 
   useEffect(() => {
     setSelectedCommandIndex(0)
+    if (!isSlashCommandInput(input)) setShowCommandPalette(false)
   }, [slashCommandQuery(input)])
 
   useEffect(() => {
@@ -197,6 +255,36 @@ export function App({ config }: AppProps) {
     }
   }
 
+  async function loadOlderHistory() {
+    if (!state.activeThreadId || !state.historyCursor) return
+    try {
+      const history = await client.history(state.activeThreadId, 80, state.historyCursor)
+      dispatch({ type: "older_history", history })
+    } catch (error) {
+      dispatch({ type: "error", message: errorMessage(error) })
+    }
+  }
+
+  async function openThreadPalette() {
+    try {
+      const response = await client.threads()
+      const threads = [response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[]
+      dispatch({ type: "threads", threads, activeThreadId: state.activeThreadId })
+      const activeIndex = threads.findIndex((thread) => thread.id === state.activeThreadId)
+      setSelectedThreadIndex(activeIndex >= 0 ? activeIndex : 0)
+      setShowThreadPalette(true)
+    } catch (error) {
+      dispatch({ type: "error", message: errorMessage(error) })
+    }
+  }
+
+  async function selectThread(index: number) {
+    const thread = state.threads[wrapIndex(index, state.threads.length)]
+    if (!thread) return
+    setShowThreadPalette(false)
+    await loadThread(thread.id)
+  }
+
   async function createThread() {
     try {
       const thread = await client.newThread()
@@ -221,6 +309,7 @@ export function App({ config }: AppProps) {
     try {
       const response = await client.send(content, state.activeThreadId)
       const threadId = response.thread_id ?? state.activeThreadId
+      dispatch({ type: "run_started", threadId, runId: response.run_id, status: response.status })
       if (threadId && threadId !== state.activeThreadId) {
         dispatch({ type: "threads", threads: state.threads, activeThreadId: threadId })
       }
@@ -234,17 +323,60 @@ export function App({ config }: AppProps) {
     if (!command) return
     if (command.action === "clear-input") {
       setInput("")
+      setShowCommandPalette(false)
       textareaRef.current?.clear()
       return
     }
     if (command.action === "new-thread") {
       setInput("")
+      setShowCommandPalette(false)
       textareaRef.current?.clear()
       await createThread()
       return
     }
+    if (command.action === "threads") {
+      setInput("")
+      setShowCommandPalette(false)
+      textareaRef.current?.clear()
+      await openThreadPalette()
+      return
+    }
+    if (command.action === "cancel-run") {
+      setInput("")
+      setShowCommandPalette(false)
+      textareaRef.current?.clear()
+      await cancelActiveRun()
+      return
+    }
+    if (command.action === "load-older") {
+      setInput("")
+      setShowCommandPalette(false)
+      textareaRef.current?.clear()
+      await loadOlderHistory()
+      return
+    }
     if (command.prompt) {
+      setShowCommandPalette(false)
       await submitContent(command.prompt)
+    }
+  }
+
+  async function cancelActiveRun() {
+    const threadId = state.pendingGate?.thread_id || state.activeThreadId
+    const runId = state.pendingGate?.run_id || state.activeRunId
+    if (!threadId || !runId) {
+      dispatch({ type: "error", message: "No active run to cancel." })
+      return
+    }
+    try {
+      const response = await client.cancelRun(threadId, runId)
+      dispatch({
+        type: "event",
+        event: { type: "run_status", status: response.status || "cancelled", run_id: response.run_id, thread_id: threadId },
+      })
+      await loadThread(threadId)
+    } catch (error) {
+      dispatch({ type: "error", message: errorMessage(error) })
     }
   }
 
@@ -304,9 +436,14 @@ export function App({ config }: AppProps) {
           railColor={activityFrame.railColor}
           selectedGateAction={selectedGateAction}
           selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
+          selectedThreadIndex={selectedThreadIndex}
+          showOlderHistoryHint={state.hasOlderHistory}
           showSlashCommands={showSlashCommands}
+          showThreadPalette={showThreadPalette}
           slashCommands={slashCommands}
           spinner={activityFrame.spinner}
+          activeThreadId={state.activeThreadId}
+          threads={state.threads}
           transcript={state.transcript}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
           onResolve={(action) => void resolveGate(action)}
@@ -324,10 +461,14 @@ export function App({ config }: AppProps) {
           lastError={state.lastError}
           railColor={activityFrame.railColor}
           selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
+          selectedThreadIndex={selectedThreadIndex}
           showSlashCommands={showSlashCommands}
+          showThreadPalette={showThreadPalette}
           slashCommands={slashCommands}
           spinner={activityFrame.spinner}
           status={state.status}
+          activeThreadId={state.activeThreadId}
+          threads={state.threads}
           width={width}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
           onSubmit={submit}
@@ -347,10 +488,14 @@ function WelcomeSurface({
   lastError,
   railColor,
   selectedSlashCommandIndex,
+  selectedThreadIndex,
   showSlashCommands,
+  showThreadPalette,
   slashCommands,
   spinner,
   status,
+  activeThreadId,
+  threads,
   width,
   onInputChange,
   onSubmit,
@@ -364,10 +509,14 @@ function WelcomeSurface({
   lastError?: string | null
   railColor: string
   selectedSlashCommandIndex: number
+  selectedThreadIndex: number
   showSlashCommands: boolean
+  showThreadPalette: boolean
   slashCommands: SlashCommand[]
   spinner: string
   status: string
+  activeThreadId?: string | null
+  threads: ThreadInfo[]
   width: number
   onInputChange: () => void
   onSubmit: () => void
@@ -388,9 +537,13 @@ function WelcomeSurface({
         isThinking={isThinking}
         railColor={railColor}
         selectedSlashCommandIndex={selectedSlashCommandIndex}
+        selectedThreadIndex={selectedThreadIndex}
         showSlashCommands={showSlashCommands}
+        showThreadPalette={showThreadPalette}
         slashCommands={slashCommands}
         spinner={spinner}
+        activeThreadId={activeThreadId}
+        threads={threads}
         width={composerWidth}
         onInputChange={onInputChange}
         onSubmit={onSubmit}
@@ -423,9 +576,14 @@ function ConversationSurface({
   railColor,
   selectedGateAction,
   selectedSlashCommandIndex,
+  selectedThreadIndex,
+  showOlderHistoryHint,
   showSlashCommands,
+  showThreadPalette,
   slashCommands,
   spinner,
+  activeThreadId,
+  threads,
   transcript,
   onInputChange,
   onResolve,
@@ -443,9 +601,14 @@ function ConversationSurface({
   railColor: string
   selectedGateAction: GateAction
   selectedSlashCommandIndex: number
+  selectedThreadIndex: number
+  showOlderHistoryHint: boolean
   showSlashCommands: boolean
+  showThreadPalette: boolean
   slashCommands: SlashCommand[]
   spinner: string
+  activeThreadId?: string | null
+  threads: ThreadInfo[]
   transcript: Array<{ id: string; role: string; text: string }>
   onInputChange: () => void
   onResolve: (action: GateAction) => void
@@ -453,7 +616,8 @@ function ConversationSurface({
   onSubmit: () => void
 }) {
   const slashPopupHeight = showSlashCommands ? slashCommandPopupHeight(slashCommands) : 0
-  const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8) - slashPopupHeight)
+  const threadPopupHeight = showThreadPalette ? threadPaletteHeight(threads) : 0
+  const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8) - slashPopupHeight - threadPopupHeight)
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const transcriptEndKey = transcript.map((item) => `${item.id}:${item.text.length}`).join("|")
 
@@ -476,6 +640,7 @@ function ConversationSurface({
           scrollY: true,
         }}
       >
+        {showOlderHistoryHint ? <LoadOlderHint width={contentWidth} /> : null}
         {transcript.map((item) => (
           <TranscriptMessage key={item.id} item={item} markdownStyle={markdownStyle} width={contentWidth} />
         ))}
@@ -498,9 +663,13 @@ function ConversationSurface({
         isThinking={isThinking}
         railColor={railColor}
         selectedSlashCommandIndex={selectedSlashCommandIndex}
+        selectedThreadIndex={selectedThreadIndex}
         showSlashCommands={showSlashCommands}
+        showThreadPalette={showThreadPalette}
         slashCommands={slashCommands}
         spinner={spinner}
+        activeThreadId={activeThreadId}
+        threads={threads}
         width={composerWidth}
         onInputChange={onInputChange}
         onSubmit={onSubmit}
@@ -571,15 +740,27 @@ function ThinkingMessage({ spinner, width }: { spinner: string; width: number })
   )
 }
 
+function LoadOlderHint({ width }: { width: number }) {
+  return (
+    <box style={{ width, height: 2, flexDirection: "column", paddingLeft: 3, marginBottom: 1 }}>
+      <text fg="#777777">{truncate("/history or pageup to load older messages", Math.max(1, width - 3))}</text>
+    </box>
+  )
+}
+
 function Composer({
   focused,
   inputRef,
   isThinking,
   railColor,
   selectedSlashCommandIndex,
+  selectedThreadIndex,
   showSlashCommands,
+  showThreadPalette,
   slashCommands,
   spinner,
+  activeThreadId,
+  threads,
   width,
   onInputChange,
   onSubmit,
@@ -589,15 +770,27 @@ function Composer({
   isThinking: boolean
   railColor: string
   selectedSlashCommandIndex: number
+  selectedThreadIndex: number
   showSlashCommands: boolean
+  showThreadPalette: boolean
   slashCommands: SlashCommand[]
   spinner: string
+  activeThreadId?: string | null
+  threads: ThreadInfo[]
   width: number
   onInputChange: () => void
   onSubmit: () => void
 }) {
   return (
     <box style={{ width, flexDirection: "column" }}>
+      {showThreadPalette ? (
+        <ThreadPalette
+          activeThreadId={activeThreadId}
+          selectedIndex={selectedThreadIndex}
+          threads={threads}
+          width={width}
+        />
+      ) : null}
       {showSlashCommands ? (
         <SlashCommandPopup
           commands={slashCommands}
@@ -638,6 +831,67 @@ function Composer({
           </box>
         </box>
       </box>
+    </box>
+  )
+}
+
+function ThreadPalette({
+  activeThreadId,
+  selectedIndex,
+  threads,
+  width,
+}: {
+  activeThreadId?: string | null
+  selectedIndex: number
+  threads: ThreadInfo[]
+  width: number
+}) {
+  const visibleThreads = threads.slice(0, 8)
+  const selectedVisibleIndex = wrapIndex(selectedIndex, visibleThreads.length)
+  return (
+    <box style={{ width, flexDirection: "column", backgroundColor: "#101010", paddingTop: 1, paddingBottom: 1 }}>
+      <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
+        <text fg="#8cffb0">threads</text>
+        <text fg="#777777"> · up/down select · enter open · esc close</text>
+      </box>
+      {visibleThreads.length ? (
+        visibleThreads.map((thread, index) => (
+          <ThreadRow
+            key={thread.id}
+            active={thread.id === activeThreadId}
+            selected={index === selectedVisibleIndex}
+            thread={thread}
+            width={width}
+          />
+        ))
+      ) : (
+        <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
+          <text fg="#777777">No threads yet.</text>
+        </box>
+      )}
+    </box>
+  )
+}
+
+function ThreadRow({
+  active,
+  selected,
+  thread,
+  width,
+}: {
+  active: boolean
+  selected: boolean
+  thread: ThreadInfo
+  width: number
+}) {
+  const marker = selected ? ">" : active ? "*" : " "
+  const title = thread.title || thread.id
+  const suffix = active ? " active" : ` ${thread.state}`
+  return (
+    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#101010" }}>
+      <text fg={selected || active ? "#2ee66b" : "#707070"}>{marker} </text>
+      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{truncate(title, Math.max(8, width - suffix.length - 8))}</text>
+      <text fg={active ? "#8cffb0" : "#777777"}>{suffix}</text>
     </box>
   )
 }
@@ -694,10 +948,12 @@ function SlashCommandRow({
 function HintLine({ width }: { width: number }) {
   return (
     <box style={{ width, height: 1, flexDirection: "row", justifyContent: "flex-end" }}>
-      <text fg="#cfcfcf">tab</text>
-      <text fg="#777777"> agents   </text>
       <text fg="#cfcfcf">ctrl+p</text>
-      <text fg="#777777"> commands</text>
+      <text fg="#777777"> commands   </text>
+      <text fg="#cfcfcf">ctrl+t</text>
+      <text fg="#777777"> threads   </text>
+      <text fg="#cfcfcf">ctrl+x</text>
+      <text fg="#777777"> cancel</text>
     </box>
   )
 }
@@ -820,6 +1076,10 @@ function padEnd(value: string, length: number): string {
 
 function slashCommandPopupHeight(commands: SlashCommand[]): number {
   return Math.min(commands.length, 6) + 3
+}
+
+function threadPaletteHeight(threads: ThreadInfo[]): number {
+  return Math.min(Math.max(threads.length, 1), 8) + 3
 }
 
 function filteredSlashCommands(input: string): SlashCommand[] {

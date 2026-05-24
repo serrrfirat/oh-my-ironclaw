@@ -20,8 +20,11 @@ export type UiState = {
   status: string
   isThinking: boolean
   activeThreadId?: string | null
+  activeRunId?: string | null
   threads: ThreadInfo[]
   transcript: TranscriptItem[]
+  historyCursor?: string | null
+  hasOlderHistory: boolean
   activity: ActivityItem[]
   pendingGate?: PendingGateInfo | null
   lastError?: string | null
@@ -32,8 +35,11 @@ export const initialUiState: UiState = {
   connected: false,
   status: "starting",
   isThinking: false,
+  activeRunId: null,
   threads: [],
   transcript: [],
+  historyCursor: null,
+  hasOlderHistory: false,
   activity: [],
   pendingGate: null,
 }
@@ -43,6 +49,8 @@ export type UiAction =
   | { type: "error"; message: string }
   | { type: "threads"; threads: ThreadInfo[]; activeThreadId?: string | null }
   | { type: "history"; history: HistoryResponse }
+  | { type: "older_history"; history: HistoryResponse }
+  | { type: "run_started"; threadId?: string | null; runId?: string | null; status?: string | null }
   | { type: "user_sent"; content: string; threadId?: string | null }
   | { type: "event"; event: AppEvent }
   | { type: "gate_cleared" }
@@ -71,11 +79,29 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         ...state,
         activeThreadId: action.history.thread_id,
         transcript: transcriptFromHistory(action.history),
+        historyCursor: action.history.next_cursor ?? null,
+        hasOlderHistory: Boolean(action.history.next_cursor),
         pendingGate: action.history.pending_gate ?? null,
+        activeRunId: action.history.pending_gate?.run_id ?? (action.history.in_progress ? state.activeRunId : null),
         status: action.history.in_progress ? action.history.in_progress.state : "idle",
         isThinking: action.history.pending_gate
           ? false
           : Boolean(action.history.in_progress) || (state.isThinking && !hasAssistantAfterLatestUser(action.history)),
+      }
+    case "older_history":
+      return {
+        ...state,
+        transcript: mergeTranscript(transcriptFromHistory(action.history), state.transcript),
+        historyCursor: action.history.next_cursor ?? null,
+        hasOlderHistory: Boolean(action.history.next_cursor),
+      }
+    case "run_started":
+      return {
+        ...state,
+        activeThreadId: action.threadId ?? state.activeThreadId,
+        activeRunId: action.runId ?? state.activeRunId,
+        status: action.status ?? "running",
+        isThinking: true,
       }
     case "user_sent":
       return {
@@ -106,7 +132,12 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
       if (isFailedRunStatus(event.status)) {
         return appendRunFailure(state, event)
       }
-      return { ...state, status: event.status, isThinking: isActiveRunStatus(event.status) }
+      return {
+        ...state,
+        status: event.status,
+        activeRunId: isActiveRunStatus(event.status) ? event.run_id ?? state.activeRunId : null,
+        isThinking: isActiveRunStatus(event.status),
+      }
     case "stream_chunk":
       return appendAssistantChunk(state, event.content, event.thread_id)
     case "response":
@@ -162,6 +193,7 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
         ...state,
         isThinking: false,
         status: "waiting for approval",
+        activeRunId: "run_id" in event ? event.run_id : state.activeRunId,
         pendingGate: {
           request_id: event.request_id,
           thread_id: event.thread_id ?? state.activeThreadId ?? "",
@@ -244,6 +276,17 @@ function transcriptFromHistory(history: HistoryResponse): TranscriptItem[] {
   })
 }
 
+function mergeTranscript(prefix: TranscriptItem[], suffix: TranscriptItem[]): TranscriptItem[] {
+  const seen = new Set<string>()
+  const merged: TranscriptItem[] = []
+  for (const item of [...prefix, ...suffix]) {
+    if (seen.has(item.id)) continue
+    seen.add(item.id)
+    merged.push(item)
+  }
+  return merged
+}
+
 function hasAssistantAfterLatestUser(history: HistoryResponse): boolean {
   let hasUser = false
   let assistantAfterUser = false
@@ -290,6 +333,7 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
       status: "idle",
       isThinking: false,
       activeThreadId: threadId,
+      activeRunId: null,
       streamingAssistantId: null,
       transcript: state.transcript.map((item) =>
         item.id === existingId ? { ...item, text: content, threadId } : item,
@@ -302,6 +346,7 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
     status: "idle",
     isThinking: false,
     activeThreadId: threadId,
+    activeRunId: null,
     transcript: [
       ...state.transcript,
       { id: `assistant-${Date.now()}`, role: "assistant", text: content, threadId },
@@ -343,6 +388,7 @@ function appendRunFailure(
     ...state,
     status: event.status,
     isThinking: false,
+    activeRunId: null,
     lastError: detail,
     transcript,
     activity: upsertActivity(state.activity, {

@@ -74,6 +74,13 @@ export type RebornSubmitTurnResponse =
       accepted_message_ref: string
     }
 
+export type RebornCancelRunResponse = {
+  run_id: string
+  status: string
+  event_cursor?: unknown
+  already_terminal?: boolean
+}
+
 export type RebornWebChatEventFrame = {
   cursor?: unknown
   type: string
@@ -144,6 +151,7 @@ export type HistoryResponse = {
   thread_id: string
   turns: TurnInfo[]
   has_more: boolean
+  next_cursor?: string | null
   oldest_timestamp?: string | null
   channel?: string | null
   pending_gate?: PendingGateInfo | null

@@ -4,6 +4,7 @@ import type {
   AppEvent,
   GateResolveRequest,
   HistoryResponse,
+  RebornCancelRunResponse,
   RebornCreateThreadResponse,
   RebornListThreadsResponse,
   RebornMessageRecord,
@@ -52,11 +53,12 @@ export class GatewayClient {
     return mapThread(response.thread)
   }
 
-  async history(threadId?: string | null, limit = 80): Promise<HistoryResponse> {
+  async history(threadId?: string | null, limit = 80, cursor?: string | null): Promise<HistoryResponse> {
     if (!threadId) {
       return { thread_id: "", turns: [], has_more: false }
     }
     const params = new URLSearchParams({ limit: String(limit) })
+    if (cursor) params.set("cursor", cursor)
     const response = await this.requestJson<RebornTimelineResponse>(
       `/api/webchat/v2/threads/${encodeURIComponent(threadId)}/timeline?${params}`,
       { method: "GET" },
@@ -65,6 +67,7 @@ export class GatewayClient {
       thread_id: response.thread.thread_id,
       turns: response.messages.flatMap(mapMessageToTurn),
       has_more: Boolean(response.next_cursor),
+      next_cursor: response.next_cursor ?? null,
     }
   }
 
@@ -106,6 +109,16 @@ export class GatewayClient {
       },
     )
     return { message_id: gateRef, status: "resolved", thread_id: threadId, response }
+  }
+
+  async cancelRun(threadId: string, runId: string): Promise<RebornCancelRunResponse> {
+    return this.requestJson<RebornCancelRunResponse>(
+      `/api/webchat/v2/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}/cancel`,
+      {
+        method: "POST",
+        body: JSON.stringify({ client_action_id: actionId("cancel") }),
+      },
+    )
   }
 
   async *events(threadId?: string | null, lastEventId?: string): AsyncGenerator<AppEvent> {

@@ -126,4 +126,87 @@ describe("UI state", () => {
       state: "RecoveryRequired",
     })
   })
+
+  test("tracks history pagination cursor", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [],
+        has_more: true,
+        next_cursor: "cursor-1",
+      },
+    })
+
+    expect(state.historyCursor).toBe("cursor-1")
+    expect(state.hasOlderHistory).toBe(true)
+  })
+
+  test("prepends older history without duplicating messages", () => {
+    const current = reduceUiState(initialUiState, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 2,
+            user_message_id: "user-2",
+            user_input: "newer",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+        ],
+        has_more: true,
+        next_cursor: "cursor-1",
+      },
+    })
+    const withOlder = reduceUiState(current, {
+      type: "older_history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_message_id: "user-1",
+            user_input: "older",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+          {
+            turn_number: 2,
+            user_message_id: "user-2",
+            user_input: "newer",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      },
+    })
+
+    expect(withOlder.transcript.map((item) => item.id)).toEqual(["user-1", "user-2"])
+    expect(withOlder.hasOlderHistory).toBe(false)
+  })
+
+  test("tracks active runs and clears them on reply", () => {
+    const running = reduceUiState(initialUiState, {
+      type: "run_started",
+      threadId: "thread-1",
+      runId: "run-1",
+      status: "running",
+    })
+    const completed = reduceUiState(running, {
+      type: "event",
+      event: { type: "response", content: "done", thread_id: "thread-1" },
+    })
+
+    expect(running.activeRunId).toBe("run-1")
+    expect(running.isThinking).toBe(true)
+    expect(completed.activeRunId).toBe(null)
+    expect(completed.isThinking).toBe(false)
+  })
 })
