@@ -14,6 +14,8 @@ type AppProps = {
 type GateAction = "approved" | "denied"
 type SlashCommandAction = "threads" | "models" | "cancel-run" | "load-older" | "settings" | "local-command" | "quit"
 type SlashCommandSource = "remote" | "local" | "tui"
+type SettingsSection = "Profile" | "Connection" | "Models" | "Secrets" | "Tools" | "Approvals"
+type SettingsMenuItem = { label: SettingsSection; meta: string }
 type SlashCommand = {
   name: string
   description: string
@@ -23,6 +25,7 @@ type SlashCommand = {
 }
 
 const SLASH_COMMAND_POPUP_LIMIT = 8
+const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Models", "Secrets", "Tools", "Approvals"]
 
 const REMOTE_PRODUCT_COMMANDS: SlashCommand[] = [
   { name: "/model", description: "Show or switch the active model", source: "remote", action: "models" },
@@ -148,6 +151,7 @@ export function App({ config }: AppProps) {
   const [paletteThreads, setPaletteThreads] = useState<ThreadInfo[]>([])
   const [showModelPalette, setShowModelPalette] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [selectedSettingsIndex, setSelectedSettingsIndex] = useState(0)
   const [availableModels, setAvailableModels] = useState(config.models)
   const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
   const [selectedModel, setSelectedModel] = useState(config.model)
@@ -167,6 +171,23 @@ export function App({ config }: AppProps) {
         key.preventDefault()
         key.stopPropagation()
         setShowSettings(false)
+        return
+      }
+      if (key.name === "up" || key.name === "k") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedSettingsIndex((index) => wrapIndex(index - 1, SETTINGS_SECTIONS.length))
+        return
+      }
+      if (key.name === "down" || key.name === "tab" || key.name === "j") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedSettingsIndex((index) => wrapIndex(index + 1, SETTINGS_SECTIONS.length))
+        return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault()
+        key.stopPropagation()
         return
       }
       return
@@ -688,6 +709,7 @@ export function App({ config }: AppProps) {
           config={config}
           connected={state.connected}
           height={height}
+          selectedIndex={selectedSettingsIndex}
           selectedModel={selectedModel}
           status={state.status}
           width={width}
@@ -761,6 +783,7 @@ function SettingsSurface({
   config,
   connected,
   height,
+  selectedIndex,
   selectedModel,
   status,
   width,
@@ -768,6 +791,7 @@ function SettingsSurface({
   config: ClientConfig
   connected: boolean
   height: number
+  selectedIndex: number
   selectedModel: string
   status: string
   width: number
@@ -779,14 +803,17 @@ function SettingsSurface({
   const authState = config.token ? "present" : "missing"
   const secretCount = config.token ? "1 set · 2 unknown" : "1 missing · 2 unknown"
   const sourcePath = config.rebornSource ?? "not configured"
-  const menu = [
-    { label: "Profile", meta: profileName },
-    { label: "Connection", meta: serverState },
-    { label: "Models", meta: selectedModel },
-    { label: "Secrets", meta: secretCount },
-    { label: "Tools", meta: config.mode === "local" ? "local + remote" : "remote" },
-    { label: "Approvals", meta: "ask" },
-  ]
+  const menu: SettingsMenuItem[] = SETTINGS_SECTIONS.map((section) => ({
+    label: section,
+    meta: settingsMenuMeta(section, {
+      config,
+      secretCount,
+      selectedModel,
+      serverState,
+      profileName,
+    }),
+  }))
+  const selectedItem = menu[wrapIndex(selectedIndex, menu.length)] ?? menu[0]
 
   if (narrow) {
     return (
@@ -795,12 +822,13 @@ function SettingsSurface({
         <box style={{ height: 1 }} />
         <text fg="#f2f2f2">Settings</text>
         <box style={{ height: 1 }} />
-        <SettingsMenu items={menu} selectedIndex={0} width={contentWidth} />
+        <SettingsMenu items={menu} selectedIndex={selectedIndex} width={contentWidth} />
         <box style={{ height: 1 }} />
         <SettingsPreview
           authState={authState}
           config={config}
           connected={connected}
+          item={selectedItem}
           selectedModel={selectedModel}
           sourcePath={sourcePath}
           status={status}
@@ -819,13 +847,14 @@ function SettingsSurface({
         <box style={{ width: 32, flexDirection: "column" }}>
           <text fg="#f2f2f2">Settings</text>
           <box style={{ height: 1 }} />
-          <SettingsMenu items={menu} selectedIndex={0} width={32} />
+          <SettingsMenu items={menu} selectedIndex={selectedIndex} width={32} />
         </box>
         <box style={{ width: 2 }} />
         <SettingsPreview
           authState={authState}
           config={config}
           connected={connected}
+          item={selectedItem}
           selectedModel={selectedModel}
           sourcePath={sourcePath}
           status={status}
@@ -855,7 +884,7 @@ function SettingsMenu({
   selectedIndex,
   width,
 }: {
-  items: Array<{ label: string; meta: string }>
+  items: SettingsMenuItem[]
   selectedIndex: number
   width: number
 }) {
@@ -878,7 +907,7 @@ function SettingsMenuRow({
   selected,
   width,
 }: {
-  item: { label: string; meta: string }
+  item: SettingsMenuItem
   selected: boolean
   width: number
 }) {
@@ -897,6 +926,7 @@ function SettingsPreview({
   authState,
   config,
   connected,
+  item,
   selectedModel,
   sourcePath,
   status,
@@ -905,25 +935,119 @@ function SettingsPreview({
   authState: string
   config: ClientConfig
   connected: boolean
+  item: SettingsMenuItem
   selectedModel: string
   sourcePath: string
   status: string
   width: number
 }) {
+  const fields = settingsFieldsForSection(item.label, {
+    authState,
+    config,
+    connected,
+    selectedModel,
+    sourcePath,
+    status,
+  })
+
   return (
     <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-      <text fg="#f2f2f2">Profile</text>
+      <text fg="#f2f2f2">{item.label}</text>
       <box style={{ height: 1 }} />
-      <SettingsField label="mode" value={config.mode} width={width - 4} />
-      <SettingsField label="model" value={selectedModel} width={width - 4} />
-      <SettingsField label="server" value={`${connected ? "online" : "offline"} · ${config.baseUrl}`} width={width - 4} />
-      <SettingsField label="auth" value={`env token · ${authState}`} width={width - 4} />
-      <SettingsField label="source" value={sourcePath} width={width - 4} />
-      <SettingsField label="status" value={status} width={width - 4} />
+      {fields.map((field) => (
+        <SettingsField key={field.label} label={field.label} value={field.value} width={width - 4} />
+      ))}
       <box style={{ height: 1 }} />
       <text fg="#777777">{truncate("enter opens this section once settings are wired", Math.max(1, width - 4))}</text>
     </box>
   )
+}
+
+function settingsMenuMeta(
+  section: SettingsSection,
+  context: {
+    config: ClientConfig
+    profileName: string
+    secretCount: string
+    selectedModel: string
+    serverState: string
+  },
+) {
+  const { config, profileName, secretCount, selectedModel, serverState } = context
+  switch (section) {
+    case "Connection":
+      return serverState
+    case "Models":
+      return selectedModel
+    case "Secrets":
+      return secretCount
+    case "Tools":
+      return config.mode === "local" ? "local + remote" : "remote"
+    case "Approvals":
+      return "ask"
+    default:
+      return profileName
+  }
+}
+
+function settingsFieldsForSection(
+  section: SettingsSection,
+  context: {
+    authState: string
+    config: ClientConfig
+    connected: boolean
+    selectedModel: string
+    sourcePath: string
+    status: string
+  },
+) {
+  const { authState, config, connected, selectedModel, sourcePath, status } = context
+  switch (section) {
+    case "Connection":
+      return [
+        { label: "server", value: config.baseUrl },
+        { label: "state", value: connected ? "online" : "offline" },
+        { label: "status", value: status },
+        { label: "mode", value: config.mode },
+      ]
+    case "Models":
+      return [
+        { label: "active", value: selectedModel },
+        { label: "provider", value: "OpenAI" },
+        { label: "command", value: "/model" },
+        { label: "source", value: "Reborn product workflow" },
+      ]
+    case "Secrets":
+      return [
+        { label: "webui token", value: authState },
+        { label: "user id", value: "unknown" },
+        { label: "storage", value: "env preview only" },
+        { label: "reveal", value: "not wired" },
+      ]
+    case "Tools":
+      return [
+        { label: "remote", value: "product workflow commands" },
+        { label: "local", value: config.mode === "local" ? "CLI commands enabled" : "disabled" },
+        { label: "source", value: sourcePath },
+        { label: "approval", value: "ask" },
+      ]
+    case "Approvals":
+      return [
+        { label: "default", value: "ask" },
+        { label: "shell", value: "ask" },
+        { label: "writes", value: "ask" },
+        { label: "network", value: "ask" },
+      ]
+    default:
+      return [
+        { label: "mode", value: config.mode },
+        { label: "model", value: selectedModel },
+        { label: "server", value: `${connected ? "online" : "offline"} · ${config.baseUrl}` },
+        { label: "auth", value: `env token · ${authState}` },
+        { label: "source", value: sourcePath },
+        { label: "status", value: status },
+      ]
+  }
 }
 
 function SettingsField({ label, value, width }: { label: string; value: string; width: number }) {
