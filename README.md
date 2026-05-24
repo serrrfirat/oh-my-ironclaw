@@ -14,6 +14,8 @@ bun run dev
 
 Use `/model` or `ctrl+m` to ask Reborn for the active model and available models. Selecting a model sends `/model <name>` through the same WebChat v2 message workflow, so the server-side command persists or applies the model choice.
 
+The command palette (`ctrl+p`) submits Reborn slash commands as literal commands instead of rewriting them into chat prompts. Commands that need arguments, such as `/skills search`, `/cancel`, `/plan`, and `/thread`, are inserted into the composer for completion. `/threads`, `/history`, and `/run-cancel` are local TUI controls for the WebChat surface.
+
 You can still seed the picker before the first server response:
 
 ```bash

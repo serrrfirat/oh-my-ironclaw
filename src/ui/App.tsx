@@ -12,24 +12,52 @@ type AppProps = {
 }
 
 type GateAction = "approved" | "denied"
-type SlashCommandAction = "new-thread" | "clear-input" | "threads" | "models" | "cancel-run" | "load-older"
+type SlashCommandAction = "threads" | "models" | "cancel-run" | "load-older" | "quit"
 type SlashCommand = {
   name: string
   description: string
-  prompt?: string
+  command?: string
+  insert?: string
   action?: SlashCommandAction
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
-  { name: "/help", description: "Ask IronClaw what it can do", prompt: "What can you help me with in this project?" },
-  { name: "/skills", description: "List available skills and tools", prompt: "List all available skills and tools." },
-  { name: "/status", description: "Ask for runtime and model status", prompt: "Check the current runtime and model status. Summarize any active issues." },
-  { name: "/new", description: "Start a new thread", action: "new-thread" },
-  { name: "/threads", description: "Switch to another thread", action: "threads" },
+  { name: "/help", description: "Show Reborn command help" },
   { name: "/model", description: "Show or switch the active model", action: "models" },
-  { name: "/cancel", description: "Cancel the current run", action: "cancel-run" },
-  { name: "/history", description: "Load older messages", action: "load-older" },
-  { name: "/clear", description: "Clear the composer", action: "clear-input" },
+  { name: "/version", description: "Show version info" },
+  { name: "/tools", description: "List available tools" },
+  { name: "/skills", description: "List installed skills" },
+  { name: "/skills search", description: "Search ClawHub registry", insert: "/skills search " },
+  { name: "/ping", description: "Connectivity check" },
+  { name: "/debug", description: "Run Reborn debug command" },
+  { name: "/reasoning", description: "Show agent reasoning for turns" },
+  { name: "/status", description: "Check job status" },
+  { name: "/list", description: "List all jobs" },
+  { name: "/cancel", description: "Cancel a job by id", insert: "/cancel " },
+  { name: "/plan", description: "Create an execution plan", insert: "/plan " },
+  { name: "/plan list", description: "List all plans" },
+  { name: "/plan approve", description: "Approve and start a plan" },
+  { name: "/plan status", description: "Check plan progress" },
+  { name: "/plan revise", description: "Revise a plan with feedback", insert: "/plan revise " },
+  { name: "/undo", description: "Undo last turn" },
+  { name: "/redo", description: "Redo undone turn" },
+  { name: "/compact", description: "Compress context window" },
+  { name: "/clear", description: "Clear current Reborn thread" },
+  { name: "/interrupt", description: "Stop current Reborn operation" },
+  { name: "/new", description: "New Reborn conversation thread" },
+  { name: "/thread", description: "Switch to a Reborn thread id", insert: "/thread " },
+  { name: "/resume", description: "Resume a previous conversation" },
+  { name: "/heartbeat", description: "Run heartbeat check" },
+  { name: "/summarize", description: "Summarize current thread" },
+  { name: "/suggest", description: "Suggest next steps" },
+  { name: "/restart", description: "Gracefully restart Reborn if supported" },
+  { name: "/approve", description: "Approve pending Reborn approval" },
+  { name: "/deny", description: "Deny pending Reborn approval" },
+  { name: "/always", description: "Always approve pending Reborn approval" },
+  { name: "/threads", description: "Open local thread picker", action: "threads" },
+  { name: "/history", description: "Load older local timeline messages", action: "load-older" },
+  { name: "/run-cancel", description: "Cancel the active WebChat run", action: "cancel-run" },
+  { name: "/quit", description: "Quit this TUI", action: "quit" },
 ]
 
 export function App({ config }: AppProps) {
@@ -390,19 +418,6 @@ export function App({ config }: AppProps) {
 
   async function runSlashCommand(command: SlashCommand | undefined) {
     if (!command) return
-    if (command.action === "clear-input") {
-      setInput("")
-      setShowCommandPalette(false)
-      textareaRef.current?.clear()
-      return
-    }
-    if (command.action === "new-thread") {
-      setInput("")
-      setShowCommandPalette(false)
-      textareaRef.current?.clear()
-      await createThread()
-      return
-    }
     if (command.action === "threads") {
       setInput("")
       setShowCommandPalette(false)
@@ -431,10 +446,18 @@ export function App({ config }: AppProps) {
       await loadOlderHistory()
       return
     }
-    if (command.prompt) {
-      setShowCommandPalette(false)
-      await submitContent(command.prompt)
+    if (command.action === "quit") {
+      renderer.destroy()
+      return
     }
+    if (command.insert) {
+      setInput(command.insert)
+      setShowCommandPalette(false)
+      textareaRef.current?.setText(command.insert)
+      return
+    }
+    setShowCommandPalette(false)
+    await submitContent(command.command ?? command.name)
   }
 
   async function cancelActiveRun() {
