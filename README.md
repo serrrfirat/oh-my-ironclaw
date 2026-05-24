@@ -25,6 +25,22 @@ OPEN_IRONCLAW_REBORN_BIN=ironclaw-reborn \
 bun run dev
 ```
 
+If you run IronClaw from source and do not have `ironclaw-reborn` installed on `$PATH`, point the TUI at the source checkout instead:
+
+```bash
+OPEN_IRONCLAW_MODE=local \
+OPEN_IRONCLAW_URL=http://127.0.0.1:3000 \
+OPEN_IRONCLAW_TOKEN=your-token \
+OPEN_IRONCLAW_REBORN_SOURCE=/Users/firatsertgoz/.codex/worktrees/bb76/ironclaw \
+bun run dev
+```
+
+With `OPEN_IRONCLAW_REBORN_SOURCE` set, local CLI commands run as:
+
+```bash
+cargo run -p ironclaw_reborn_cli --features webui-v2-beta --bin ironclaw-reborn -- <command>
+```
+
 Use `/model` or `ctrl+m` to ask Reborn for the active model and available models. Selecting a model sends `/model <name>` through the same WebChat v2 message workflow, so the server-side command persists or applies the model choice.
 
 The command palette (`ctrl+p`) always includes the Reborn product workflow slash commands that exist today as literal remote commands: `/model`, `/status`, and `/progress`. In local mode it also includes CLI commands that run on the same machine as the TUI: `/doctor`, `/profile`, and `/skills`. `/threads`, `/history`, `/run-cancel`, and `/quit` are local TUI controls for the WebChat surface.
@@ -50,5 +66,5 @@ The client uses the Reborn WebChat v2 gateway contract:
 CLI flags are also supported:
 
 ```bash
-bun run dev -- --mode local --url http://127.0.0.1:3000 --token your-token --reborn-bin ironclaw-reborn --models GPT-5.5,gpt-5.3-codex --model GPT-5.5 --debug-events
+bun run dev -- --mode local --url http://127.0.0.1:3000 --token your-token --reborn-source /Users/firatsertgoz/.codex/worktrees/bb76/ironclaw --models GPT-5.5,gpt-5.3-codex --model GPT-5.5 --debug-events
 ```

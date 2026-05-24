@@ -5,6 +5,8 @@ export type ClientConfig = {
   baseUrl: string
   token: string
   rebornBin: string
+  rebornSource: string | null
+  rebornFeatures: string | null
   model: string
   models: string[]
   debugEvents: boolean
@@ -30,6 +32,9 @@ export function readConfig(argv = Bun.argv): ClientConfig {
     process.env.IRONCLAW_REBORN_WEBUI_TOKEN ??
     ""
   const rebornBin = valueAfter("--reborn-bin") ?? process.env.OPEN_IRONCLAW_REBORN_BIN ?? "ironclaw-reborn"
+  const rebornSource = valueAfter("--reborn-source") ?? process.env.OPEN_IRONCLAW_REBORN_SOURCE ?? null
+  const rebornFeatures =
+    valueAfter("--reborn-features") ?? process.env.OPEN_IRONCLAW_REBORN_FEATURES ?? (rebornSource ? "webui-v2-beta" : null)
 
   const models = parseModelList(valueAfter("--models") ?? process.env.OPEN_IRONCLAW_MODELS)
   const model = valueAfter("--model") ?? process.env.OPEN_IRONCLAW_MODEL ?? models[0] ?? "GPT-5.5"
@@ -39,6 +44,8 @@ export function readConfig(argv = Bun.argv): ClientConfig {
     baseUrl: baseUrl.replace(/\/+$/, ""),
     token,
     rebornBin,
+    rebornSource,
+    rebornFeatures,
     model,
     models,
     debugEvents: args.includes("--debug-events") || process.env.OPEN_IRONCLAW_DEBUG === "1",

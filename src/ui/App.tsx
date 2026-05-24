@@ -472,12 +472,12 @@ export function App({ config }: AppProps) {
     textareaRef.current?.clear()
     dispatch({ type: "user_sent", content, threadId })
     try {
-      const result = await runRebornCli(config.rebornBin, args)
+      const result = await runRebornCli(config, args)
       dispatch({
         type: "event",
         event: {
           type: "response",
-          content: formatLocalCliResult(config.rebornBin, args, result),
+          content: formatLocalCliResult(result),
           thread_id: threadId,
         },
       })
@@ -486,7 +486,7 @@ export function App({ config }: AppProps) {
         type: "event",
         event: {
           type: "response",
-          content: `Failed to run ${config.rebornBin} ${args.join(" ")}:\n\n${errorMessage(error)}`,
+          content: `Failed to run ${formatRebornCliCommand(config, args)}:\n\n${errorMessage(error)}`,
           thread_id: threadId,
         },
       })
@@ -1490,13 +1490,16 @@ function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, {
 }
 
 type CliResult = {
+  command: string
   exitCode: number
   stdout: string
   stderr: string
 }
 
-async function runRebornCli(rebornBin: string, args: string[]): Promise<CliResult> {
-  const proc = Bun.spawn([rebornBin, ...args], {
+async function runRebornCli(config: ClientConfig, args: string[]): Promise<CliResult> {
+  const invocation = rebornCliInvocation(config, args)
+  const proc = Bun.spawn(invocation.argv, {
+    cwd: invocation.cwd,
     stdout: "pipe",
     stderr: "pipe",
     env: process.env,
@@ -1506,14 +1509,42 @@ async function runRebornCli(rebornBin: string, args: string[]): Promise<CliResul
     new Response(proc.stderr).text(),
     proc.exited,
   ])
-  return { exitCode, stdout, stderr }
+  return { command: invocation.command, exitCode, stdout, stderr }
 }
 
-function formatLocalCliResult(rebornBin: string, args: string[], result: CliResult): string {
-  const command = `${rebornBin} ${args.join(" ")}`
+function rebornCliInvocation(config: ClientConfig, args: string[]): { argv: string[]; command: string; cwd?: string } {
+  if (!config.rebornSource) {
+    const argv = [config.rebornBin, ...args]
+    return { argv, command: shellCommand(argv) }
+  }
+
+  const argv = ["cargo", "run", "-p", "ironclaw_reborn_cli"]
+  if (config.rebornFeatures) argv.push("--features", config.rebornFeatures)
+  argv.push("--bin", "ironclaw-reborn", "--", ...args)
+  return {
+    argv,
+    command: `(cd ${shellWord(config.rebornSource)} && ${shellCommand(argv)})`,
+    cwd: config.rebornSource,
+  }
+}
+
+function formatRebornCliCommand(config: ClientConfig, args: string[]): string {
+  return rebornCliInvocation(config, args).command
+}
+
+function formatLocalCliResult(result: CliResult): string {
   const body = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n\n")
   const suffix = result.exitCode === 0 ? "" : `\n\n(exit ${result.exitCode})`
-  return `$ ${command}\n\n${body || "(no output)"}${suffix}`
+  return `$ ${result.command}\n\n${body || "(no output)"}${suffix}`
+}
+
+function shellCommand(argv: string[]): string {
+  return argv.map(shellWord).join(" ")
+}
+
+function shellWord(value: string): string {
+  if (/^[A-Za-z0-9_./:=+-]+$/.test(value)) return value
+  return `'${value.replaceAll("'", "'\\''")}'`
 }
 
 function useActivityFrame(active: boolean): { spinner: string; railColor: string } {

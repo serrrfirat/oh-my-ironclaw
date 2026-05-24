@@ -28,6 +28,37 @@ describe("readConfig", () => {
 
     expect(config.mode).toBe("local")
     expect(config.rebornBin).toBe("/tmp/ironclaw-reborn")
+    expect(config.rebornSource).toBe(null)
+    expect(config.rebornFeatures).toBe(null)
+  })
+
+  test("accepts source checkout override for local CLI commands", () => {
+    const config = readConfig([
+      "bun",
+      "src/main.tsx",
+      "--mode",
+      "local",
+      "--reborn-source",
+      "/tmp/ironclaw",
+    ])
+
+    expect(config.rebornSource).toBe("/tmp/ironclaw")
+    expect(config.rebornFeatures).toBe("webui-v2-beta")
+  })
+
+  test("accepts source feature override", () => {
+    const config = readConfig([
+      "bun",
+      "src/main.tsx",
+      "--mode",
+      "local",
+      "--reborn-source",
+      "/tmp/ironclaw",
+      "--reborn-features",
+      "webui-v2-beta,extra",
+    ])
+
+    expect(config.rebornFeatures).toBe("webui-v2-beta,extra")
   })
 
   test("rejects unknown modes", () => {
