@@ -150,6 +150,7 @@ export function App({ config }: AppProps) {
   const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
   const [selectedModel, setSelectedModel] = useState(config.model)
   const activityFrame = useActivityFrame(state.isThinking)
+  const thinkingLabel = thinkingLabelForStatus(state.status)
   const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
   const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
@@ -684,6 +685,7 @@ export function App({ config }: AppProps) {
           showThreadPalette={showThreadPalette}
           slashCommands={slashCommands}
           spinner={activityFrame.spinner}
+          thinkingLabel={thinkingLabel}
           activeThreadId={state.activeThreadId}
           models={availableModels}
           threads={showThreadPalette ? paletteThreads : state.threads}
@@ -712,6 +714,7 @@ export function App({ config }: AppProps) {
           showThreadPalette={showThreadPalette}
           slashCommands={slashCommands}
           spinner={activityFrame.spinner}
+          thinkingLabel={thinkingLabel}
           status={state.status}
           activeThreadId={state.activeThreadId}
           models={availableModels}
@@ -743,6 +746,7 @@ function WelcomeSurface({
   showThreadPalette,
   slashCommands,
   spinner,
+  thinkingLabel,
   status,
   activeThreadId,
   models,
@@ -768,6 +772,7 @@ function WelcomeSurface({
   showThreadPalette: boolean
   slashCommands: SlashCommand[]
   spinner: string
+  thinkingLabel: string
   status: string
   activeThreadId?: string | null
   models: string[]
@@ -799,7 +804,9 @@ function WelcomeSurface({
         showSlashCommands={showSlashCommands}
         showThreadPalette={showThreadPalette}
         slashCommands={slashCommands}
+        showThinkingStatus
         spinner={spinner}
+        thinkingLabel={thinkingLabel}
         activeThreadId={activeThreadId}
         models={models}
         threads={threads}
@@ -844,6 +851,7 @@ function ConversationSurface({
   showThreadPalette,
   slashCommands,
   spinner,
+  thinkingLabel,
   activeThreadId,
   models,
   threads,
@@ -873,6 +881,7 @@ function ConversationSurface({
   showThreadPalette: boolean
   slashCommands: SlashCommand[]
   spinner: string
+  thinkingLabel: string
   activeThreadId?: string | null
   models: string[]
   threads: ThreadInfo[]
@@ -912,7 +921,7 @@ function ConversationSurface({
         {transcript.map((item) => (
           <TranscriptMessage key={item.id} item={item} markdownStyle={markdownStyle} selectedModel={selectedModel} width={contentWidth} />
         ))}
-        {isThinking ? <ThinkingMessage selectedModel={selectedModel} spinner={spinner} width={contentWidth} /> : null}
+        {isThinking ? <ThinkingMessage selectedModel={selectedModel} spinner={spinner} thinkingLabel={thinkingLabel} width={contentWidth} /> : null}
       </scrollbox>
       {pendingGate ? (
         <GatePanel
@@ -938,7 +947,9 @@ function ConversationSurface({
         showSlashCommands={showSlashCommands}
         showThreadPalette={showThreadPalette}
         slashCommands={slashCommands}
+        showThinkingStatus={false}
         spinner={spinner}
+        thinkingLabel={thinkingLabel}
         activeThreadId={activeThreadId}
         models={models}
         threads={threads}
@@ -1001,7 +1012,17 @@ function BuildLine({ selectedModel }: { selectedModel: string }) {
   )
 }
 
-function ThinkingMessage({ selectedModel, spinner, width }: { selectedModel: string; spinner: string; width: number }) {
+function ThinkingMessage({
+  selectedModel,
+  spinner,
+  thinkingLabel,
+  width,
+}: {
+  selectedModel: string
+  spinner: string
+  thinkingLabel: string
+  width: number
+}) {
   return (
     <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
       <box style={{ height: 1, flexDirection: "row" }}>
@@ -1009,7 +1030,7 @@ function ThinkingMessage({ selectedModel, spinner, width }: { selectedModel: str
         <text fg="#2ee66b"> Build</text>
         <text fg="#777777"> · </text>
         <text fg="#d0d0d0">{selectedModel}</text>
-        <text fg="#777777"> · thinking</text>
+        <text fg="#777777"> · {thinkingLabel}</text>
       </box>
     </box>
   )
@@ -1036,7 +1057,9 @@ function Composer({
   showSlashCommands,
   showThreadPalette,
   slashCommands,
+  showThinkingStatus = true,
   spinner,
+  thinkingLabel,
   activeThreadId,
   models,
   threads,
@@ -1056,7 +1079,9 @@ function Composer({
   showSlashCommands: boolean
   showThreadPalette: boolean
   slashCommands: SlashCommand[]
+  showThinkingStatus?: boolean
   spinner: string
+  thinkingLabel: string
   activeThreadId?: string | null
   models: string[]
   threads: ThreadInfo[]
@@ -1118,7 +1143,7 @@ function Composer({
             <text fg="#777777"> . </text>
             <text fg="#d0d0d0">{selectedModel}</text>
             <text fg="#858585"> OpenAI</text>
-            {isThinking ? <text fg={railColor}> {spinner}</text> : null}
+            {isThinking && showThinkingStatus ? <text fg={railColor}> {spinner} {thinkingLabel}</text> : null}
           </box>
         </box>
       </box>
@@ -1595,6 +1620,28 @@ function shellCommand(argv: string[]): string {
 function shellWord(value: string): string {
   if (/^[A-Za-z0-9_./:=+-]+$/.test(value)) return value
   return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function thinkingLabelForStatus(status: string): string {
+  const key = uiStatusKey(status)
+  switch (key) {
+    case "tool_running":
+      return "using tools"
+    case "typing":
+      return "writing"
+    case "reflecting":
+    case "sent":
+    case "running":
+      return "thinking"
+    default:
+      if (key.endsWith("_completed") || key.endsWith("_failed")) return "thinking"
+      if (key.startsWith("running_")) return "using tools"
+      return key ? key.replaceAll("_", " ") : "thinking"
+  }
+}
+
+function uiStatusKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "_")
 }
 
 function useActivityFrame(active: boolean): { spinner: string; railColor: string } {
