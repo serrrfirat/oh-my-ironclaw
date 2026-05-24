@@ -241,4 +241,22 @@ describe("UI state", () => {
       kind: "tool_running",
     })
   })
+
+  test("clears stale running progress when a new message starts", () => {
+    const withToolProgress = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "tool_started", name: "tool_running", thread_id: "thread-1" },
+    })
+    const nextTurn = reduceUiState(withToolProgress, {
+      type: "user_sent",
+      content: "next",
+      threadId: "thread-1",
+    })
+
+    expect(nextTurn.isThinking).toBe(true)
+    expect(nextTurn.activity[0]).toMatchObject({
+      kind: "tool_running",
+      status: "info",
+    })
+  })
 })

@@ -109,6 +109,7 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         ...state,
         status: "sent",
         isThinking: true,
+        activity: clearRunningActivity(state.activity),
         transcript: [
           ...state.transcript,
           { id: `user-${Date.now()}`, role: "user", text: action.content, threadId: action.threadId },
@@ -375,6 +376,10 @@ function upsertActivity(items: ActivityItem[], item: ActivityItem): ActivityItem
   const index = items.findIndex((existing) => existing.id === item.id)
   if (index < 0) return pushActivity(items, item)
   return items.map((existing, current) => (current === index ? item : existing))
+}
+
+function clearRunningActivity(items: ActivityItem[]): ActivityItem[] {
+  return items.map((item) => (item.status === "running" ? { ...item, status: "info" } : item))
 }
 
 function progressActivityId(threadId: string | null | undefined, kind: string): string {

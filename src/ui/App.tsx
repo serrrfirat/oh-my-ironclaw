@@ -5,7 +5,7 @@ import type { ClientConfig, ClientMode } from "../config"
 import { GatewayClient } from "../gateway/client"
 import type { AppEvent, PendingGateInfo, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
-import { initialUiState, reduceUiState } from "../state"
+import { initialUiState, reduceUiState, type ActivityItem } from "../state"
 
 type AppProps = {
   config: ClientConfig
@@ -150,7 +150,7 @@ export function App({ config }: AppProps) {
   const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
   const [selectedModel, setSelectedModel] = useState(config.model)
   const activityFrame = useActivityFrame(state.isThinking)
-  const thinkingLabel = thinkingLabelForStatus(state.status)
+  const thinkingLabel = thinkingLabelForActivity(state.activity, state.status, state.isThinking)
   const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
   const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
@@ -1622,8 +1622,10 @@ function shellWord(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`
 }
 
-function thinkingLabelForStatus(status: string): string {
-  const key = uiStatusKey(status)
+function thinkingLabelForActivity(activity: ActivityItem[], status: string, isThinking: boolean): string {
+  if (!isThinking) return "thinking"
+  const runningActivity = [...activity].reverse().find((item) => item.status === "running")
+  const key = uiStatusKey(runningActivity?.kind ?? status)
   switch (key) {
     case "tool_running":
       return "using tools"
@@ -1636,6 +1638,7 @@ function thinkingLabelForStatus(status: string): string {
     default:
       if (key.endsWith("_completed") || key.endsWith("_failed")) return "thinking"
       if (key.startsWith("running_")) return "using tools"
+      if (key === "idle") return "thinking"
       return key ? key.replaceAll("_", " ") : "thinking"
   }
 }
