@@ -16,44 +16,13 @@ type SlashCommandAction = "threads" | "models" | "cancel-run" | "load-older" | "
 type SlashCommand = {
   name: string
   description: string
-  command?: string
-  insert?: string
   action?: SlashCommandAction
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
-  { name: "/help", description: "Show Reborn command help" },
   { name: "/model", description: "Show or switch the active model", action: "models" },
-  { name: "/version", description: "Show version info" },
-  { name: "/tools", description: "List available tools" },
-  { name: "/skills", description: "List installed skills" },
-  { name: "/skills search", description: "Search ClawHub registry", insert: "/skills search " },
-  { name: "/ping", description: "Connectivity check" },
-  { name: "/debug", description: "Run Reborn debug command" },
-  { name: "/reasoning", description: "Show agent reasoning for turns" },
-  { name: "/status", description: "Check job status" },
-  { name: "/list", description: "List all jobs" },
-  { name: "/cancel", description: "Cancel a job by id", insert: "/cancel " },
-  { name: "/plan", description: "Create an execution plan", insert: "/plan " },
-  { name: "/plan list", description: "List all plans" },
-  { name: "/plan approve", description: "Approve and start a plan" },
-  { name: "/plan status", description: "Check plan progress" },
-  { name: "/plan revise", description: "Revise a plan with feedback", insert: "/plan revise " },
-  { name: "/undo", description: "Undo last turn" },
-  { name: "/redo", description: "Redo undone turn" },
-  { name: "/compact", description: "Compress context window" },
-  { name: "/clear", description: "Clear current Reborn thread" },
-  { name: "/interrupt", description: "Stop current Reborn operation" },
-  { name: "/new", description: "New Reborn conversation thread" },
-  { name: "/thread", description: "Switch to a Reborn thread id", insert: "/thread " },
-  { name: "/resume", description: "Resume a previous conversation" },
-  { name: "/heartbeat", description: "Run heartbeat check" },
-  { name: "/summarize", description: "Summarize current thread" },
-  { name: "/suggest", description: "Suggest next steps" },
-  { name: "/restart", description: "Gracefully restart Reborn if supported" },
-  { name: "/approve", description: "Approve pending Reborn approval" },
-  { name: "/deny", description: "Deny pending Reborn approval" },
-  { name: "/always", description: "Always approve pending Reborn approval" },
+  { name: "/status", description: "Show Reborn product workflow status" },
+  { name: "/progress", description: "Alias for Reborn product workflow status" },
   { name: "/threads", description: "Open local thread picker", action: "threads" },
   { name: "/history", description: "Load older local timeline messages", action: "load-older" },
   { name: "/run-cancel", description: "Cancel the active WebChat run", action: "cancel-run" },
@@ -450,14 +419,8 @@ export function App({ config }: AppProps) {
       renderer.destroy()
       return
     }
-    if (command.insert) {
-      setInput(command.insert)
-      setShowCommandPalette(false)
-      textareaRef.current?.setText(command.insert)
-      return
-    }
     setShowCommandPalette(false)
-    await submitContent(command.command ?? command.name)
+    await submitContent(command.name)
   }
 
   async function cancelActiveRun() {
