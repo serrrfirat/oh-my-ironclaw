@@ -1309,11 +1309,13 @@ function SlashCommandRow({
 }) {
   const marker = selected ? ">" : " "
   const commandWidth = 17
-  const descriptionWidth = Math.max(10, width - commandWidth - 7)
+  const sourceWidth = 9
+  const descriptionWidth = Math.max(10, width - commandWidth - sourceWidth - 8)
   return (
     <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#111111" }}>
       <text fg={selected ? "#2ee66b" : "#707070"}>{marker} </text>
       <text fg={selected ? "#8cffb0" : "#d0d0d0"}>{padEnd(command.name, commandWidth)}</text>
+      <text fg={sourceColor(command.source)}>{padEnd(command.source, sourceWidth)}</text>
       <text fg="#777777">{truncate(command.description, descriptionWidth)}</text>
     </box>
   )
@@ -1453,6 +1455,17 @@ function padEnd(value: string, length: number): string {
 function commandPopupHint(start: number, count: number, total: number): string {
   const range = total > count ? ` · ${start + 1}-${start + count}/${total}` : ""
   return `up/down select · enter run · esc close${range}`
+}
+
+function sourceColor(source: SlashCommandSource): string {
+  switch (source) {
+    case "remote":
+      return "#8cffb0"
+    case "local":
+      return "#f6ad3c"
+    case "tui":
+      return "#7aa2f7"
+  }
 }
 
 function slashCommandPopupHeight(commands: SlashCommand[]): number {
