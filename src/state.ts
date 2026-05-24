@@ -18,6 +18,7 @@ export type ActivityItem = {
 export type UiState = {
   connected: boolean
   status: string
+  isThinking: boolean
   activeThreadId?: string | null
   threads: ThreadInfo[]
   transcript: TranscriptItem[]
@@ -30,6 +31,7 @@ export type UiState = {
 export const initialUiState: UiState = {
   connected: false,
   status: "starting",
+  isThinking: false,
   threads: [],
   transcript: [],
   activity: [],
@@ -52,6 +54,7 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
     case "error":
       return {
         ...state,
+        isThinking: false,
         lastError: action.message,
         status: "error",
         activity: pushActivity(state.activity, {
@@ -70,11 +73,15 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         transcript: transcriptFromHistory(action.history),
         pendingGate: action.history.pending_gate ?? null,
         status: action.history.in_progress ? action.history.in_progress.state : "idle",
+        isThinking: action.history.pending_gate
+          ? false
+          : Boolean(action.history.in_progress) || (state.isThinking && !hasAssistantAfterLatestUser(action.history)),
       }
     case "user_sent":
       return {
         ...state,
         status: "sent",
+        isThinking: true,
         transcript: [
           ...state.transcript,
           { id: `user-${Date.now()}`, role: "user", text: action.content, threadId: action.threadId },
@@ -92,14 +99,14 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
     case "heartbeat":
       return { ...state, connected: true }
     case "thinking":
-      return { ...state, status: event.message }
+      return { ...state, status: event.message, isThinking: true }
     case "status":
       return { ...state, status: event.message }
     case "run_status":
       if (isFailedRunStatus(event.status)) {
         return appendRunFailure(state, event)
       }
-      return { ...state, status: event.status }
+      return { ...state, status: event.status, isThinking: isActiveRunStatus(event.status) }
     case "stream_chunk":
       return appendAssistantChunk(state, event.content, event.thread_id)
     case "response":
@@ -107,6 +114,7 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
     case "tool_started":
       return {
         ...state,
+        isThinking: true,
         status: `running ${event.name}`,
         activity: pushActivity(state.activity, {
           id: event.call_id ?? `${event.name}-${Date.now()}`,
@@ -118,6 +126,7 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
     case "tool_completed":
       return {
         ...state,
+        isThinking: true,
         status: event.success ? `${event.name} completed` : `${event.name} failed`,
         activity: upsertActivity(state.activity, {
           id: event.call_id ?? `${event.name}-${Date.now()}`,
@@ -139,6 +148,7 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
     case "reasoning_update":
       return {
         ...state,
+        isThinking: true,
         status: "reasoning",
         activity: pushActivity(state.activity, {
           id: `reasoning-${Date.now()}`,
@@ -150,6 +160,7 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
     case "gate_required":
       return {
         ...state,
+        isThinking: false,
         status: "waiting for approval",
         pendingGate: {
           request_id: event.request_id,
@@ -167,6 +178,7 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
     case "approval_needed":
       return {
         ...state,
+        isThinking: false,
         status: "waiting for approval",
         pendingGate: {
           request_id: event.request_id,
@@ -179,7 +191,7 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
         },
       }
     case "gate_resolved":
-      return { ...state, pendingGate: null, status: event.message }
+      return { ...state, pendingGate: null, status: event.message, isThinking: true }
     case "onboarding_state":
       return {
         ...state,
@@ -232,12 +244,28 @@ function transcriptFromHistory(history: HistoryResponse): TranscriptItem[] {
   })
 }
 
+function hasAssistantAfterLatestUser(history: HistoryResponse): boolean {
+  let hasUser = false
+  let assistantAfterUser = false
+  for (const turn of history.turns) {
+    if (turn.user_input) {
+      hasUser = true
+      assistantAfterUser = false
+    }
+    if (hasUser && turn.response) {
+      assistantAfterUser = true
+    }
+  }
+  return assistantAfterUser
+}
+
 function appendAssistantChunk(state: UiState, content: string, threadId?: string | null): UiState {
   const existingId = state.streamingAssistantId
   if (existingId) {
     return {
       ...state,
       status: "streaming",
+      isThinking: true,
       transcript: state.transcript.map((item) =>
         item.id === existingId ? { ...item, text: item.text + content } : item,
       ),
@@ -248,6 +276,7 @@ function appendAssistantChunk(state: UiState, content: string, threadId?: string
   return {
     ...state,
     status: "streaming",
+    isThinking: true,
     streamingAssistantId: id,
     transcript: [...state.transcript, { id, role: "assistant", text: content, threadId }],
   }
@@ -259,6 +288,7 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
     return {
       ...state,
       status: "idle",
+      isThinking: false,
       activeThreadId: threadId,
       streamingAssistantId: null,
       transcript: state.transcript.map((item) =>
@@ -270,6 +300,7 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
   return {
     ...state,
     status: "idle",
+    isThinking: false,
     activeThreadId: threadId,
     transcript: [
       ...state.transcript,
@@ -311,6 +342,7 @@ function appendRunFailure(
   return {
     ...state,
     status: event.status,
+    isThinking: false,
     lastError: detail,
     transcript,
     activity: upsertActivity(state.activity, {
@@ -324,6 +356,10 @@ function appendRunFailure(
 
 function isFailedRunStatus(status: string): boolean {
   return ["failed", "recovery_required", "cancelled", "killed"].includes(statusKey(status))
+}
+
+function isActiveRunStatus(status: string): boolean {
+  return ["accepted", "queued", "running"].includes(statusKey(status))
 }
 
 function runFailureMessage(status: string, category?: string | null): string {

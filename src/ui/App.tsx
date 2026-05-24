@@ -22,6 +22,7 @@ export function App({ config }: AppProps) {
   const [input, setInput] = useState("")
   const [selectedThreadIndex, setSelectedThreadIndex] = useState(0)
   const [selectedGateAction, setSelectedGateAction] = useState<GateAction>("approved")
+  const activityFrame = useActivityFrame(state.isThinking)
 
   useKeyboard((key) => {
     if ((key.ctrl && key.name === "c") || key.name === "escape") {
@@ -221,10 +222,13 @@ export function App({ config }: AppProps) {
           composerWidth={conversationWidth}
           height={height}
           inputRef={textareaRef}
+          isThinking={state.isThinking}
           lastError={state.lastError}
           markdownStyle={markdownStyle}
           pendingGate={state.pendingGate ?? null}
+          railColor={activityFrame.railColor}
           selectedGateAction={selectedGateAction}
+          spinner={activityFrame.spinner}
           transcript={state.transcript}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
           onResolve={(action) => void resolveGate(action)}
@@ -238,7 +242,10 @@ export function App({ config }: AppProps) {
           connected={state.connected}
           height={height}
           inputRef={textareaRef}
+          isThinking={state.isThinking}
           lastError={state.lastError}
+          railColor={activityFrame.railColor}
+          spinner={activityFrame.spinner}
           status={state.status}
           width={width}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
@@ -255,7 +262,10 @@ function WelcomeSurface({
   connected,
   height,
   inputRef,
+  isThinking,
   lastError,
+  railColor,
+  spinner,
   status,
   width,
   onInputChange,
@@ -266,7 +276,10 @@ function WelcomeSurface({
   connected: boolean
   height: number
   inputRef: RefObject<TextareaRenderable | null>
+  isThinking: boolean
   lastError?: string | null
+  railColor: string
+  spinner: string
   status: string
   width: number
   onInputChange: () => void
@@ -285,6 +298,9 @@ function WelcomeSurface({
       <Composer
         focused
         inputRef={inputRef}
+        isThinking={isThinking}
+        railColor={railColor}
+        spinner={spinner}
         width={composerWidth}
         onInputChange={onInputChange}
         onSubmit={onSubmit}
@@ -310,10 +326,13 @@ function ConversationSurface({
   contentWidth,
   height,
   inputRef,
+  isThinking,
   lastError,
   markdownStyle,
   pendingGate,
+  railColor,
   selectedGateAction,
+  spinner,
   transcript,
   onInputChange,
   onResolve,
@@ -324,10 +343,13 @@ function ConversationSurface({
   contentWidth: number
   height: number
   inputRef: RefObject<TextareaRenderable | null>
+  isThinking: boolean
   lastError?: string | null
   markdownStyle: SyntaxStyle
   pendingGate: PendingGateInfo | null
+  railColor: string
   selectedGateAction: GateAction
+  spinner: string
   transcript: Array<{ id: string; role: string; text: string }>
   onInputChange: () => void
   onResolve: (action: GateAction) => void
@@ -360,6 +382,7 @@ function ConversationSurface({
         {transcript.map((item) => (
           <TranscriptMessage key={item.id} item={item} markdownStyle={markdownStyle} width={contentWidth} />
         ))}
+        {isThinking ? <ThinkingMessage spinner={spinner} width={contentWidth} /> : null}
       </scrollbox>
       {pendingGate ? (
         <GatePanel
@@ -375,6 +398,9 @@ function ConversationSurface({
       <Composer
         focused={!pendingGate}
         inputRef={inputRef}
+        isThinking={isThinking}
+        railColor={railColor}
+        spinner={spinner}
         width={composerWidth}
         onInputChange={onInputChange}
         onSubmit={onSubmit}
@@ -432,22 +458,41 @@ function BuildLine() {
   )
 }
 
+function ThinkingMessage({ spinner, width }: { spinner: string; width: number }) {
+  return (
+    <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
+      <box style={{ height: 1, flexDirection: "row" }}>
+        <text fg="#2ee66b">{spinner}</text>
+        <text fg="#2ee66b"> Build</text>
+        <text fg="#777777"> · </text>
+        <text fg="#d0d0d0">thinking</text>
+      </box>
+    </box>
+  )
+}
+
 function Composer({
   focused,
   inputRef,
+  isThinking,
+  railColor,
+  spinner,
   width,
   onInputChange,
   onSubmit,
 }: {
   focused: boolean
   inputRef: RefObject<TextareaRenderable | null>
+  isThinking: boolean
+  railColor: string
+  spinner: string
   width: number
   onInputChange: () => void
   onSubmit: () => void
 }) {
   return (
     <box style={{ width, height: 6, flexDirection: "row", backgroundColor: "#1f1f1f" }}>
-      <box style={{ width: 1, backgroundColor: "#2ee66b" }} />
+      <box style={{ width: 1, backgroundColor: isThinking ? railColor : "#2ee66b" }} />
       <box style={{ flexDirection: "column", flexGrow: 1, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
         <textarea
           ref={inputRef}
@@ -475,6 +520,7 @@ function Composer({
           <text fg="#777777"> . </text>
           <text fg="#d0d0d0">GPT-5.5</text>
           <text fg="#858585"> OpenAI</text>
+          {isThinking ? <text fg={railColor}> {spinner}</text> : null}
         </box>
       </box>
     </box>
@@ -627,6 +673,31 @@ function isPlainEnter(key: {
 function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, { type: "run_status" }> {
   if (event.type !== "run_status") return false
   return ["completed", "failed", "cancelled", "killed"].includes(event.status)
+}
+
+function useActivityFrame(active: boolean): { spinner: string; railColor: string } {
+  const [frame, setFrame] = useState(0)
+
+  useEffect(() => {
+    if (!active) {
+      setFrame(0)
+      return
+    }
+
+    const timer = setInterval(() => {
+      setFrame((current) => current + 1)
+    }, 120)
+
+    return () => clearInterval(timer)
+  }, [active])
+
+  const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+  const railColors = ["#165f32", "#1f8f46", "#2ee66b", "#8cffb0", "#2ee66b", "#1f8f46"]
+
+  return {
+    spinner: spinnerFrames[frame % spinnerFrames.length],
+    railColor: railColors[frame % railColors.length],
+  }
 }
 
 function errorMessage(error: unknown): string {
