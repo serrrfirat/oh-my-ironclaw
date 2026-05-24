@@ -5,7 +5,7 @@ import type { ClientConfig, ClientMode } from "../config"
 import { GatewayClient } from "../gateway/client"
 import type { AppEvent, PendingGateInfo, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
-import { initialUiState, reduceUiState, type ActivityItem } from "../state"
+import { initialUiState, reduceUiState } from "../state"
 
 type AppProps = {
   config: ClientConfig
@@ -33,91 +33,91 @@ const REMOTE_PRODUCT_COMMANDS: SlashCommand[] = [
 const LOCAL_CLI_COMMANDS: SlashCommand[] = [
   {
     name: "/doctor",
-    description: "Run local ironclaw-reborn doctor",
+    description: "Run ironclaw-reborn doctor",
     source: "local",
     action: "local-command",
     localArgs: ["doctor"],
   },
   {
     name: "/profile",
-    description: "Run local ironclaw-reborn profile list",
+    description: "Run ironclaw-reborn profile list",
     source: "local",
     action: "local-command",
     localArgs: ["profile", "list"],
   },
   {
     name: "/skills",
-    description: "Run local ironclaw-reborn skills list",
+    description: "Run ironclaw-reborn skills list",
     source: "local",
     action: "local-command",
     localArgs: ["skills", "list"],
   },
   {
     name: "/channels",
-    description: "Run local ironclaw-reborn channels list",
+    description: "Run ironclaw-reborn channels list",
     source: "local",
     action: "local-command",
     localArgs: ["channels", "list"],
   },
   {
     name: "/hooks",
-    description: "Run local ironclaw-reborn hooks list",
+    description: "Run ironclaw-reborn hooks list",
     source: "local",
     action: "local-command",
     localArgs: ["hooks", "list"],
   },
   {
     name: "/models",
-    description: "Run local ironclaw-reborn models list",
+    description: "Run ironclaw-reborn models list",
     source: "local",
     action: "local-command",
     localArgs: ["models", "list"],
   },
   {
     name: "/model-status",
-    description: "Run local ironclaw-reborn models status",
+    description: "Run ironclaw-reborn models status",
     source: "local",
     action: "local-command",
     localArgs: ["models", "status"],
   },
   {
     name: "/logs",
-    description: "Run local ironclaw-reborn logs",
+    description: "Run ironclaw-reborn logs",
     source: "local",
     action: "local-command",
     localArgs: ["logs"],
   },
   {
     name: "/logs-json",
-    description: "Run local ironclaw-reborn logs --json",
+    description: "Run ironclaw-reborn logs --json",
     source: "local",
     action: "local-command",
     localArgs: ["logs", "--json"],
   },
   {
     name: "/config-path",
-    description: "Run local ironclaw-reborn config path",
+    description: "Run ironclaw-reborn config path",
     source: "local",
     action: "local-command",
     localArgs: ["config", "path"],
   },
   {
     name: "/traces-status",
-    description: "Run local ironclaw-reborn traces status",
+    description: "Run ironclaw-reborn traces status",
     source: "local",
     action: "local-command",
     localArgs: ["traces", "status"],
   },
   {
     name: "/traces-queue",
-    description: "Run local ironclaw-reborn traces queue-status",
+    description: "Run ironclaw-reborn traces queue-status",
     source: "local",
     action: "local-command",
     localArgs: ["traces", "queue-status"],
   },
   {
     name: "/traces-credit",
-    description: "Run local ironclaw-reborn traces credit",
+    description: "Run ironclaw-reborn traces credit",
     source: "local",
     action: "local-command",
     localArgs: ["traces", "credit"],
@@ -125,8 +125,8 @@ const LOCAL_CLI_COMMANDS: SlashCommand[] = [
 ]
 
 const TUI_CONTROL_COMMANDS: SlashCommand[] = [
-  { name: "/threads", description: "Open local thread picker", source: "tui", action: "threads" },
-  { name: "/history", description: "Load older local timeline messages", source: "tui", action: "load-older" },
+  { name: "/threads", description: "Open thread picker", source: "tui", action: "threads" },
+  { name: "/history", description: "Load older timeline messages", source: "tui", action: "load-older" },
   { name: "/run-cancel", description: "Cancel the active WebChat run", source: "tui", action: "cancel-run" },
   { name: "/quit", description: "Quit this TUI", source: "tui", action: "quit" },
 ]
@@ -671,7 +671,6 @@ export function App({ config }: AppProps) {
           isThinking={state.isThinking}
           lastError={state.lastError}
           markdownStyle={markdownStyle}
-          mode={config.mode}
           pendingGate={state.pendingGate ?? null}
           railColor={activityFrame.railColor}
           selectedGateAction={selectedGateAction}
@@ -686,7 +685,6 @@ export function App({ config }: AppProps) {
           slashCommands={slashCommands}
           spinner={activityFrame.spinner}
           activeThreadId={state.activeThreadId}
-          activity={state.activity}
           models={availableModels}
           threads={showThreadPalette ? paletteThreads : state.threads}
           transcript={state.transcript}
@@ -704,7 +702,6 @@ export function App({ config }: AppProps) {
           inputRef={textareaRef}
           isThinking={state.isThinking}
           lastError={state.lastError}
-          mode={config.mode}
           railColor={activityFrame.railColor}
           selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
           selectedModel={selectedModel}
@@ -736,7 +733,6 @@ function WelcomeSurface({
   inputRef,
   isThinking,
   lastError,
-  mode,
   railColor,
   selectedSlashCommandIndex,
   selectedModel,
@@ -762,7 +758,6 @@ function WelcomeSurface({
   inputRef: RefObject<TextareaRenderable | null>
   isThinking: boolean
   lastError?: string | null
-  mode: ClientMode
   railColor: string
   selectedSlashCommandIndex: number
   selectedModel: string
@@ -795,7 +790,6 @@ function WelcomeSurface({
         focused
         inputRef={inputRef}
         isThinking={isThinking}
-        mode={mode}
         railColor={railColor}
         selectedSlashCommandIndex={selectedSlashCommandIndex}
         selectedModel={selectedModel}
@@ -837,7 +831,6 @@ function ConversationSurface({
   isThinking,
   lastError,
   markdownStyle,
-  mode,
   pendingGate,
   railColor,
   selectedGateAction,
@@ -852,7 +845,6 @@ function ConversationSurface({
   slashCommands,
   spinner,
   activeThreadId,
-  activity,
   models,
   threads,
   transcript,
@@ -868,7 +860,6 @@ function ConversationSurface({
   isThinking: boolean
   lastError?: string | null
   markdownStyle: SyntaxStyle
-  mode: ClientMode
   pendingGate: PendingGateInfo | null
   railColor: string
   selectedGateAction: GateAction
@@ -883,7 +874,6 @@ function ConversationSurface({
   slashCommands: SlashCommand[]
   spinner: string
   activeThreadId?: string | null
-  activity: ActivityItem[]
   models: string[]
   threads: ThreadInfo[]
   transcript: Array<{ id: string; role: string; text: string }>
@@ -922,9 +912,7 @@ function ConversationSurface({
         {transcript.map((item) => (
           <TranscriptMessage key={item.id} item={item} markdownStyle={markdownStyle} selectedModel={selectedModel} width={contentWidth} />
         ))}
-        {isThinking ? (
-          <ActivityCards activity={activity} selectedModel={selectedModel} spinner={spinner} width={contentWidth} />
-        ) : null}
+        {isThinking ? <ThinkingMessage selectedModel={selectedModel} spinner={spinner} width={contentWidth} /> : null}
       </scrollbox>
       {pendingGate ? (
         <GatePanel
@@ -941,7 +929,6 @@ function ConversationSurface({
         focused={!pendingGate}
         inputRef={inputRef}
         isThinking={isThinking}
-        mode={mode}
         railColor={railColor}
         selectedSlashCommandIndex={selectedSlashCommandIndex}
         selectedModel={selectedModel}
@@ -1014,57 +1001,18 @@ function BuildLine({ selectedModel }: { selectedModel: string }) {
   )
 }
 
-function ActivityCards({
-  activity,
-  selectedModel,
-  spinner,
-  width,
-}: {
-  activity: ActivityItem[]
-  selectedModel: string
-  spinner: string
-  width: number
-}) {
-  const running = activity.filter((item) => item.status === "running").slice(-3)
-  const items = running.length
-    ? running
-    : [{ id: "thinking", label: "Thinking", detail: "Waiting for Reborn progress", status: "running" as const }]
-
+function ThinkingMessage({ selectedModel, spinner, width }: { selectedModel: string; spinner: string; width: number }) {
   return (
-    <box style={{ width, flexDirection: "column", marginBottom: 2 }}>
-      {items.map((item) => (
-        <ActivityCard key={item.id} item={item} spinner={spinner} width={width} />
-      ))}
-      <BuildLine selectedModel={selectedModel} />
-    </box>
-  )
-}
-
-function ActivityCard({ item, spinner, width }: { item: ActivityItem; spinner: string; width: number }) {
-  return (
-    <box style={{ width, flexDirection: "row", backgroundColor: "#141414", marginBottom: 1 }}>
-      <box style={{ width: 1, backgroundColor: activityColor(item) }} />
-      <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-        <box style={{ height: 1, flexDirection: "row" }}>
-          <text fg={activityColor(item)}>{spinner}</text>
-          <text fg="#858585"> .: </text>
-          <text fg="#d0d0d0">{truncate(item.label, Math.max(12, width - 12))}</text>
-        </box>
-        {item.detail ? (
-          <box style={{ height: 1, flexDirection: "row", marginTop: 1 }}>
-            <text fg="#8a8a8a">{truncate(item.detail, Math.max(12, width - 6))}</text>
-          </box>
-        ) : null}
+    <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
+      <box style={{ height: 1, flexDirection: "row" }}>
+        <text fg="#2ee66b">{spinner}</text>
+        <text fg="#2ee66b"> Build</text>
+        <text fg="#777777"> · </text>
+        <text fg="#d0d0d0">{selectedModel}</text>
+        <text fg="#777777"> · thinking</text>
       </box>
     </box>
   )
-}
-
-function activityColor(item: ActivityItem): string {
-  if (item.status === "error") return "#f08a8a"
-  if (item.status === "ok") return "#8cffb0"
-  if (item.kind === "tool_running") return "#f6ad3c"
-  return "#2ee66b"
 }
 
 function LoadOlderHint({ width }: { width: number }) {
@@ -1079,7 +1027,6 @@ function Composer({
   focused,
   inputRef,
   isThinking,
-  mode,
   railColor,
   selectedSlashCommandIndex,
   selectedModel,
@@ -1100,7 +1047,6 @@ function Composer({
   focused: boolean
   inputRef: RefObject<TextareaRenderable | null>
   isThinking: boolean
-  mode: ClientMode
   railColor: string
   selectedSlashCommandIndex: number
   selectedModel: string
@@ -1172,8 +1118,6 @@ function Composer({
             <text fg="#777777"> . </text>
             <text fg="#d0d0d0">{selectedModel}</text>
             <text fg="#858585"> OpenAI</text>
-            <text fg="#777777"> . </text>
-            <text fg={mode === "local" ? "#2ee66b" : "#8cffb0"}>{mode}</text>
             {isThinking ? <text fg={railColor}> {spinner}</text> : null}
           </box>
         </box>
@@ -1340,13 +1284,11 @@ function SlashCommandRow({
 }) {
   const marker = selected ? ">" : " "
   const commandWidth = 17
-  const sourceWidth = 8
-  const descriptionWidth = Math.max(10, width - commandWidth - sourceWidth - 9)
+  const descriptionWidth = Math.max(10, width - commandWidth - 7)
   return (
     <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#111111" }}>
       <text fg={selected ? "#2ee66b" : "#707070"}>{marker} </text>
       <text fg={selected ? "#8cffb0" : "#d0d0d0"}>{padEnd(command.name, commandWidth)}</text>
-      <text fg={sourceColor(command.source)}>{padEnd(command.source, sourceWidth)}</text>
       <text fg="#777777">{truncate(command.description, descriptionWidth)}</text>
     </box>
   )
@@ -1481,12 +1423,6 @@ function truncate(value: string, max: number): string {
 
 function padEnd(value: string, length: number): string {
   return value.length >= length ? value.slice(0, length) : value + " ".repeat(length - value.length)
-}
-
-function sourceColor(source: SlashCommandSource): string {
-  if (source === "remote") return "#8cffb0"
-  if (source === "local") return "#2ee66b"
-  return "#777777"
 }
 
 function commandPopupHint(start: number, count: number, total: number): string {
