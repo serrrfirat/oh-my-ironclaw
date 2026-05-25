@@ -1,4 +1,6 @@
 # oh-my-ironclaw
+<img width="1325" height="760" alt="image" src="https://github.com/user-attachments/assets/e52a8757-cf20-4a1e-80dd-47121d2ad8a5" />
+
 
 OpenTUI client for the IronClaw Reborn gateway API.
 
