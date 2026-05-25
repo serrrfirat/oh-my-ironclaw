@@ -30,6 +30,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Models",
 
 const REMOTE_PRODUCT_COMMANDS: SlashCommand[] = [
   { name: "/model", description: "Show or switch the active model", source: "remote", action: "models" },
+  { name: "/models", description: "Show available models in the picker", source: "remote", action: "models" },
   { name: "/status", description: "Show Reborn product workflow status", source: "remote" },
   { name: "/progress", description: "Alias for Reborn product workflow status", source: "remote" },
 ]
@@ -69,13 +70,6 @@ const LOCAL_CLI_COMMANDS: SlashCommand[] = [
     source: "local",
     action: "local-command",
     localArgs: ["hooks", "list"],
-  },
-  {
-    name: "/models",
-    description: "Run ironclaw-reborn models list",
-    source: "local",
-    action: "local-command",
-    localArgs: ["models", "list"],
   },
   {
     name: "/model-status",
