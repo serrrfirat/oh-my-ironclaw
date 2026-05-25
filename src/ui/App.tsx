@@ -1430,11 +1430,10 @@ function LoadOlderHint({ width }: { width: number }) {
 
 function YoloSplashTag() {
   return (
-    <box style={{ width: 10, height: 4, flexDirection: "column", marginLeft: 1, marginTop: 1 }}>
-      <text fg="#fff36d">  y</text>
-      <text fg="#ffb86b"> o</text>
-      <text fg="#ff7ad9">l</text>
-      <text fg="#5fd7ff"> o</text>
+    <box style={{ width: 16, height: 3, flexDirection: "column", marginLeft: 0, marginTop: 2 }}>
+      <text fg="#fff36d">     yolo</text>
+      <text fg="#ffb86b">   mode</text>
+      <text fg="#ff7ad9"> on!</text>
     </box>
   )
 }
