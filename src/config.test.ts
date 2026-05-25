@@ -43,7 +43,7 @@ describe("readConfig", () => {
     ])
 
     expect(config.rebornSource).toBe("/tmp/ironclaw")
-    expect(config.rebornFeatures).toBe("webui-v2-beta")
+    expect(config.rebornFeatures).toBe(null)
   })
 
   test("accepts source feature override", () => {
