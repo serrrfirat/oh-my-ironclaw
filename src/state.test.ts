@@ -259,4 +259,48 @@ describe("UI state", () => {
       status: "info",
     })
   })
+
+  test("tracks rich capability activity in the transcript", () => {
+    const running = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_activity",
+        invocation_id: "run-1",
+        capability_id: "builtin.list_dir",
+        status: "running",
+        runtime: "local",
+        provider: "host",
+        thread_id: "thread-1",
+      },
+    })
+    const completed = reduceUiState(running, {
+      type: "event",
+      event: {
+        type: "capability_activity",
+        invocation_id: "run-1",
+        capability_id: "builtin.list_dir",
+        status: "completed",
+        runtime: "local",
+        provider: "host",
+        output_bytes: 42,
+        thread_id: "thread-1",
+      },
+    })
+
+    expect(running.isThinking).toBe(true)
+    expect(running.activity[0]).toMatchObject({
+      id: "capability-run-1",
+      label: "Using builtin.list_dir",
+      status: "running",
+      kind: "tool_running",
+    })
+    expect(completed.transcript).toHaveLength(1)
+    expect(completed.transcript[0]).toMatchObject({
+      id: "capability-run-1",
+      role: "activity",
+      state: "completed",
+    })
+    expect(completed.transcript[0].text).toContain("Completed builtin.list_dir")
+    expect(completed.transcript[0].text).toContain("42 B output")
+  })
 })

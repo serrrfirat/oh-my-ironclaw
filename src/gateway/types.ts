@@ -86,6 +86,18 @@ export type RebornWebChatEventFrame = {
   type: string
   reply?: { turn_run_id?: string; text?: string }
   progress?: { turn_run_id?: string; kind?: string }
+  activity?: {
+    invocation_id?: string
+    thread_id?: string | null
+    capability_id?: string
+    status?: "started" | "running" | "completed" | "failed" | "killed" | string
+    provider?: string | null
+    runtime?: string | null
+    process_id?: string | null
+    output_bytes?: number | null
+    error_kind?: string | null
+    updated_at?: string
+  }
   prompt?: { turn_run_id?: string; gate_ref?: string; headline?: string; body?: string }
   run_state?: {
     run_id?: string | null
@@ -180,6 +192,18 @@ export type AppEvent =
   | { type: "response"; content: string; thread_id: string }
   | { type: "run_status"; status: string; run_id?: string | null; thread_id?: string | null; failure_category?: string | null }
   | { type: "thinking"; message: string; thread_id?: string | null }
+  | {
+      type: "capability_activity"
+      invocation_id: string
+      capability_id: string
+      status: "started" | "running" | "completed" | "failed" | "killed" | string
+      provider?: string | null
+      runtime?: string | null
+      process_id?: string | null
+      output_bytes?: number | null
+      error_kind?: string | null
+      thread_id?: string | null
+    }
   | { type: "tool_started"; name: string; detail?: string | null; call_id?: string | null; thread_id?: string | null }
   | { type: "tool_completed"; name: string; success: boolean; error?: string | null; parameters?: string | null; call_id?: string | null; duration_ms?: number | null; thread_id?: string | null }
   | { type: "tool_result"; name: string; preview: string; call_id?: string | null; thread_id?: string | null }

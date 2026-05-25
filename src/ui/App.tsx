@@ -1262,7 +1262,7 @@ function ConversationSurface({
   activeThreadId?: string | null
   models: string[]
   threads: ThreadInfo[]
-  transcript: Array<{ id: string; role: string; text: string }>
+  transcript: Array<{ id: string; role: string; text: string; state?: string }>
   onInputChange: () => void
   onResolve: (action: GateAction) => void
   onSelectGateAction: (action: GateAction) => void
@@ -1345,7 +1345,7 @@ function TranscriptMessage({
   selectedModel,
   width,
 }: {
-  item: { id: string; role: string; text: string }
+  item: { id: string; role: string; text: string; state?: string }
   markdownStyle: SyntaxStyle
   selectedModel: string
   width: number
@@ -1366,6 +1366,21 @@ function TranscriptMessage({
       <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
         <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
         <BuildLine selectedModel={selectedModel} />
+      </box>
+    )
+  }
+
+  if (item.role === "activity") {
+    const status = uiStatusKey(item.state ?? "")
+    const rail = status === "failed" || status === "killed" ? "#ff6b6b" : status === "completed" ? "#2ee66b" : "#8cffb0"
+    const [headline, ...detail] = item.text.split("\n")
+    return (
+      <box style={{ width, flexDirection: "row", backgroundColor: "#111111", marginBottom: 2 }}>
+        <box style={{ width: 1, backgroundColor: rail }} />
+        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
+          <text fg={rail}>{headline || "Using tool"}</text>
+          {detail.length ? <text fg="#8a8a8a">{truncate(detail.join(" · "), Math.max(1, width - 5))}</text> : null}
+        </box>
       </box>
     )
   }

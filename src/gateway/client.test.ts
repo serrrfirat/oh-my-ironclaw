@@ -60,4 +60,36 @@ describe("WebChat event mapping", () => {
       thread_id: "thread-1",
     })
   })
+
+  test("maps rich capability activity to a first-class UI event", () => {
+    const event = mapWebChatEvent(
+      {
+        type: "capability_activity",
+        cursor: "cursor-1",
+        activity: {
+          invocation_id: "run-1",
+          thread_id: "thread-1",
+          capability_id: "builtin.list_dir",
+          status: "completed",
+          provider: "host",
+          runtime: "local",
+          output_bytes: 42,
+        },
+      },
+      "thread-1",
+    )
+
+    expect(event).toEqual({
+      type: "capability_activity",
+      invocation_id: "run-1",
+      capability_id: "builtin.list_dir",
+      status: "completed",
+      provider: "host",
+      runtime: "local",
+      process_id: null,
+      output_bytes: 42,
+      error_kind: null,
+      thread_id: "thread-1",
+    })
+  })
 })

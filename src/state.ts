@@ -2,7 +2,7 @@ import type { AppEvent, HistoryResponse, PendingGateInfo, ThreadInfo, ToolCallIn
 
 export type TranscriptItem = {
   id: string
-  role: "user" | "assistant" | "system"
+  role: "user" | "assistant" | "system" | "activity"
   text: string
   threadId?: string | null
   state?: string
@@ -190,6 +190,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
           status: "info",
         }),
       }
+    case "capability_activity":
+      return applyCapabilityActivity(state, event)
     case "reasoning_update":
       return {
         ...state,
@@ -380,6 +382,90 @@ function upsertActivity(items: ActivityItem[], item: ActivityItem): ActivityItem
 
 function clearRunningActivity(items: ActivityItem[]): ActivityItem[] {
   return items.map((item) => (item.status === "running" ? { ...item, status: "info" } : item))
+}
+
+function applyCapabilityActivity(
+  state: UiState,
+  event: Extract<AppEvent, { type: "capability_activity" }>,
+): UiState {
+  const status = statusKey(event.status)
+  const active = status === "started" || status === "running"
+  const failed = status === "failed" || status === "killed"
+  const id = `capability-${event.invocation_id}`
+  const text = capabilityActivityText(event)
+  const activityItem: ActivityItem = {
+    id,
+    label: capabilityActivityLabel(event.capability_id, status),
+    detail: capabilityActivityDetail(event),
+    status: active ? "running" : failed ? "error" : "ok",
+    kind: active ? "tool_running" : `tool_${status}`,
+  }
+
+  return {
+    ...state,
+    isThinking: active ? true : state.isThinking,
+    status: active ? `running ${event.capability_id}` : state.status,
+    activity: upsertActivity(state.activity, activityItem),
+    transcript: upsertTranscriptItem(state.transcript, {
+      id,
+      role: "activity",
+      text,
+      threadId: event.thread_id,
+      state: event.status,
+    }),
+  }
+}
+
+function upsertTranscriptItem(items: TranscriptItem[], item: TranscriptItem): TranscriptItem[] {
+  const index = items.findIndex((existing) => existing.id === item.id)
+  if (index < 0) return [...items, item]
+  return items.map((existing, current) => (current === index ? item : existing))
+}
+
+function capabilityActivityText(event: Extract<AppEvent, { type: "capability_activity" }>): string {
+  const status = statusKey(event.status)
+  const lines = [`${capabilityActivityGlyph(status)} ${capabilityActivityLabel(event.capability_id, status)}`]
+  const detail = capabilityActivityDetail(event)
+  if (detail) lines.push(detail)
+  return lines.join("\n")
+}
+
+function capabilityActivityGlyph(status: string): string {
+  if (status === "completed") return "✓"
+  if (status === "failed" || status === "killed") return "✕"
+  return "∙"
+}
+
+function capabilityActivityLabel(capabilityId: string, status: string): string {
+  switch (status) {
+    case "started":
+    case "running":
+      return `Using ${capabilityId}`
+    case "completed":
+      return `Completed ${capabilityId}`
+    case "failed":
+      return `Failed ${capabilityId}`
+    case "killed":
+      return `Killed ${capabilityId}`
+    default:
+      return `${statusLabel(status)} ${capabilityId}`
+  }
+}
+
+function capabilityActivityDetail(event: Extract<AppEvent, { type: "capability_activity" }>): string {
+  const parts = [
+    event.runtime ? `runtime ${event.runtime}` : null,
+    event.provider ? `provider ${event.provider}` : null,
+    typeof event.output_bytes === "number" ? `${formatBytes(event.output_bytes)} output` : null,
+    event.error_kind ? `error ${event.error_kind}` : null,
+  ].filter(Boolean)
+  return parts.join(" · ")
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function progressActivityId(threadId: string | null | undefined, kind: string): string {

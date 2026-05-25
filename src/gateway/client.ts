@@ -244,6 +244,8 @@ export function mapWebChatEvent(frame: RebornWebChatEventFrame | null, threadId:
         name: frame.progress?.kind ?? "capability",
         thread_id: threadId,
       }
+    case "capability_activity":
+      return capabilityActivityEvent(frame, threadId)
     case "gate": {
       const runId = frame.prompt?.turn_run_id ?? ""
       const gateRef = frame.prompt?.gate_ref ?? ""
@@ -280,6 +282,26 @@ export function mapWebChatEvent(frame: RebornWebChatEventFrame | null, threadId:
       return projectionEvent(frame, threadId)
     default:
       return { type: "status", message: frame.type, thread_id: threadId }
+  }
+}
+
+function capabilityActivityEvent(frame: RebornWebChatEventFrame, threadId: string): AppEvent | null {
+  const activity = frame.activity
+  if (!activity || typeof activity.invocation_id !== "string" || typeof activity.capability_id !== "string") {
+    return { type: "status", message: "capability_activity", thread_id: threadId }
+  }
+
+  return {
+    type: "capability_activity",
+    invocation_id: activity.invocation_id,
+    capability_id: activity.capability_id,
+    status: typeof activity.status === "string" ? activity.status : "running",
+    provider: typeof activity.provider === "string" ? activity.provider : null,
+    runtime: typeof activity.runtime === "string" ? activity.runtime : null,
+    process_id: typeof activity.process_id === "string" ? activity.process_id : null,
+    output_bytes: typeof activity.output_bytes === "number" ? activity.output_bytes : null,
+    error_kind: typeof activity.error_kind === "string" ? activity.error_kind : null,
+    thread_id: typeof activity.thread_id === "string" ? activity.thread_id : threadId,
   }
 }
 
