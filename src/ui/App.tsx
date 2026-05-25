@@ -157,6 +157,7 @@ export function App({ config }: AppProps) {
   const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
   const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
+  const canCancelRun = Boolean((state.pendingGate?.thread_id || state.activeThreadId) && (state.pendingGate?.run_id || state.activeRunId))
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
@@ -242,15 +243,15 @@ export function App({ config }: AppProps) {
       }
     }
     if (key.name === "escape") {
+      key.preventDefault()
+      key.stopPropagation()
       if (showSlashCommands) {
-        key.preventDefault()
-        key.stopPropagation()
         setInput("")
         setShowCommandPalette(false)
         textareaRef.current?.clear()
         return
       }
-      renderer.destroy()
+      if (canCancelRun) void cancelActiveRun()
       return
     }
     if (key.ctrl && key.name === "n") {
