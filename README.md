@@ -1,30 +1,95 @@
 # oh-my-ironclaw
-<img width="1325" height="760" alt="image" src="https://github.com/user-attachments/assets/e52a8757-cf20-4a1e-80dd-47121d2ad8a5" />
 
+<img width="1325" height="760" alt="oh-my-ironclaw screenshot" src="https://github.com/user-attachments/assets/e52a8757-cf20-4a1e-80dd-47121d2ad8a5" />
 
-OpenTUI client for the IronClaw Reborn gateway API.
+OpenTUI client for the IronClaw Reborn WebChat v2/Product Workflow API.
 
-## Run
+The TUI is a separate client. Start an IronClaw Reborn server first, then run this app against that server.
 
-Start an IronClaw reborn/gateway binary first, then run in remote mode:
+## Requirements
+
+- Bun
+- An IronClaw Reborn checkout or installed `ironclaw`/`ironclaw-reborn` binary
+- A WebChat v2 server token shared by the server and this client
+
+## Start Reborn
+
+From an IronClaw Reborn source checkout:
 
 ```bash
-OPEN_IRONCLAW_MODE=remote \
+IRONCLAW_REBORN_WEBUI_TOKEN=local-dev-token \
+IRONCLAW_REBORN_WEBUI_USER_ID=local-user \
+cargo run -p ironclaw \
+  --features webui-v2-beta \
+  --bin ironclaw \
+  -- serve --host 127.0.0.1 --port 3000
+```
+
+The TUI uses `OPEN_IRONCLAW_TOKEN` first, then falls back to `IRONCLAW_REBORN_WEBUI_TOKEN`. The value must match the server token.
+
+## Run The TUI
+
+Install dependencies once:
+
+```bash
+bun install
+```
+
+Remote mode is the default. It talks only to the WebChat v2/Product Workflow API and does not execute local commands:
+
+```bash
 OPEN_IRONCLAW_URL=http://127.0.0.1:3000 \
-OPEN_IRONCLAW_TOKEN=your-token \
+OPEN_IRONCLAW_TOKEN=local-dev-token \
 bun run dev
 ```
 
-Remote mode talks only to the WebChat v2/Product Workflow API. Use it when the TUI is pointed at a remote or local Reborn server and should not execute any local machine commands.
+Local mode still sends chat through WebChat v2, but also enables read-only CLI-backed commands on the machine running the TUI:
 
-Local mode still sends chat through WebChat v2, but also enables local read-only CLI-backed commands:
+```bash
+OPEN_IRONCLAW_MODE=local \
+OPEN_IRONCLAW_URL=http://127.0.0.1:3000 \
+OPEN_IRONCLAW_TOKEN=local-dev-token \
+OPEN_IRONCLAW_REBORN_BIN=ironclaw-reborn \
+bun run dev
+```
+
+If the Reborn CLI is not on `$PATH`, point the TUI at the source checkout instead:
+
+```bash
+OPEN_IRONCLAW_MODE=local \
+OPEN_IRONCLAW_URL=http://127.0.0.1:3000 \
+OPEN_IRONCLAW_TOKEN=local-dev-token \
+OPEN_IRONCLAW_REBORN_SOURCE=/Users/firatsertgoz/.codex/worktrees/6e9e/ironclaw \
+OPEN_IRONCLAW_REBORN_FEATURES=webui-v2-beta \
+bun run dev
+```
+
+With `OPEN_IRONCLAW_REBORN_SOURCE` set, local commands run as:
+
+```bash
+cargo run -p ironclaw --features "$OPEN_IRONCLAW_REBORN_FEATURES" --bin ironclaw -- <command>
+```
+
+If `OPEN_IRONCLAW_REBORN_FEATURES` is unset, the `--features` argument is omitted.
+
+## Commands
+
+The command palette opens with `ctrl+p`. Typing `/` also opens filtered slash commands.
+
+Remote/Product Workflow commands:
+
+- `/model`
+- `/models`
+- `/status`
+- `/progress`
+
+Local mode adds read-only CLI commands:
 
 - `/doctor`
 - `/profile`
 - `/skills`
 - `/channels`
 - `/hooks`
-- `/models`
 - `/model-status`
 - `/logs`
 - `/logs-json`
@@ -33,43 +98,65 @@ Local mode still sends chat through WebChat v2, but also enables local read-only
 - `/traces-queue`
 - `/traces-credit`
 
+TUI-only controls:
+
+- `/settings`
+- `/threads`
+- `/history`
+- `/run-cancel`
+- `/quit`
+
+`/model`, `/models`, and `ctrl+m` open the model picker. The picker is seeded from config, then updated from the server response. Selecting a model sends `/model <name>` through WebChat v2 so the server-side command applies the choice.
+
+The settings surface is currently a menu-style UI shell. It shows connection, model, secret, tool, and approval sections but does not persist edits yet.
+
+## Keys
+
+- `enter`: send the current message or run the selected palette item
+- `esc`: close an open palette; otherwise cancel the active run when one exists
+- `ctrl+p`: command palette
+- `ctrl+t`: thread picker
+- `ctrl+m`: model picker
+- `ctrl+n`: new thread
+- `ctrl+x`: cancel active run
+- `pageup` or `/history`: load older timeline messages
+- `ctrl+a`: approve a pending gate
+- `ctrl+d`: deny a pending gate
+- `ctrl+c`: quit
+
+## Configuration
+
+| Environment | Flag | Default | Purpose |
+| --- | --- | --- | --- |
+| `OPEN_IRONCLAW_MODE` | `--mode` | `remote` | `remote` or `local` |
+| `OPEN_IRONCLAW_URL` | `--url` | `http://127.0.0.1:3000` | Reborn WebChat v2 base URL |
+| `OPEN_IRONCLAW_TOKEN` | `--token` | empty | Bearer token for the Reborn server |
+| `OPEN_IRONCLAW_REBORN_BIN` | `--reborn-bin` | `ironclaw-reborn` | Binary used for local CLI commands |
+| `OPEN_IRONCLAW_REBORN_SOURCE` | `--reborn-source` | unset | Source checkout used for local CLI commands |
+| `OPEN_IRONCLAW_REBORN_FEATURES` | `--reborn-features` | unset | Cargo features when running from source |
+| `OPEN_IRONCLAW_MODEL` | `--model` | `GPT-5.5` | Initial selected model |
+| `OPEN_IRONCLAW_MODELS` | `--models` | unset | Comma-separated initial model list |
+| `OPEN_IRONCLAW_DEBUG` | `--debug-events` | unset | Enable debug event mode |
+
+`OPEN_IRONCLAW_URL` also falls back to `IRONCLAW_REBORN_WEBUI_URL`. `OPEN_IRONCLAW_TOKEN` also falls back to `IRONCLAW_REBORN_WEBUI_TOKEN`.
+
+Example with flags:
+
 ```bash
-OPEN_IRONCLAW_MODE=local \
-OPEN_IRONCLAW_URL=http://127.0.0.1:3000 \
-OPEN_IRONCLAW_TOKEN=your-token \
-OPEN_IRONCLAW_REBORN_BIN=ironclaw-reborn \
-bun run dev
+bun run dev -- \
+  --mode local \
+  --url http://127.0.0.1:3000 \
+  --token local-dev-token \
+  --reborn-source /Users/firatsertgoz/.codex/worktrees/6e9e/ironclaw \
+  --reborn-features webui-v2-beta \
+  --models GPT-5.5,gpt-5.3-codex \
+  --model GPT-5.5 \
+  --debug-events
 ```
 
-If you run IronClaw from source and do not have `ironclaw-reborn` installed on `$PATH`, point the TUI at the source checkout instead:
+## WebChat v2 Contract
 
-```bash
-OPEN_IRONCLAW_MODE=local \
-OPEN_IRONCLAW_URL=http://127.0.0.1:3000 \
-OPEN_IRONCLAW_TOKEN=your-token \
-OPEN_IRONCLAW_REBORN_SOURCE=/Users/firatsertgoz/.codex/worktrees/bb76/ironclaw \
-bun run dev
-```
-
-With `OPEN_IRONCLAW_REBORN_SOURCE` set, local CLI commands run as:
-
-```bash
-cargo run -p ironclaw_reborn_cli --features webui-v2-beta --bin ironclaw-reborn -- <command>
-```
-
-Use `/model` or `ctrl+m` to ask Reborn for the active model and available models. Selecting a model sends `/model <name>` through the same WebChat v2 message workflow, so the server-side command persists or applies the model choice.
-
-The command palette (`ctrl+p`) always includes the Reborn product workflow slash commands that exist today as literal remote commands: `/model`, `/status`, and `/progress`. In local mode it also includes read-only CLI commands that run on the same machine as the TUI. `/threads`, `/history`, `/run-cancel`, and `/quit` are local TUI controls for the WebChat surface.
-
-You can still seed the picker before the first server response:
-
-```bash
-OPEN_IRONCLAW_MODELS=GPT-5.5,gpt-5.3-codex \
-OPEN_IRONCLAW_MODEL=GPT-5.5 \
-bun run dev
-```
-
-The client uses the Reborn WebChat v2 gateway contract:
+The client currently uses:
 
 - `POST /api/webchat/v2/threads`
 - `GET /api/webchat/v2/threads`
@@ -79,8 +166,25 @@ The client uses the Reborn WebChat v2 gateway contract:
 - `POST /api/webchat/v2/threads/{thread_id}/runs/{run_id}/cancel`
 - `POST /api/webchat/v2/threads/{thread_id}/runs/{run_id}/gates/{gate_ref}/resolve`
 
-CLI flags are also supported:
+Mapped SSE events include `running`, `capability_progress`, `capability_activity`, `gate`, `final_reply`, `failed`, `projection_snapshot`, and `projection_update`.
+
+`capability_activity` is rendered as a tool/activity row, but it is metadata-only: invocation id, capability id, status, provider/runtime/process metadata, output byte count, and safe error kind. Full tool input/output previews require a separate server-side display-preview event before the TUI can render opencode-style expandable tool output.
+
+## LocalDevYolo Splash
+
+In local mode the TUI asks the CLI for `profile list --json`. If the active profile looks like LocalDevYolo, the splash logo switches to the animated rainbow variant with the small `yolo` mark.
+
+## Development
 
 ```bash
-bun run dev -- --mode local --url http://127.0.0.1:3000 --token your-token --reborn-source /Users/firatsertgoz/.codex/worktrees/bb76/ironclaw --models GPT-5.5,gpt-5.3-codex --model GPT-5.5 --debug-events
+bun run typecheck
+bun test
+bun run check
 ```
+
+## Troubleshooting
+
+- `offline | error`: confirm the Reborn server is listening on `OPEN_IRONCLAW_URL` and the token matches `IRONCLAW_REBORN_WEBUI_TOKEN`.
+- `Executable not found`: set `OPEN_IRONCLAW_REBORN_BIN` to an installed binary, or use `OPEN_IRONCLAW_REBORN_SOURCE`.
+- Source CLI commands fail: confirm the source checkout is on the right Reborn branch and, when needed, set `OPEN_IRONCLAW_REBORN_FEATURES=webui-v2-beta`.
+- `/models` only shows the current model: the server did not return an available model list, so the picker falls back to the active model.
