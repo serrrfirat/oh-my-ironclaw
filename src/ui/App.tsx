@@ -1167,7 +1167,10 @@ function WelcomeSurface({
     <box style={{ width, height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505" }}>
       <box style={{ height: topSpacer }} />
       {height >= 15 ? (
-        <ascii-font text={logoText} font="block" color={logoColors} backgroundColor="#050505" />
+        <box style={{ flexDirection: "row", alignItems: "flex-start" }}>
+          <ascii-font text={logoText} font="block" color={logoColors} backgroundColor="#050505" />
+          {localDevYolo ? <YoloSplashTag /> : null}
+        </box>
       ) : (
         <text fg={logoColors[0] ?? "#8cffb0"}>{logoText}</text>
       )}
@@ -1421,6 +1424,17 @@ function LoadOlderHint({ width }: { width: number }) {
   return (
     <box style={{ width, height: 2, flexDirection: "column", paddingLeft: 3, marginBottom: 1 }}>
       <text fg="#777777">{truncate("/history or pageup to load older messages", Math.max(1, width - 3))}</text>
+    </box>
+  )
+}
+
+function YoloSplashTag() {
+  return (
+    <box style={{ width: 10, height: 4, flexDirection: "column", marginLeft: 1, marginTop: 1 }}>
+      <text fg="#fff36d">  y</text>
+      <text fg="#ffb86b"> o</text>
+      <text fg="#ff7ad9">l</text>
+      <text fg="#5fd7ff"> o</text>
     </box>
   )
 }
