@@ -482,11 +482,9 @@ export function App({ config }: AppProps) {
   }
 
   async function openModelPalette() {
-    if (!availableModels.length) {
-      await submitContent("/model")
-      return
-    }
-    setSelectedModelIndex(modelIndex(availableModels, selectedModel))
+    const models = withSelectedModel(availableModels, selectedModel)
+    setAvailableModels(models)
+    setSelectedModelIndex(modelIndex(models, selectedModel))
     setShowModelPalette(true)
   }
 
