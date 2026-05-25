@@ -5,7 +5,7 @@ import type { ClientConfig, ClientMode } from "../config"
 import { GatewayClient } from "../gateway/client"
 import type { AppEvent, PendingGateInfo, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
-import { activeProfileFromCliResult, isLocalDevYoloProfile } from "../rebornProfile"
+import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebornProfile"
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
 
 type AppProps = {
@@ -162,7 +162,7 @@ export function App({ config }: AppProps) {
   const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
   const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
-  const localDevYolo = isLocalDevYoloProfile(activeRebornProfile)
+  const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
@@ -1162,13 +1162,14 @@ function WelcomeSurface({
 }) {
   const topSpacer = Math.max(1, Math.floor(height * 0.32) - 5)
   const logoColors = useRainbowLogoColors(localDevYolo)
+  const logoText = localDevYolo ? "IRONCLAW" : "ironclaw"
   return (
     <box style={{ width, height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505" }}>
       <box style={{ height: topSpacer }} />
       {height >= 15 ? (
-        <ascii-font text="ironclaw" font="block" color={logoColors} backgroundColor="#050505" />
+        <ascii-font text={logoText} font="block" color={logoColors} backgroundColor="#050505" />
       ) : (
-        <text fg={logoColors[0] ?? "#8cffb0"}>ironclaw</text>
+        <text fg={logoColors[0] ?? "#8cffb0"}>{logoText}</text>
       )}
       <box style={{ height: 2 }} />
       <Composer

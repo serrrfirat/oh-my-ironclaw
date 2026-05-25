@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { activeProfileFromCliResult, activeProfileFromJson, isLocalDevYoloProfile } from "./rebornProfile"
+import { activeProfileFromCliResult, activeProfileFromJson, isLocalDevYoloProfile, shouldUseLocalDevYoloSplash } from "./rebornProfile"
 
 describe("reborn profile detection", () => {
   test("reads the active profile from profile list JSON", () => {
@@ -19,5 +19,12 @@ describe("reborn profile detection", () => {
     expect(isLocalDevYoloProfile("local")).toBe(true)
     expect(isLocalDevYoloProfile("local-sandbox")).toBe(false)
     expect(isLocalDevYoloProfile("LocalDevYolo")).toBe(true)
+  })
+
+  test("uses yolo splash for local mode unless the CLI reports sandbox", () => {
+    expect(shouldUseLocalDevYoloSplash("local", null)).toBe(true)
+    expect(shouldUseLocalDevYoloSplash("local", "local")).toBe(true)
+    expect(shouldUseLocalDevYoloSplash("local", "local-sandbox")).toBe(false)
+    expect(shouldUseLocalDevYoloSplash("remote", "local")).toBe(false)
   })
 })

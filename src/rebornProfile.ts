@@ -35,3 +35,9 @@ export function isLocalDevYoloProfile(profile: string | null): boolean {
   const normalized = profile.toLowerCase().replaceAll(/[_\s]+/g, "-")
   return normalized === "local" || normalized === "local-dev-yolo" || normalized === "localdevyolo" || normalized.includes("yolo")
 }
+
+export function shouldUseLocalDevYoloSplash(mode: string, profile: string | null): boolean {
+  if (mode !== "local") return false
+  if (!profile) return true
+  return isLocalDevYoloProfile(profile)
+}
