@@ -26,7 +26,21 @@ const LOCAL_CLI_COMMANDS: SlashCommand[] = [
     action: "local-command",
     localArgs: ["profile", "list"],
   },
-  { name: "/skills", description: "Run ironclaw-reborn skills list", source: "local", action: "local-command", localArgs: ["skills", "list"] },
+  { name: "/skills", description: "Show Reborn local skill catalog", source: "local", action: "local-command", localArgs: ["skills", "list"] },
+  {
+    name: "/skills-verbose",
+    description: "Show Reborn skill catalog metadata",
+    source: "local",
+    action: "local-command",
+    localArgs: ["skills", "list", "--verbose"],
+  },
+  {
+    name: "/skills-json",
+    description: "Show Reborn skill catalog as verbose JSON",
+    source: "local",
+    action: "local-command",
+    localArgs: ["skills", "list", "--json", "--verbose"],
+  },
   {
     name: "/channels",
     description: "Run ironclaw-reborn channels list",

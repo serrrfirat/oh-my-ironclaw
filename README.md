@@ -88,6 +88,8 @@ Local mode adds read-only CLI commands:
 - `/doctor`
 - `/profile`
 - `/skills`
+- `/skills-verbose`
+- `/skills-json`
 - `/channels`
 - `/hooks`
 - `/model-status`
