@@ -125,13 +125,12 @@ export function ConversationSurface({
   const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight)
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const transcriptEndKey = transcript.map((item) => `${item.id}:${transcriptItemContentLength(item)}`).join("|")
-  const expandedActivityKey = [...expandedActivityIds].sort().join("|")
 
   useEffect(() => {
     const scrollbox = transcriptScrollRef.current
     if (!scrollbox) return
     scrollbox.scrollTo({ x: 0, y: scrollbox.scrollHeight })
-  }, [transcriptEndKey, transcriptHeight, expandedActivityKey])
+  }, [transcriptEndKey, transcriptHeight])
 
   return (
     <box style={{ height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505", paddingTop: 1 }}>
