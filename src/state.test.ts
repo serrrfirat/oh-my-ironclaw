@@ -728,4 +728,86 @@ describe("UI state", () => {
     ])
     expect(activityText(withFinalHistory.transcript[1])).toContain("Failed read_file")
   })
+
+  test("keeps unmatched failed previews in live tool order", () => {
+    const withFailedShell = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        invocation_id: "shell-1",
+        capability_id: "shell",
+        status: "failed",
+        title: "shell",
+        output_summary: "tool failed: resource",
+        output_kind: "text",
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+    const withLaterGlob = reduceUiState(withFailedShell, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        timeline_message_id: "glob-1",
+        invocation_id: "glob-1",
+        capability_id: "glob",
+        status: "completed",
+        title: "glob",
+        output_summary: "json output",
+        output_kind: "json",
+        result_ref: "result:glob",
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+    const withFinalHistory = reduceUiState(withLaterGlob, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_message_id: "user-1",
+            user_input: "find files",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+          {
+            turn_number: 2,
+            user_input: "",
+            response: "done",
+            state: "completed",
+            started_at: "",
+            tool_calls: [
+              {
+                kind: "capability_display_preview",
+                message_id: "glob-1",
+                name: "glob",
+                has_result: true,
+                has_error: false,
+                call_id: "glob-1",
+                capability_id: "glob",
+                status: "completed",
+                output_summary: "json output",
+                output_kind: "json",
+                result_ref: "result:glob",
+                truncated: false,
+              },
+            ],
+          },
+        ],
+        has_more: false,
+      },
+    })
+
+    expect(withFinalHistory.transcript.map((item) => item.id)).toEqual([
+      "user-1",
+      "capability-shell-1",
+      "glob-1",
+      "turn-2-assistant",
+    ])
+    expect(activityText(withFinalHistory.transcript[1])).toContain("Failed shell")
+    expect(activityText(withFinalHistory.transcript[2])).toContain("glob")
+  })
 })

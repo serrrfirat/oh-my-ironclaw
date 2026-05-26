@@ -165,25 +165,29 @@ export function mergeHistoryTranscript(current: TranscriptItem[], history: Histo
   }
 
   const usedLiveItems = new Set<string>()
+  const transcriptIdByLiveId = new Map<string, string>()
   const merged = transcriptFromHistory(history).flatMap((item) => {
     if (item.role !== "activity") return [item]
     const liveItem = matchingLiveCapabilityItem(item, liveByTimelineMessageId, liveByInvocationId, liveByResultRef)
     if (!liveItem) return [item]
     usedLiveItems.add(liveItem.id)
     if (item.meta?.timelineMessageId) {
-      return [
-        {
-          ...item,
-          meta: { ...liveItem.meta, ...item.meta },
-        },
-      ]
+      const mergedItem = {
+        ...item,
+        meta: { ...liveItem.meta, ...item.meta },
+      }
+      transcriptIdByLiveId.set(liveItem.id, mergedItem.id)
+      return [mergedItem]
     }
+    transcriptIdByLiveId.set(liveItem.id, liveItem.id)
     return [liveItem]
   })
 
   const positionedLiveItems = placeUnmatchedLiveCapabilityItems(
     merged,
-    liveCapabilityItems.filter((item) => !usedLiveItems.has(item.id)),
+    liveCapabilityItems,
+    usedLiveItems,
+    transcriptIdByLiveId,
     history,
   )
   return mergeTranscript(positionedLiveItems, preservedThinkingItems)
@@ -227,12 +231,17 @@ function activityMetaForTool(tool: ToolCallInfo, messageId: string): TranscriptM
 function placeUnmatchedLiveCapabilityItems(
   transcript: TranscriptItem[],
   liveItems: TranscriptItem[],
+  usedLiveItems: Set<string>,
+  transcriptIdByLiveId: Map<string, string>,
   history: HistoryResponse,
 ): TranscriptItem[] {
   let positioned = transcript
   for (const liveItem of liveItems) {
+    if (usedLiveItems.has(liveItem.id)) continue
     if (positioned.some((item) => item.id === liveItem.id)) continue
-    const anchorId = historyAnchorAfterLiveCapability(history, liveItem)
+    const anchorId =
+      followingLiveCapabilityAnchor(liveItems, liveItem, transcriptIdByLiveId, positioned) ??
+      historyAnchorAfterLiveCapability(history, liveItem)
     const anchorIndex = anchorId ? positioned.findIndex((item) => item.id === anchorId) : -1
     if (anchorIndex < 0) {
       positioned = [...positioned, liveItem]
@@ -241,6 +250,20 @@ function placeUnmatchedLiveCapabilityItems(
     positioned = [...positioned.slice(0, anchorIndex), liveItem, ...positioned.slice(anchorIndex)]
   }
   return positioned
+}
+
+function followingLiveCapabilityAnchor(
+  liveItems: TranscriptItem[],
+  liveItem: TranscriptItem,
+  transcriptIdByLiveId: Map<string, string>,
+  transcript: TranscriptItem[],
+): string | null {
+  const liveIndex = liveItems.findIndex((item) => item.id === liveItem.id)
+  for (const laterLiveItem of liveItems.slice(liveIndex + 1)) {
+    const transcriptId = transcriptIdByLiveId.get(laterLiveItem.id) ?? laterLiveItem.id
+    if (transcript.some((item) => item.id === transcriptId)) return transcriptId
+  }
+  return null
 }
 
 function historyAnchorAfterLiveCapability(history: HistoryResponse, liveItem: TranscriptItem): string | null {
