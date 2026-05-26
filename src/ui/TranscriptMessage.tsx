@@ -1,5 +1,5 @@
 import { SyntaxStyle } from "@opentui/core"
-import { transcriptActivityLines, type TranscriptItem } from "../state"
+import { transcriptActivityLines, type TranscriptItem } from "../transcript"
 
 const ACTIVITY_DETAIL_LINE_LIMIT = 14
 
