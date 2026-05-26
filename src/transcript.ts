@@ -244,8 +244,10 @@ function placeUnmatchedLiveCapabilityItems(
 }
 
 function historyAnchorAfterLiveCapability(history: HistoryResponse, liveItem: TranscriptItem): string | null {
-  if (history.messages) return timelineAnchorAfterLiveCapability(history.messages, liveItem)
-  return legacyAnchorAfterLiveCapability(history, liveItem)
+  const matchedAnchor = history.messages
+    ? timelineAnchorAfterLiveCapability(history.messages, liveItem)
+    : legacyAnchorAfterLiveCapability(history, liveItem)
+  return matchedAnchor ?? assistantAnchorAfterLatestUser(history)
 }
 
 function timelineAnchorAfterLiveCapability(messages: TimelineMessageInfo[], liveItem: TranscriptItem): string | null {
@@ -262,6 +264,25 @@ function transcriptMessageIsVisible(message: TimelineMessageInfo): boolean {
   return message.kind === "user" || message.kind === "assistant" || message.kind === "system" || message.kind === "summary"
 }
 
+function assistantAnchorAfterLatestUser(history: HistoryResponse): string | null {
+  if (history.messages) return assistantMessageAnchorAfterLatestUser(history.messages)
+  return legacyAssistantAnchorAfterLatestUser(history)
+}
+
+function assistantMessageAnchorAfterLatestUser(messages: TimelineMessageInfo[]): string | null {
+  const latestUserIndex = findLastIndex(messages, (message) => message.kind === "user")
+  const anchor = messages
+    .slice(latestUserIndex + 1)
+    .find((message) => message.kind === "assistant" || message.kind === "summary")
+  return anchor?.id ?? null
+}
+
+function legacyAssistantAnchorAfterLatestUser(history: HistoryResponse): string | null {
+  const latestUserIndex = findLastIndex(history.turns, (turn) => Boolean(turn.user_input))
+  const turn = history.turns.slice(latestUserIndex + 1).find((candidate) => Boolean(candidate.response))
+  return turn ? `turn-${turn.turn_number}-assistant` : null
+}
+
 function legacyAnchorAfterLiveCapability(history: HistoryResponse, liveItem: TranscriptItem): string | null {
   for (let turnIndex = 0; turnIndex < history.turns.length; turnIndex += 1) {
     const turn = history.turns[turnIndex]
@@ -274,6 +295,13 @@ function legacyAnchorAfterLiveCapability(history: HistoryResponse, liveItem: Tra
     }
   }
   return null
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index] as T)) return index
+  }
+  return -1
 }
 
 function toolMatchesLiveItem(tool: ToolCallInfo, liveItem: TranscriptItem): boolean {

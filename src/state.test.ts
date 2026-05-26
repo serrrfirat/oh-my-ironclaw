@@ -679,4 +679,53 @@ describe("UI state", () => {
     expect(activityText(withFinalHistory.transcript.find((item) => item.id === "capability-run-1"))).toContain("fn main() {}")
     expect(withFinalHistory.transcript.some((item) => item.id === "turn-2-tool-result:tool-output")).toBe(false)
   })
+
+  test("keeps unmatched failed previews before the final assistant reply", () => {
+    const withFailedPreview = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        invocation_id: "run-1",
+        capability_id: "builtin.read_file",
+        status: "failed",
+        title: "read_file",
+        output_summary: "tool failed: operation_failed",
+        output_kind: "text",
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+    const withFinalHistory = reduceUiState(withFailedPreview, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_message_id: "user-1",
+            user_input: "read it",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+          {
+            turn_number: 2,
+            user_input: "",
+            response: "I could not read that file.",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+        ],
+        has_more: false,
+      },
+    })
+
+    expect(withFinalHistory.transcript.map((item) => item.id)).toEqual([
+      "user-1",
+      "capability-run-1",
+      "turn-2-assistant",
+    ])
+    expect(activityText(withFinalHistory.transcript[1])).toContain("Failed read_file")
+  })
 })
