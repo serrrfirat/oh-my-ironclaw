@@ -2,31 +2,29 @@ import { describe, expect, test } from "bun:test"
 import { localCliCommandForInput, slashCommandsForMode } from "./slashCommands"
 
 describe("slash commands", () => {
-  test("exposes Reborn skill catalog commands in local mode", () => {
+  test("uses product workflow skills command in remote mode", () => {
+    expect(slashCommandsForMode("remote")).toContainEqual(expect.objectContaining({
+      name: "/skills",
+      source: "remote",
+    }))
+  })
+
+  test("uses local Reborn skill catalog command in local mode", () => {
     const commands = slashCommandsForMode("local")
 
     expect(commands).toContainEqual(expect.objectContaining({
       name: "/skills",
+      source: "local",
       localArgs: ["skills", "list"],
     }))
-    expect(commands).toContainEqual(expect.objectContaining({
-      name: "/skills-verbose",
-      localArgs: ["skills", "list", "--verbose"],
-    }))
-    expect(commands).toContainEqual(expect.objectContaining({
-      name: "/skills-json",
-      localArgs: ["skills", "list", "--json", "--verbose"],
-    }))
+    expect(commands.filter((command) => command.name === "/skills")).toHaveLength(1)
   })
 
-  test("maps skill catalog command input to local CLI args", () => {
+  test("maps local mode skills input to local CLI args", () => {
     expect(localCliCommandForInput("/skills", "local")).toEqual(["skills", "list"])
-    expect(localCliCommandForInput("/skills-verbose", "local")).toEqual(["skills", "list", "--verbose"])
-    expect(localCliCommandForInput("/skills-json", "local")).toEqual(["skills", "list", "--json", "--verbose"])
   })
 
-  test("does not expose local skill commands in remote mode", () => {
-    expect(slashCommandsForMode("remote").some((command) => command.name.startsWith("/skills"))).toBe(false)
+  test("does not intercept skills in remote mode", () => {
     expect(localCliCommandForInput("/skills", "remote")).toBeNull()
   })
 })

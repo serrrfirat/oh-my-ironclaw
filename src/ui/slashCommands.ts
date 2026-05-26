@@ -17,6 +17,20 @@ const REMOTE_PRODUCT_COMMANDS: SlashCommand[] = [
   { name: "/progress", description: "Alias for Reborn product workflow status", source: "remote" },
 ]
 
+const REMOTE_SKILLS_COMMAND: SlashCommand = {
+  name: "/skills",
+  description: "Show product workflow skill catalog",
+  source: "remote",
+}
+
+const LOCAL_SKILLS_COMMAND: SlashCommand = {
+  name: "/skills",
+  description: "Show Reborn local skill catalog",
+  source: "local",
+  action: "local-command",
+  localArgs: ["skills", "list"],
+}
+
 const LOCAL_CLI_COMMANDS: SlashCommand[] = [
   { name: "/doctor", description: "Run ironclaw-reborn doctor", source: "local", action: "local-command", localArgs: ["doctor"] },
   {
@@ -25,21 +39,6 @@ const LOCAL_CLI_COMMANDS: SlashCommand[] = [
     source: "local",
     action: "local-command",
     localArgs: ["profile", "list"],
-  },
-  { name: "/skills", description: "Show Reborn local skill catalog", source: "local", action: "local-command", localArgs: ["skills", "list"] },
-  {
-    name: "/skills-verbose",
-    description: "Show Reborn skill catalog metadata",
-    source: "local",
-    action: "local-command",
-    localArgs: ["skills", "list", "--verbose"],
-  },
-  {
-    name: "/skills-json",
-    description: "Show Reborn skill catalog as verbose JSON",
-    source: "local",
-    action: "local-command",
-    localArgs: ["skills", "list", "--json", "--verbose"],
   },
   {
     name: "/channels",
@@ -105,6 +104,7 @@ const TUI_CONTROL_COMMANDS: SlashCommand[] = [
 export function slashCommandsForMode(mode: ClientMode): SlashCommand[] {
   return [
     ...REMOTE_PRODUCT_COMMANDS,
+    mode === "local" ? LOCAL_SKILLS_COMMAND : REMOTE_SKILLS_COMMAND,
     ...(mode === "local" ? LOCAL_CLI_COMMANDS : []),
     ...TUI_CONTROL_COMMANDS,
   ]
@@ -113,6 +113,7 @@ export function slashCommandsForMode(mode: ClientMode): SlashCommand[] {
 export function localCliCommandForInput(input: string, mode: ClientMode): string[] | null {
   if (mode !== "local") return null
   const trimmed = input.trim()
+  if (LOCAL_SKILLS_COMMAND.name === trimmed) return LOCAL_SKILLS_COMMAND.localArgs ?? null
   const command = LOCAL_CLI_COMMANDS.find((candidate) => candidate.name === trimmed)
   return command?.localArgs ?? null
 }
