@@ -331,7 +331,7 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
       activeRunId: null,
       streamingAssistantId: null,
       transcript: state.transcript.map((item) =>
-        item.id === existingId
+        item.id === existingId && item.role === "assistant"
           ? { ...item, text: content, threadId, meta: assistantTimingMeta(state, item, Date.now()) }
           : item,
       ),

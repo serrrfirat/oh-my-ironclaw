@@ -104,8 +104,7 @@ function transcriptFromLegacyTurns(history: HistoryResponse): TranscriptItem[] {
     for (const [index, tool] of turn.tool_calls.entries()) {
       const activity = toolTranscriptActivity(tool)
       if (!activity) continue
-      const timelineMessageId = tool.kind === "capability_display_preview" ? tool.message_id ?? null : null
-      const resultRef = tool.kind === "capability_display_preview" ? tool.result_ref ?? tool.result ?? null : tool.call_id ?? tool.result ?? null
+      const timelineMessageId = toolTimelineMessageId(tool)
       items.push({
         id: timelineMessageId ?? `turn-${turn.turn_number}-tool-${tool.call_id ?? index}`,
         role: "activity",
@@ -113,9 +112,9 @@ function transcriptFromLegacyTurns(history: HistoryResponse): TranscriptItem[] {
         state: tool.kind === "capability_display_preview" ? tool.status ?? (tool.has_error ? "failed" : turn.state) : tool.has_error ? "failed" : turn.state,
         activity,
         meta: {
-          resultRef,
-          capabilityId: tool.kind === "capability_display_preview" ? tool.capability_id ?? null : null,
-          invocationId: tool.kind === "capability_display_preview" ? tool.call_id ?? null : null,
+          resultRef: toolResultRef(tool),
+          capabilityId: toolCapabilityId(tool),
+          invocationId: toolInvocationId(tool),
           timelineMessageId,
         },
       })
@@ -214,14 +213,14 @@ function matchingLiveCapabilityItem(
 function activityMetaForTool(tool: ToolCallInfo, messageId: string): TranscriptMeta {
   if (tool.kind === "capability_display_preview") {
     return {
-      resultRef: tool.result_ref ?? tool.result ?? null,
-      capabilityId: tool.capability_id ?? null,
-      invocationId: tool.call_id ?? null,
+      resultRef: toolResultRef(tool),
+      capabilityId: toolCapabilityId(tool),
+      invocationId: toolInvocationId(tool),
       timelineMessageId: messageId,
     }
   }
   return {
-    resultRef: tool.call_id ?? tool.result ?? null,
+    resultRef: toolResultRef(tool),
   }
 }
 
@@ -289,6 +288,18 @@ function toolMatchesLiveItem(tool: ToolCallInfo, liveItem: TranscriptItem): bool
 function toolResultRef(tool: ToolCallInfo): string | null {
   if (tool.kind === "capability_display_preview") return tool.result_ref ?? tool.result ?? null
   return tool.call_id ?? tool.result ?? null
+}
+
+function toolTimelineMessageId(tool: ToolCallInfo): string | null {
+  return tool.kind === "capability_display_preview" ? tool.message_id ?? null : null
+}
+
+function toolCapabilityId(tool: ToolCallInfo): string | null {
+  return tool.kind === "capability_display_preview" ? tool.capability_id ?? null : null
+}
+
+function toolInvocationId(tool: ToolCallInfo): string | null {
+  return tool.kind === "capability_display_preview" ? tool.call_id ?? null : null
 }
 
 export function hasAssistantAfterLatestUser(history: HistoryResponse): boolean {

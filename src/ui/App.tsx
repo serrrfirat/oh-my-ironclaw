@@ -151,9 +151,7 @@ export function App({ config }: AppProps) {
       key.preventDefault()
       key.stopPropagation()
       if (showSlashCommands) {
-        setInput("")
-        setActiveOverlay(null)
-        textareaRef.current?.clear()
+        clearComposer()
         return
       }
       if (canCancelRun) void cancelActiveRun()
@@ -437,8 +435,7 @@ export function App({ config }: AppProps) {
   async function submitContent(content: string) {
     const previousAssistantCount = state.transcript.filter((item) => item.role === "assistant").length
     applyOutgoingModelCommand(content)
-    setInput("")
-    textareaRef.current?.clear()
+    clearComposer()
     dispatch({ type: "user_sent", content, threadId: state.activeThreadId })
     try {
       const response = await client.send(content, state.activeThreadId)
@@ -455,59 +452,49 @@ export function App({ config }: AppProps) {
 
   async function runSlashCommand(command: SlashCommand | undefined) {
     if (!command) return
-    if (command.action === "threads") {
-      setInput("")
-      setActiveOverlay(null)
-      textareaRef.current?.clear()
-      await openThreadPalette()
-      return
-    }
-    if (command.action === "models") {
-      setInput("")
-      setActiveOverlay(null)
-      textareaRef.current?.clear()
-      await openModelPalette()
-      return
-    }
-    if (command.action === "cancel-run") {
-      setInput("")
-      setActiveOverlay(null)
-      textareaRef.current?.clear()
-      await cancelActiveRun()
-      return
-    }
-    if (command.action === "load-older") {
-      setInput("")
-      setActiveOverlay(null)
-      textareaRef.current?.clear()
-      await loadOlderHistory()
-      return
-    }
-    if (command.action === "settings") {
-      setInput("")
-      setActiveOverlay("settings")
-      textareaRef.current?.clear()
-      return
-    }
-    if (command.action === "local-command" && command.localArgs && config.mode === "local") {
-      setInput("")
-      setActiveOverlay(null)
-      textareaRef.current?.clear()
-      await runLocalCliCommand(command.name, command.localArgs)
-      return
-    }
-    if (command.action === "quit") {
-      renderer.destroy()
-      return
+    switch (command.action) {
+      case "threads":
+        clearComposer()
+        await openThreadPalette()
+        return
+      case "models":
+        clearComposer()
+        await openModelPalette()
+        return
+      case "cancel-run":
+        clearComposer()
+        await cancelActiveRun()
+        return
+      case "load-older":
+        clearComposer()
+        await loadOlderHistory()
+        return
+      case "settings":
+        clearComposer("settings")
+        return
+      case "local-command":
+        if (command.localArgs && config.mode === "local") {
+          await runLocalCliCommand(command.name, command.localArgs)
+          return
+        }
+        break
+      case "quit":
+        renderer.destroy()
+        return
     }
     setActiveOverlay(null)
     await submitContent(command.name)
   }
 
+  function clearComposer(nextOverlay: ActiveOverlay = null) {
+    setInput("")
+    setActiveOverlay(nextOverlay)
+    textareaRef.current?.clear()
+  }
+
   async function runLocalCliCommand(content: string, args: string[]) {
     const threadId = state.activeThreadId ?? "local"
-    setInput("")
-    textareaRef.current?.clear()
+    clearComposer()
     dispatch({ type: "user_sent", content, threadId })
     try {
       const result = await runRebornCli(config, args)
