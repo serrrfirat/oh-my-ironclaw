@@ -1,11 +1,37 @@
 import type { AppEvent, HistoryResponse, PendingGateInfo, ThreadInfo, ToolCallInfo } from "./gateway/types"
 
+export type TranscriptActivity = {
+  kind: "capability_activity" | "capability_display_preview" | "tool_result_reference"
+  title: string
+  status: string
+  detail?: string | null
+  inputSummary?: string | null
+  outputSummary?: string | null
+  outputPreview?: string | null
+  outputKind?: string | null
+  outputBytes?: number | null
+  truncated?: boolean | null
+}
+
+type TranscriptMeta = {
+  resultRef?: string | null
+  capabilityId?: string | null
+  invocationId?: string | null
+  timelineMessageId?: string | null
+  sentAtMs?: number
+  completedAtMs?: number
+  durationMs?: number
+  projectionId?: string | null
+}
+
 export type TranscriptItem = {
   id: string
-  role: "user" | "assistant" | "system" | "activity"
+  role: "user" | "assistant" | "system" | "activity" | "thinking"
   text: string
   threadId?: string | null
   state?: string
+  meta?: TranscriptMeta
+  activity?: TranscriptActivity
 }
 
 export type ActivityItem = {
@@ -79,7 +105,7 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
       return {
         ...state,
         activeThreadId: action.history.thread_id,
-        transcript: transcriptFromHistory(action.history),
+        transcript: mergeHistoryTranscript(state.transcript, action.history),
         historyCursor: action.history.next_cursor ?? null,
         hasOlderHistory: Boolean(action.history.next_cursor),
         pendingGate: action.history.pending_gate ?? null,
@@ -112,7 +138,13 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         activity: clearRunningActivity(state.activity),
         transcript: [
           ...state.transcript,
-          { id: `user-${Date.now()}`, role: "user", text: action.content, threadId: action.threadId },
+          {
+            id: `user-${Date.now()}`,
+            role: "user",
+            text: action.content,
+            threadId: action.threadId,
+            meta: { sentAtMs: Date.now() },
+          },
         ],
       }
     case "gate_cleared":
@@ -139,6 +171,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
           kind: event.message,
         }),
       }
+    case "thinking_update":
+      return applyThinkingUpdate(state, event)
     case "status":
       return { ...state, status: event.message }
     case "run_status":
@@ -192,6 +226,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
       }
     case "capability_activity":
       return applyCapabilityActivity(state, event)
+    case "capability_display_preview":
+      return applyCapabilityDisplayPreview(state, event)
     case "reasoning_update":
       return {
         ...state,
@@ -258,7 +294,7 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
   }
 }
 
-function transcriptFromHistory(history: HistoryResponse): TranscriptItem[] {
+function transcriptFromHistory(history: HistoryResponse, includeToolPlaceholders = false): TranscriptItem[] {
   return history.turns.flatMap((turn) => {
     const items: TranscriptItem[] = []
     if (turn.user_input) {
@@ -270,15 +306,6 @@ function transcriptFromHistory(history: HistoryResponse): TranscriptItem[] {
         state: turn.state,
       })
     }
-    if (turn.response) {
-      items.push({
-        id: `turn-${turn.turn_number}-assistant`,
-        role: "assistant",
-        text: turn.response,
-        threadId: history.thread_id,
-        state: turn.state,
-      })
-    }
     if (turn.narrative) {
       items.push({
         id: `turn-${turn.turn_number}-narrative`,
@@ -286,6 +313,37 @@ function transcriptFromHistory(history: HistoryResponse): TranscriptItem[] {
         text: turn.narrative,
         threadId: history.thread_id,
         state: turn.state,
+      })
+    }
+    for (const [index, tool] of turn.tool_calls.entries()) {
+      const activity = toolTranscriptActivity(tool)
+      const text = activity ? transcriptActivityText(activity) : null
+      if (!activity && !includeToolPlaceholders) continue
+      const timelineMessageId = tool.kind === "capability_display_preview" ? tool.message_id ?? null : null
+      const resultRef = tool.kind === "capability_display_preview" ? tool.result_ref ?? tool.result ?? null : tool.call_id ?? tool.result ?? null
+      items.push({
+        id: timelineMessageId ? capabilityPreviewTranscriptId(timelineMessageId) : `turn-${turn.turn_number}-tool-${tool.call_id ?? index}`,
+        role: "activity",
+        text: text ?? "",
+        threadId: history.thread_id,
+        state: tool.kind === "capability_display_preview" ? tool.status ?? (tool.has_error ? "failed" : turn.state) : tool.has_error ? "failed" : turn.state,
+        activity: activity ?? undefined,
+        meta: {
+          resultRef,
+          capabilityId: tool.kind === "capability_display_preview" ? tool.capability_id ?? null : null,
+          invocationId: tool.kind === "capability_display_preview" ? tool.call_id ?? null : null,
+          timelineMessageId,
+        },
+      })
+    }
+    if (turn.response) {
+      items.push({
+        id: `turn-${turn.turn_number}-assistant`,
+        role: "assistant",
+        text: turn.response,
+        threadId: history.thread_id,
+        state: turn.state,
+        meta: { durationMs: turnDurationMs(turn.started_at, turn.completed_at) },
       })
     }
     return items
@@ -303,6 +361,67 @@ function mergeTranscript(prefix: TranscriptItem[], suffix: TranscriptItem[]): Tr
   return merged
 }
 
+function mergeHistoryTranscript(current: TranscriptItem[], history: HistoryResponse): TranscriptItem[] {
+  const liveCapabilityItems = current.filter(
+    (item) => item.role === "activity" && item.id.startsWith("capability-") && item.threadId === history.thread_id,
+  )
+  const liveThinkingItems = current.filter(
+    (item) => item.role === "thinking" && item.threadId === history.thread_id,
+  )
+  const preservedThinkingItems = hasAssistantAfterLatestUser(history) ? [] : liveThinkingItems
+  if (liveCapabilityItems.length === 0) return mergeTranscript(transcriptFromHistory(history), preservedThinkingItems)
+
+  const liveByResultRef = new Map<string, TranscriptItem>()
+  const liveByInvocationId = new Map<string, TranscriptItem>()
+  const liveByTimelineMessageId = new Map<string, TranscriptItem>()
+  for (const item of liveCapabilityItems) {
+    const resultRef = item.meta?.resultRef
+    if (resultRef) liveByResultRef.set(resultRef, item)
+    if (item.meta?.invocationId) liveByInvocationId.set(item.meta.invocationId, item)
+    if (item.meta?.timelineMessageId) liveByTimelineMessageId.set(item.meta.timelineMessageId, item)
+  }
+
+  const usedLiveItems = new Set<string>()
+  const merged = transcriptFromHistory(history, true).flatMap((item) => {
+    if (item.role !== "activity") return [item]
+    const liveItem = matchingLiveCapabilityItem(item, liveByTimelineMessageId, liveByInvocationId, liveByResultRef)
+    if (!liveItem) return item.text ? [item] : []
+    usedLiveItems.add(liveItem.id)
+    if (item.meta?.timelineMessageId) {
+      return [
+        {
+          ...item,
+          text: item.text || liveItem.text,
+          meta: { ...liveItem.meta, ...item.meta },
+        },
+      ]
+    }
+    return [liveItem]
+  })
+
+  return mergeTranscript(
+    merged,
+    [...liveCapabilityItems.filter((item) => !usedLiveItems.has(item.id)), ...preservedThinkingItems],
+  )
+}
+
+function matchingLiveCapabilityItem(
+  item: TranscriptItem,
+  liveByTimelineMessageId: Map<string, TranscriptItem>,
+  liveByInvocationId: Map<string, TranscriptItem>,
+  liveByResultRef: Map<string, TranscriptItem>,
+): TranscriptItem | null {
+  const timelineMessageId = item.meta?.timelineMessageId
+  if (timelineMessageId && liveByTimelineMessageId.has(timelineMessageId)) {
+    return liveByTimelineMessageId.get(timelineMessageId) ?? null
+  }
+  const invocationId = item.meta?.invocationId
+  if (invocationId && liveByInvocationId.has(invocationId)) return liveByInvocationId.get(invocationId) ?? null
+  const resultRef = item.meta?.resultRef
+  if (resultRef && liveByResultRef.has(resultRef)) return liveByResultRef.get(resultRef) ?? null
+  return null
+}
+
 function hasAssistantAfterLatestUser(history: HistoryResponse): boolean {
   let hasUser = false
   let assistantAfterUser = false
@@ -318,6 +437,33 @@ function hasAssistantAfterLatestUser(history: HistoryResponse): boolean {
   return assistantAfterUser
 }
 
+function assistantTimingMeta(
+  state: UiState,
+  item?: TranscriptItem,
+  completedAtMs?: number,
+): TranscriptItem["meta"] {
+  const sentAtMs = item?.meta?.sentAtMs ?? latestUserSentAtMs(state.transcript)
+  const meta: TranscriptItem["meta"] = { ...item?.meta }
+  if (sentAtMs) meta.sentAtMs = sentAtMs
+  if (completedAtMs) {
+    meta.completedAtMs = completedAtMs
+    if (sentAtMs) meta.durationMs = Math.max(0, completedAtMs - sentAtMs)
+  }
+  return meta
+}
+
+function latestUserSentAtMs(transcript: TranscriptItem[]): number | undefined {
+  return [...transcript].reverse().find((item) => item.role === "user" && item.meta?.sentAtMs)?.meta?.sentAtMs
+}
+
+function turnDurationMs(startedAt?: string | null, completedAt?: string | null): number | undefined {
+  if (!startedAt || !completedAt) return undefined
+  const started = Date.parse(startedAt)
+  const completed = Date.parse(completedAt)
+  if (!Number.isFinite(started) || !Number.isFinite(completed) || completed < started) return undefined
+  return completed - started
+}
+
 function appendAssistantChunk(state: UiState, content: string, threadId?: string | null): UiState {
   const existingId = state.streamingAssistantId
   if (existingId) {
@@ -326,7 +472,7 @@ function appendAssistantChunk(state: UiState, content: string, threadId?: string
       status: "streaming",
       isThinking: true,
       transcript: state.transcript.map((item) =>
-        item.id === existingId ? { ...item, text: item.text + content } : item,
+        item.id === existingId ? { ...item, text: item.text + content, meta: assistantTimingMeta(state, item) } : item,
       ),
     }
   }
@@ -337,7 +483,7 @@ function appendAssistantChunk(state: UiState, content: string, threadId?: string
     status: "streaming",
     isThinking: true,
     streamingAssistantId: id,
-    transcript: [...state.transcript, { id, role: "assistant", text: content, threadId }],
+    transcript: [...state.transcript, { id, role: "assistant", text: content, threadId, meta: assistantTimingMeta(state) }],
   }
 }
 
@@ -352,11 +498,14 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
       activeRunId: null,
       streamingAssistantId: null,
       transcript: state.transcript.map((item) =>
-        item.id === existingId ? { ...item, text: content, threadId } : item,
+        item.id === existingId
+          ? { ...item, text: content, threadId, meta: assistantTimingMeta(state, item, Date.now()) }
+          : item,
       ),
     }
   }
 
+  const completedAtMs = Date.now()
   return {
     ...state,
     status: "idle",
@@ -365,7 +514,13 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
     activeRunId: null,
     transcript: [
       ...state.transcript,
-      { id: `assistant-${Date.now()}`, role: "assistant", text: content, threadId },
+      {
+        id: `assistant-${completedAtMs}`,
+        role: "assistant",
+        text: content,
+        threadId,
+        meta: assistantTimingMeta(state, undefined, completedAtMs),
+      },
     ],
   }
 }
@@ -392,11 +547,11 @@ function applyCapabilityActivity(
   const active = status === "started" || status === "running"
   const failed = status === "failed" || status === "killed"
   const id = `capability-${event.invocation_id}`
-  const text = capabilityActivityText(event)
+  const transcriptActivity = capabilityEventActivity(event)
   const activityItem: ActivityItem = {
     id,
-    label: capabilityActivityLabel(event.capability_id, status),
-    detail: capabilityActivityDetail(event),
+    label: transcriptActivity.title,
+    detail: transcriptActivity.detail ?? undefined,
     status: active ? "running" : failed ? "error" : "ok",
     kind: active ? "tool_running" : `tool_${status}`,
   }
@@ -406,12 +561,84 @@ function applyCapabilityActivity(
     isThinking: active ? true : state.isThinking,
     status: active ? `running ${event.capability_id}` : state.status,
     activity: upsertActivity(state.activity, activityItem),
-    transcript: upsertTranscriptItem(state.transcript, {
+    transcript: upsertCapabilityTranscriptItem(state.transcript, {
       id,
       role: "activity",
-      text,
+      text: transcriptActivityText(transcriptActivity),
       threadId: event.thread_id,
       state: event.status,
+      activity: transcriptActivity,
+      meta: {
+        capabilityId: event.capability_id,
+        invocationId: event.invocation_id,
+      },
+    }),
+  }
+}
+
+function applyCapabilityDisplayPreview(
+  state: UiState,
+  event: Extract<AppEvent, { type: "capability_display_preview" }>,
+): UiState {
+  const status = statusKey(event.status)
+  const active = status === "started" || status === "running"
+  const failed = status === "failed" || status === "killed"
+  const id = event.timeline_message_id
+    ? capabilityPreviewTranscriptId(event.timeline_message_id)
+    : `capability-${event.invocation_id}`
+  const transcriptActivity = capabilityPreviewEventActivity(event)
+
+  return {
+    ...state,
+    isThinking: active ? true : state.isThinking,
+    status: active ? `running ${event.capability_id}` : state.status,
+    activity: upsertActivity(state.activity, {
+      id,
+      label: transcriptActivity.title,
+      detail: capabilityDisplayPreviewDetail(transcriptActivity),
+      status: active ? "running" : failed ? "error" : "ok",
+      kind: active ? "tool_running" : `tool_${status}`,
+    }),
+    transcript: upsertCapabilityTranscriptItem(state.transcript, {
+      id,
+      role: "activity",
+      text: transcriptActivityText(transcriptActivity),
+      threadId: event.thread_id,
+      state: event.status,
+      activity: transcriptActivity,
+      meta: {
+        capabilityId: event.capability_id,
+        invocationId: event.invocation_id,
+        timelineMessageId: event.timeline_message_id ?? null,
+        resultRef: event.result_ref ?? null,
+      },
+    }),
+  }
+}
+
+function applyThinkingUpdate(
+  state: UiState,
+  event: Extract<AppEvent, { type: "thinking_update" }>,
+): UiState {
+  const id = `thinking-${event.id}`
+  return {
+    ...state,
+    isThinking: true,
+    status: "thinking",
+    activity: upsertActivity(state.activity, {
+      id,
+      label: "Thinking",
+      detail: event.content,
+      status: "running",
+      kind: "thinking",
+    }),
+    transcript: upsertTranscriptItem(state.transcript, {
+      id,
+      role: "thinking",
+      text: event.content,
+      threadId: event.thread_id,
+      state: "running",
+      meta: { projectionId: event.id },
     }),
   }
 }
@@ -422,44 +649,173 @@ function upsertTranscriptItem(items: TranscriptItem[], item: TranscriptItem): Tr
   return items.map((existing, current) => (current === index ? item : existing))
 }
 
-function capabilityActivityText(event: Extract<AppEvent, { type: "capability_activity" }>): string {
+function upsertCapabilityTranscriptItem(items: TranscriptItem[], item: TranscriptItem): TranscriptItem[] {
+  const index = items.findIndex(
+    (existing) =>
+      existing.id === item.id ||
+      (existing.role === "activity" &&
+        item.meta?.invocationId &&
+        existing.meta?.invocationId === item.meta.invocationId),
+  )
+  if (index < 0) return [...items, item]
+
+  return items.map((existing, current) => {
+    if (current !== index) return existing
+    if (existing.meta?.timelineMessageId && !item.meta?.timelineMessageId) {
+      return {
+        ...existing,
+        threadId: item.threadId ?? existing.threadId,
+        state: item.state,
+        meta: {
+          ...item.meta,
+          ...existing.meta,
+          resultRef: existing.meta.resultRef ?? item.meta?.resultRef ?? null,
+        },
+      }
+    }
+    return item
+  })
+}
+
+function capabilityPreviewTranscriptId(timelineMessageId: string): string {
+  return `capability-preview-${timelineMessageId}`
+}
+
+function capabilityEventActivity(event: Extract<AppEvent, { type: "capability_activity" }>): TranscriptActivity {
   const status = statusKey(event.status)
-  const lines = [`${capabilityActivityGlyph(status)} ${capabilityActivityLabel(event.capability_id, status)}`]
-  const detail = capabilityActivityDetail(event)
-  if (detail) lines.push(detail)
-  return lines.join("\n")
-}
-
-function capabilityActivityGlyph(status: string): string {
-  if (status === "completed") return "✓"
-  if (status === "failed" || status === "killed") return "✕"
-  return "∙"
-}
-
-function capabilityActivityLabel(capabilityId: string, status: string): string {
-  switch (status) {
-    case "started":
-    case "running":
-      return `Using ${capabilityId}`
-    case "completed":
-      return `Completed ${capabilityId}`
-    case "failed":
-      return `Failed ${capabilityId}`
-    case "killed":
-      return `Killed ${capabilityId}`
-    default:
-      return `${statusLabel(status)} ${capabilityId}`
+  return {
+    kind: "capability_activity",
+    title: activityTitleForStatus(event.capability_id, status),
+    status,
+    detail: [
+      event.runtime ? `runtime ${event.runtime}` : null,
+      event.provider ? `provider ${event.provider}` : null,
+      typeof event.output_bytes === "number" ? `${formatBytes(event.output_bytes)} output` : null,
+      event.error_kind ? `error ${event.error_kind}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
   }
 }
 
-function capabilityActivityDetail(event: Extract<AppEvent, { type: "capability_activity" }>): string {
+function capabilityPreviewEventActivity(
+  event: Extract<AppEvent, { type: "capability_display_preview" }>,
+): TranscriptActivity {
+  const status = statusKey(event.status)
+  return {
+    kind: "capability_display_preview",
+    title: activityTitleForStatus(event.title || event.capability_id, status),
+    status,
+    detail: event.subtitle,
+    inputSummary: event.input_summary,
+    outputSummary: event.output_summary,
+    outputPreview: event.output_preview,
+    outputKind: event.output_kind,
+    outputBytes: event.output_bytes,
+    truncated: event.truncated,
+  }
+}
+
+function toolTranscriptActivity(tool: ToolCallInfo): TranscriptActivity | null {
+  if (tool.kind === "capability_display_preview") return capabilityToolActivity(tool)
+
+  const status = tool.has_error ? "failed" : "completed"
+  const label = tool.name === "Capability" ? "tool call" : tool.name
+  if (!tool.error && (!tool.result_preview || isGenericCapabilitySummary(tool.result_preview)) && label === "tool call") {
+    return null
+  }
+
+  return {
+    kind: "tool_result_reference",
+    title: label,
+    status,
+    detail: [tool.error, tool.result_preview && !isGenericCapabilitySummary(tool.result_preview) ? tool.result_preview : null]
+      .filter(Boolean)
+      .join(" · "),
+  }
+}
+
+function capabilityToolActivity(tool: Extract<ToolCallInfo, { kind: "capability_display_preview" }>): TranscriptActivity {
+  const status = statusKey(tool.status ?? (tool.has_error ? "failed" : "completed"))
+  const title = tool.name || tool.capability_id || "tool"
+  return {
+    kind: "capability_display_preview",
+    title: activityTitleForStatus(title, status),
+    status,
+    detail: tool.subtitle,
+    inputSummary: tool.input_summary,
+    outputSummary: tool.output_summary,
+    outputPreview: tool.output_preview,
+    outputKind: tool.output_kind,
+    outputBytes: tool.output_bytes,
+    truncated: tool.truncated,
+  }
+}
+
+function isGenericCapabilitySummary(summary: string): boolean {
+  return statusKey(summary) === "capability_completed"
+}
+
+function activityGlyph(status: string): string {
+  if (status === "failed" || status === "killed") return "!"
+  if (status === "started" || status === "running") return "·"
+  return "✓"
+}
+
+function activityTitleForStatus(title: string, status: string): string {
+  switch (status) {
+    case "started":
+    case "running":
+      return `Using ${title}`
+    case "completed":
+      return title
+    case "failed":
+      return `Failed ${title}`
+    case "killed":
+      return `Killed ${title}`
+    default:
+      return `${statusLabel(status)} ${title}`
+  }
+}
+
+export function transcriptActivityLines(activity: TranscriptActivity): string[] {
+  const lines = [`${activityGlyph(activity.status)} ${activity.title}`]
+  if (activity.detail) lines.push(activity.detail)
+  if (activity.inputSummary) lines.push(`input: ${activity.inputSummary}`)
+  const output = transcriptActivityOutputLine(activity)
+  if (output) lines.push(output)
+  if (activity.outputPreview) lines.push(activity.outputPreview)
+  if (activity.truncated) lines.push("truncated")
+  return lines
+}
+
+function transcriptActivityText(activity: TranscriptActivity): string {
+  return transcriptActivityLines(activity).join("\n")
+}
+
+function transcriptActivityOutputLine(activity: TranscriptActivity): string | null {
   const parts = [
-    event.runtime ? `runtime ${event.runtime}` : null,
-    event.provider ? `provider ${event.provider}` : null,
-    typeof event.output_bytes === "number" ? `${formatBytes(event.output_bytes)} output` : null,
-    event.error_kind ? `error ${event.error_kind}` : null,
+    activity.outputSummary,
+    activity.outputKind,
+    typeof activity.outputBytes === "number" ? formatBytes(activity.outputBytes) : null,
   ].filter(Boolean)
-  return parts.join(" · ")
+  if (parts.length === 0) return null
+  return `output: ${parts.join(" · ")}`
+}
+
+function capabilityDisplayPreviewDetail(activity: TranscriptActivity): string {
+  return [
+    activity.detail,
+    activity.outputSummary,
+    activity.outputPreview ? firstLine(activity.outputPreview) : null,
+    activity.truncated ? "truncated" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+}
+
+function firstLine(text: string): string {
+  return text.split(/\r?\n/, 1)[0] ?? ""
 }
 
 function formatBytes(bytes: number): string {

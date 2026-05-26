@@ -142,6 +142,39 @@ describe("UI state", () => {
     expect(state.hasOlderHistory).toBe(true)
   })
 
+  test("does not render generic timeline tool result references", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 2,
+            user_message_id: "tool-1",
+            user_input: "",
+            response: null,
+            state: "finalized",
+            started_at: "",
+            completed_at: null,
+            tool_calls: [
+              {
+                kind: "tool_result_reference",
+                name: "Capability",
+                has_result: true,
+                has_error: false,
+                call_id: "result:run.tool",
+                result_preview: "capability completed",
+              },
+            ],
+          },
+        ],
+        has_more: false,
+      },
+    })
+
+    expect(state.transcript).toEqual([])
+  })
+
   test("prepends older history without duplicating messages", () => {
     const current = reduceUiState(initialUiState, {
       type: "history",
@@ -210,6 +243,31 @@ describe("UI state", () => {
     expect(completed.isThinking).toBe(false)
   })
 
+  test("records assistant response duration from send to final reply", () => {
+    const originalNow = Date.now
+    try {
+      Date.now = () => 1_000
+      const sent = reduceUiState(initialUiState, {
+        type: "user_sent",
+        content: "hello",
+        threadId: "thread-1",
+      })
+      Date.now = () => 3_450
+      const completed = reduceUiState(sent, {
+        type: "event",
+        event: { type: "response", content: "done", thread_id: "thread-1" },
+      })
+
+      expect(completed.transcript.find((item) => item.role === "assistant")?.meta).toMatchObject({
+        sentAtMs: 1_000,
+        completedAtMs: 3_450,
+        durationMs: 2_450,
+      })
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
   test("tracks thinking progress as activity", () => {
     const state = reduceUiState(initialUiState, {
       type: "event",
@@ -224,6 +282,92 @@ describe("UI state", () => {
       status: "running",
       kind: "reflecting",
     })
+  })
+
+  test("renders live projection thinking updates", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "thinking_update",
+        id: "thinking:run-1:1",
+        content: "checking context",
+        thread_id: "thread-1",
+      },
+    })
+
+    expect(state.isThinking).toBe(true)
+    expect(state.activity[0]).toMatchObject({
+      id: "thinking-thinking:run-1:1",
+      label: "Thinking",
+      detail: "checking context",
+      status: "running",
+      kind: "thinking",
+    })
+    expect(state.transcript).toContainEqual({
+      id: "thinking-thinking:run-1:1",
+      role: "thinking",
+      text: "checking context",
+      threadId: "thread-1",
+      state: "running",
+      meta: { projectionId: "thinking:run-1:1" },
+    })
+  })
+
+  test("keeps live thinking through in-progress history but drops it after a final reply", () => {
+    const withThinking = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "thinking_update",
+        id: "thinking:run-1:1",
+        content: "checking context",
+        thread_id: "thread-1",
+      },
+    })
+    const inProgress = reduceUiState(withThinking, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_message_id: "user-1",
+            user_input: "hello",
+            state: "running",
+            started_at: "",
+            tool_calls: [],
+          },
+        ],
+        has_more: false,
+      },
+    })
+    const completed = reduceUiState(inProgress, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_message_id: "user-1",
+            user_input: "hello",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+          {
+            turn_number: 2,
+            user_input: "",
+            response: "done",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+        ],
+        has_more: false,
+      },
+    })
+
+    expect(inProgress.transcript.map((item) => item.role)).toEqual(["user", "thinking"])
+    expect(completed.transcript.map((item) => item.role)).toEqual(["user", "assistant"])
   })
 
   test("tracks tool progress as activity", () => {
@@ -300,7 +444,233 @@ describe("UI state", () => {
       role: "activity",
       state: "completed",
     })
-    expect(completed.transcript[0].text).toContain("Completed builtin.list_dir")
+    expect(completed.transcript[0].text).toContain("builtin.list_dir")
     expect(completed.transcript[0].text).toContain("42 B output")
+  })
+
+  test("enriches capability activity with display previews", () => {
+    const running = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_activity",
+        invocation_id: "run-1",
+        capability_id: "builtin.read_file",
+        status: "running",
+        thread_id: "thread-1",
+      },
+    })
+    const previewed = reduceUiState(running, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        invocation_id: "run-1",
+        capability_id: "builtin.read_file",
+        status: "completed",
+        title: "read_file",
+        subtitle: "src/main.rs",
+        input_summary: "path: src/main.rs",
+        output_summary: "text output",
+        output_preview: "fn main() {}",
+        output_kind: "text",
+        output_bytes: 12,
+        result_ref: "result:tool-output",
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+
+    expect(previewed.activity[0]).toMatchObject({
+      id: "capability-run-1",
+      label: "read_file",
+      detail: "src/main.rs · text output · fn main() {}",
+      status: "ok",
+      kind: "tool_completed",
+    })
+    expect(previewed.transcript).toHaveLength(1)
+    expect(previewed.transcript[0]).toMatchObject({
+      id: "capability-run-1",
+      role: "activity",
+      state: "completed",
+    })
+    expect(previewed.transcript[0].text).toContain("read_file")
+    expect(previewed.transcript[0].text).toContain("input: path: src/main.rs")
+    expect(previewed.transcript[0].text).toContain("output: text output · text · 12 B")
+    expect(previewed.transcript[0].text).toContain("fn main() {}")
+    expect(previewed.transcript[0].text).not.toContain("result: result:tool-output")
+  })
+
+  test("uses timeline message ids from live display previews", () => {
+    const withActivity = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_activity",
+        invocation_id: "run-1",
+        capability_id: "builtin.read_file",
+        status: "running",
+        thread_id: "thread-1",
+      },
+    })
+    const previewed = reduceUiState(withActivity, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        timeline_message_id: "preview-1",
+        invocation_id: "run-1",
+        capability_id: "builtin.read_file",
+        status: "completed",
+        title: "read_file",
+        output_summary: "text output",
+        output_preview: "fn main() {}",
+        output_kind: "text",
+        output_bytes: 12,
+        result_ref: "result:tool-output",
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+
+    expect(previewed.transcript).toHaveLength(1)
+    expect(previewed.transcript[0]).toMatchObject({
+      id: "capability-preview-preview-1",
+      role: "activity",
+      meta: {
+        invocationId: "run-1",
+        timelineMessageId: "preview-1",
+        resultRef: "result:tool-output",
+      },
+    })
+    expect(previewed.transcript[0].text).toContain("fn main() {}")
+  })
+
+  test("renders durable timeline capability display previews from history", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_message_id: "user-1",
+            user_input: "read it",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+          {
+            turn_number: 2,
+            user_message_id: "preview-1",
+            user_input: "",
+            response: null,
+            state: "finalized",
+            started_at: "",
+            completed_at: null,
+            tool_calls: [
+              {
+                kind: "capability_display_preview",
+                message_id: "preview-1",
+                name: "read_file",
+                has_result: true,
+                has_error: false,
+                call_id: "run-1",
+                capability_id: "builtin.read_file",
+                status: "completed",
+                input_summary: "path: src/main.rs",
+                output_summary: "text output",
+                output_preview: "fn main() {}",
+                output_kind: "text",
+                output_bytes: 12,
+                result_ref: "result:tool-output",
+                truncated: false,
+              },
+            ],
+          },
+          {
+            turn_number: 3,
+            user_input: "",
+            response: "done",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+        ],
+        has_more: false,
+      },
+    })
+
+    expect(state.transcript.map((item) => item.id)).toEqual(["user-1", "capability-preview-preview-1", "turn-3-assistant"])
+    expect(state.transcript[1]).toMatchObject({
+      role: "activity",
+      meta: {
+        invocationId: "run-1",
+        timelineMessageId: "preview-1",
+        resultRef: "result:tool-output",
+      },
+    })
+    expect(state.transcript[1].text).toContain("read_file")
+    expect(state.transcript[1].text).toContain("input: path: src/main.rs")
+    expect(state.transcript[1].text).toContain("output: text output · text · 12 B")
+    expect(state.transcript[1].text).toContain("fn main() {}")
+  })
+
+  test("preserves live capability previews when final history arrives", () => {
+    const withPreview = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        invocation_id: "run-1",
+        capability_id: "builtin.read_file",
+        status: "completed",
+        title: "read_file",
+        output_summary: "text output",
+        output_preview: "fn main() {}",
+        output_kind: "text",
+        output_bytes: 12,
+        result_ref: "result:tool-output",
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+    const withFinalHistory = reduceUiState(withPreview, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_message_id: "user-1",
+            user_input: "read it",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+          {
+            turn_number: 2,
+            user_input: "",
+            response: "done",
+            state: "completed",
+            started_at: "",
+            tool_calls: [
+              {
+                kind: "tool_result_reference",
+                name: "Capability",
+                has_result: true,
+                has_error: false,
+                call_id: "result:tool-output",
+                result_preview: "capability completed",
+              },
+            ],
+          },
+        ],
+        has_more: false,
+      },
+    })
+
+    expect(withFinalHistory.transcript.map((item) => item.id)).toEqual([
+      "user-1",
+      "capability-run-1",
+      "turn-2-assistant",
+    ])
+    expect(withFinalHistory.transcript.find((item) => item.id === "capability-run-1")?.text).toContain("fn main() {}")
+    expect(withFinalHistory.transcript.some((item) => item.id === "turn-2-tool-result:tool-output")).toBe(false)
   })
 })

@@ -36,9 +36,17 @@ export type RebornMessageRecord = {
   message_id: string
   thread_id: string
   sequence: number
-  kind: "user" | "assistant" | "system" | "summary" | "checkpoint_reference" | "tool_result_reference"
+  kind:
+    | "user"
+    | "assistant"
+    | "system"
+    | "summary"
+    | "checkpoint_reference"
+    | "tool_result_reference"
+    | "capability_display_preview"
   status: string
   content?: string | null
+  tool_result_ref?: string | null
   turn_id?: string | null
   turn_run_id?: string | null
 }
@@ -98,6 +106,23 @@ export type RebornWebChatEventFrame = {
     error_kind?: string | null
     updated_at?: string
   }
+  preview?: {
+    timeline_message_id?: string | null
+    invocation_id?: string
+    thread_id?: string | null
+    capability_id?: string
+    status?: "started" | "running" | "completed" | "failed" | "killed" | string
+    title?: string
+    subtitle?: string | null
+    input_summary?: string | null
+    output_summary?: string | null
+    output_preview?: string | null
+    output_kind?: string | null
+    output_bytes?: number | null
+    result_ref?: string | null
+    truncated?: boolean
+    updated_at?: string
+  }
   prompt?: { turn_run_id?: string; gate_ref?: string; headline?: string; body?: string }
   run_state?: {
     run_id?: string | null
@@ -115,16 +140,42 @@ export type ThreadListResponse = {
   active_thread?: string | null
 }
 
-export type ToolCallInfo = {
+export type ToolResultReferenceInfo = {
+  kind: "tool_result_reference"
   name: string
-  has_result: boolean
-  has_error: boolean
+  has_result: true
+  has_error: false
   call_id?: string | null
   result_preview?: string | null
   result?: string | null
   error?: string | null
   rationale?: string | null
 }
+
+export type CapabilityDisplayPreviewInfo = {
+  kind: "capability_display_preview"
+  message_id?: string | null
+  name: string
+  has_result: boolean
+  has_error: boolean
+  call_id?: string | null
+  capability_id?: string | null
+  status?: string | null
+  subtitle?: string | null
+  input_summary?: string | null
+  output_summary?: string | null
+  output_preview?: string | null
+  output_kind?: string | null
+  output_bytes?: number | null
+  result_ref?: string | null
+  truncated?: boolean | null
+  result_preview?: string | null
+  result?: string | null
+  error?: string | null
+  rationale?: string | null
+}
+
+export type ToolCallInfo = ToolResultReferenceInfo | CapabilityDisplayPreviewInfo
 
 export type TurnInfo = {
   turn_number: number
@@ -192,6 +243,7 @@ export type AppEvent =
   | { type: "response"; content: string; thread_id: string }
   | { type: "run_status"; status: string; run_id?: string | null; thread_id?: string | null; failure_category?: string | null }
   | { type: "thinking"; message: string; thread_id?: string | null }
+  | { type: "thinking_update"; id: string; content: string; thread_id?: string | null }
   | {
       type: "capability_activity"
       invocation_id: string
@@ -202,6 +254,23 @@ export type AppEvent =
       process_id?: string | null
       output_bytes?: number | null
       error_kind?: string | null
+      thread_id?: string | null
+    }
+  | {
+      type: "capability_display_preview"
+      timeline_message_id?: string | null
+      invocation_id: string
+      capability_id: string
+      status: "started" | "running" | "completed" | "failed" | "killed" | string
+      title: string
+      subtitle?: string | null
+      input_summary?: string | null
+      output_summary?: string | null
+      output_preview?: string | null
+      output_kind?: string | null
+      output_bytes?: number | null
+      result_ref?: string | null
+      truncated: boolean
       thread_id?: string | null
     }
   | { type: "tool_started"; name: string; detail?: string | null; call_id?: string | null; thread_id?: string | null }

@@ -1,134 +1,33 @@
 import { SyntaxStyle, type ScrollBoxRenderable, type TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useReducer, useRef, useState, type RefObject } from "react"
-import type { ClientConfig, ClientMode } from "../config"
+import type { ClientConfig } from "../config"
 import { GatewayClient } from "../gateway/client"
 import type { AppEvent, PendingGateInfo, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
 import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebornProfile"
-import { initialUiState, reduceUiState, type ActivityItem } from "../state"
+import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
+import { initialUiState, reduceUiState, type ActivityItem, type TranscriptItem } from "../state"
+import { TranscriptMessage } from "./TranscriptMessage"
+import {
+  filteredSlashCommands,
+  isSlashCommandInput,
+  localCliCommandForInput,
+  slashCommandsForMode,
+  sourceColor,
+  type SlashCommand,
+} from "./slashCommands"
 
 type AppProps = {
   config: ClientConfig
 }
 
 type GateAction = "approved" | "denied"
-type SlashCommandAction = "threads" | "models" | "cancel-run" | "load-older" | "settings" | "local-command" | "quit"
-type SlashCommandSource = "remote" | "local" | "tui"
 type SettingsSection = "Profile" | "Connection" | "Models" | "Secrets" | "Tools" | "Approvals"
 type SettingsMenuItem = { label: SettingsSection; meta: string }
-type SlashCommand = {
-  name: string
-  description: string
-  source: SlashCommandSource
-  action?: SlashCommandAction
-  localArgs?: string[]
-}
 
 const SLASH_COMMAND_POPUP_LIMIT = 8
 const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Models", "Secrets", "Tools", "Approvals"]
-
-const REMOTE_PRODUCT_COMMANDS: SlashCommand[] = [
-  { name: "/model", description: "Show or switch the active model", source: "remote", action: "models" },
-  { name: "/models", description: "Show available models in the picker", source: "remote", action: "models" },
-  { name: "/status", description: "Show Reborn product workflow status", source: "remote" },
-  { name: "/progress", description: "Alias for Reborn product workflow status", source: "remote" },
-]
-
-const LOCAL_CLI_COMMANDS: SlashCommand[] = [
-  {
-    name: "/doctor",
-    description: "Run ironclaw-reborn doctor",
-    source: "local",
-    action: "local-command",
-    localArgs: ["doctor"],
-  },
-  {
-    name: "/profile",
-    description: "Run ironclaw-reborn profile list",
-    source: "local",
-    action: "local-command",
-    localArgs: ["profile", "list"],
-  },
-  {
-    name: "/skills",
-    description: "Run ironclaw-reborn skills list",
-    source: "local",
-    action: "local-command",
-    localArgs: ["skills", "list"],
-  },
-  {
-    name: "/channels",
-    description: "Run ironclaw-reborn channels list",
-    source: "local",
-    action: "local-command",
-    localArgs: ["channels", "list"],
-  },
-  {
-    name: "/hooks",
-    description: "Run ironclaw-reborn hooks list",
-    source: "local",
-    action: "local-command",
-    localArgs: ["hooks", "list"],
-  },
-  {
-    name: "/model-status",
-    description: "Run ironclaw-reborn models status",
-    source: "local",
-    action: "local-command",
-    localArgs: ["models", "status"],
-  },
-  {
-    name: "/logs",
-    description: "Run ironclaw-reborn logs",
-    source: "local",
-    action: "local-command",
-    localArgs: ["logs"],
-  },
-  {
-    name: "/logs-json",
-    description: "Run ironclaw-reborn logs --json",
-    source: "local",
-    action: "local-command",
-    localArgs: ["logs", "--json"],
-  },
-  {
-    name: "/config-path",
-    description: "Run ironclaw-reborn config path",
-    source: "local",
-    action: "local-command",
-    localArgs: ["config", "path"],
-  },
-  {
-    name: "/traces-status",
-    description: "Run ironclaw-reborn traces status",
-    source: "local",
-    action: "local-command",
-    localArgs: ["traces", "status"],
-  },
-  {
-    name: "/traces-queue",
-    description: "Run ironclaw-reborn traces queue-status",
-    source: "local",
-    action: "local-command",
-    localArgs: ["traces", "queue-status"],
-  },
-  {
-    name: "/traces-credit",
-    description: "Run ironclaw-reborn traces credit",
-    source: "local",
-    action: "local-command",
-    localArgs: ["traces", "credit"],
-  },
-]
-
-const TUI_CONTROL_COMMANDS: SlashCommand[] = [
-  { name: "/settings", description: "Open settings dashboard", source: "tui", action: "settings" },
-  { name: "/threads", description: "Open thread picker", source: "tui", action: "threads" },
-  { name: "/history", description: "Load older timeline messages", source: "tui", action: "load-older" },
-  { name: "/run-cancel", description: "Cancel the active WebChat run", source: "tui", action: "cancel-run" },
-  { name: "/quit", description: "Quit this TUI", source: "tui", action: "quit" },
-]
 
 export function App({ config }: AppProps) {
   const renderer = useRenderer()
@@ -151,6 +50,7 @@ export function App({ config }: AppProps) {
   const [availableModels, setAvailableModels] = useState(config.models)
   const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
   const [selectedModel, setSelectedModel] = useState(config.model)
+  const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(() => new Set())
   const activityFrame = useActivityFrame(state.isThinking)
   const thinkingLabel = thinkingLabelForActivity(state.activity, state.status, state.isThinking)
   const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
@@ -158,6 +58,15 @@ export function App({ config }: AppProps) {
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
   const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
   const canCancelRun = Boolean((state.pendingGate?.thread_id || state.activeThreadId) && (state.pendingGate?.run_id || state.activeRunId))
+
+  const toggleActivityExpanded = (id: string) => {
+    setExpandedActivityIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
@@ -386,7 +295,7 @@ export function App({ config }: AppProps) {
   useEffect(() => {
     setSelectedCommandIndex(0)
     if (!isSlashCommandInput(input)) setShowCommandPalette(false)
-  }, [slashCommandQuery(input)])
+  }, [input])
 
   useEffect(() => {
     let cancelled = false
@@ -761,7 +670,9 @@ export function App({ config }: AppProps) {
           models={availableModels}
           threads={showThreadPalette ? paletteThreads : state.threads}
           transcript={state.transcript}
+          expandedActivityIds={expandedActivityIds}
           onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
+          onToggleActivityExpanded={toggleActivityExpanded}
           onResolve={(action) => void resolveGate(action)}
           onSelectGateAction={setSelectedGateAction}
           onSubmit={submit}
@@ -1233,7 +1144,9 @@ function ConversationSurface({
   models,
   threads,
   transcript,
+  expandedActivityIds,
   onInputChange,
+  onToggleActivityExpanded,
   onResolve,
   onSelectGateAction,
   onSubmit,
@@ -1262,8 +1175,10 @@ function ConversationSurface({
   activeThreadId?: string | null
   models: string[]
   threads: ThreadInfo[]
-  transcript: Array<{ id: string; role: string; text: string; state?: string }>
+  transcript: TranscriptItem[]
+  expandedActivityIds: Set<string>
   onInputChange: () => void
+  onToggleActivityExpanded: (id: string) => void
   onResolve: (action: GateAction) => void
   onSelectGateAction: (action: GateAction) => void
   onSubmit: () => void
@@ -1274,12 +1189,13 @@ function ConversationSurface({
   const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight)
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const transcriptEndKey = transcript.map((item) => `${item.id}:${item.text.length}`).join("|")
+  const expandedActivityKey = [...expandedActivityIds].sort().join("|")
 
   useEffect(() => {
     const scrollbox = transcriptScrollRef.current
     if (!scrollbox) return
     scrollbox.scrollTo({ x: 0, y: scrollbox.scrollHeight })
-  }, [transcriptEndKey, transcriptHeight])
+  }, [transcriptEndKey, transcriptHeight, expandedActivityKey])
 
   return (
     <box style={{ height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505", paddingTop: 1 }}>
@@ -1296,7 +1212,16 @@ function ConversationSurface({
       >
         {showOlderHistoryHint ? <LoadOlderHint width={contentWidth} /> : null}
         {transcript.map((item) => (
-          <TranscriptMessage key={item.id} item={item} markdownStyle={markdownStyle} selectedModel={selectedModel} width={contentWidth} />
+          <TranscriptMessage
+            key={item.id}
+            item={item}
+            expanded={expandedActivityIds.has(item.id)}
+            markdownStyle={markdownStyle}
+            selectedModel={selectedModel}
+            spinner={spinner}
+            width={contentWidth}
+            onToggleActivityExpanded={onToggleActivityExpanded}
+          />
         ))}
         {isThinking ? <ThinkingMessage selectedModel={selectedModel} spinner={spinner} thinkingLabel={thinkingLabel} width={contentWidth} /> : null}
       </scrollbox>
@@ -1335,71 +1260,6 @@ function ConversationSurface({
         onSubmit={onSubmit}
       />
       {lastError ? <StatusLine connected={false} status="error" message={lastError} width={composerWidth} /> : null}
-    </box>
-  )
-}
-
-function TranscriptMessage({
-  item,
-  markdownStyle,
-  selectedModel,
-  width,
-}: {
-  item: { id: string; role: string; text: string; state?: string }
-  markdownStyle: SyntaxStyle
-  selectedModel: string
-  width: number
-}) {
-  if (item.role === "user") {
-    return (
-      <box style={{ width, flexDirection: "row", backgroundColor: "#141414", marginBottom: 2 }}>
-        <box style={{ width: 1, backgroundColor: "#2ee66b" }} />
-        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-          <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
-        </box>
-      </box>
-    )
-  }
-
-  if (item.role === "assistant") {
-    return (
-      <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
-        <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
-        <BuildLine selectedModel={selectedModel} />
-      </box>
-    )
-  }
-
-  if (item.role === "activity") {
-    const status = uiStatusKey(item.state ?? "")
-    const rail = status === "failed" || status === "killed" ? "#ff6b6b" : status === "completed" ? "#2ee66b" : "#8cffb0"
-    const [headline, ...detail] = item.text.split("\n")
-    return (
-      <box style={{ width, flexDirection: "row", backgroundColor: "#111111", marginBottom: 2 }}>
-        <box style={{ width: 1, backgroundColor: rail }} />
-        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-          <text fg={rail}>{headline || "Using tool"}</text>
-          {detail.length ? <text fg="#8a8a8a">{truncate(detail.join(" · "), Math.max(1, width - 5))}</text> : null}
-        </box>
-      </box>
-    )
-  }
-
-  return (
-    <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
-      <text fg="#d29922">{item.text || " "}</text>
-    </box>
-  )
-}
-
-function BuildLine({ selectedModel }: { selectedModel: string }) {
-  return (
-    <box style={{ height: 1, flexDirection: "row", marginTop: 1 }}>
-      <text fg="#2ee66b">▣</text>
-      <text fg="#2ee66b"> Build</text>
-      <text fg="#777777"> · </text>
-      <text fg="#d0d0d0">{selectedModel}</text>
-      <text fg="#777777"> · 1.6s</text>
     </box>
   )
 }
@@ -1859,17 +1719,6 @@ function commandPopupHint(start: number, count: number, total: number): string {
   return `up/down select · enter run · esc close${range}`
 }
 
-function sourceColor(source: SlashCommandSource): string {
-  switch (source) {
-    case "remote":
-      return "#8cffb0"
-    case "local":
-      return "#f6ad3c"
-    case "tui":
-      return "#7aa2f7"
-  }
-}
-
 function slashCommandPopupHeight(commands: SlashCommand[]): number {
   return Math.min(commands.length, SLASH_COMMAND_POPUP_LIMIT) + 3
 }
@@ -1914,41 +1763,6 @@ function activeThreadFallback(threadId?: string | null): ThreadInfo[] {
   ]
 }
 
-function slashCommandsForMode(mode: ClientMode): SlashCommand[] {
-  return [
-    ...REMOTE_PRODUCT_COMMANDS,
-    ...(mode === "local" ? LOCAL_CLI_COMMANDS : []),
-    ...TUI_CONTROL_COMMANDS,
-  ]
-}
-
-function localCliCommandForInput(input: string, mode: ClientMode): string[] | null {
-  if (mode !== "local") return null
-  const trimmed = input.trim()
-  const command = LOCAL_CLI_COMMANDS.find((candidate) => candidate.name === trimmed)
-  return command?.localArgs ?? null
-}
-
-function filteredSlashCommands(input: string, commands: SlashCommand[]): SlashCommand[] {
-  if (!isSlashCommandInput(input)) return []
-  const query = slashCommandQuery(input)
-  if (!query) return commands
-  return commands.filter((command) => {
-    const haystack = `${command.name} ${command.source} ${command.description}`.toLowerCase()
-    return haystack.includes(query)
-  })
-}
-
-function isSlashCommandInput(input: string): boolean {
-  const trimmed = input.trimStart()
-  return trimmed.startsWith("/") && !trimmed.includes(" ")
-}
-
-function slashCommandQuery(input: string): string {
-  if (!isSlashCommandInput(input)) return ""
-  return input.trimStart().slice(1).toLowerCase()
-}
-
 function wrapIndex(index: number, length: number): number {
   if (length <= 0) return 0
   return ((index % length) + length) % length
@@ -1979,64 +1793,6 @@ function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, {
   return ["completed", "failed", "cancelled", "killed"].includes(event.status)
 }
 
-type CliResult = {
-  command: string
-  exitCode: number
-  stdout: string
-  stderr: string
-}
-
-async function runRebornCli(config: ClientConfig, args: string[]): Promise<CliResult> {
-  const invocation = rebornCliInvocation(config, args)
-  const proc = Bun.spawn(invocation.argv, {
-    cwd: invocation.cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: process.env,
-  })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  return { command: invocation.command, exitCode, stdout, stderr }
-}
-
-function rebornCliInvocation(config: ClientConfig, args: string[]): { argv: string[]; command: string; cwd?: string } {
-  if (!config.rebornSource) {
-    const argv = [config.rebornBin, ...args]
-    return { argv, command: shellCommand(argv) }
-  }
-
-  const argv = ["cargo", "run", "-p", "ironclaw"]
-  if (config.rebornFeatures) argv.push("--features", config.rebornFeatures)
-  argv.push("--bin", "ironclaw", "--", ...args)
-  return {
-    argv,
-    command: `(cd ${shellWord(config.rebornSource)} && ${shellCommand(argv)})`,
-    cwd: config.rebornSource,
-  }
-}
-
-function formatRebornCliCommand(config: ClientConfig, args: string[]): string {
-  return rebornCliInvocation(config, args).command
-}
-
-function formatLocalCliResult(result: CliResult): string {
-  const body = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n\n")
-  const suffix = result.exitCode === 0 ? "" : `\n\n(exit ${result.exitCode})`
-  return `$ ${result.command}\n\n${body || "(no output)"}${suffix}`
-}
-
-function shellCommand(argv: string[]): string {
-  return argv.map(shellWord).join(" ")
-}
-
-function shellWord(value: string): string {
-  if (/^[A-Za-z0-9_./:=+-]+$/.test(value)) return value
-  return `'${value.replaceAll("'", "'\\''")}'`
-}
-
 function thinkingLabelForActivity(activity: ActivityItem[], status: string, isThinking: boolean): string {
   if (!isThinking) return "thinking"
   const runningActivity = [...activity].reverse().find((item) => item.status === "running")
@@ -2058,7 +1814,8 @@ function thinkingLabelForActivity(activity: ActivityItem[], status: string, isTh
   }
 }
 
-function uiStatusKey(value: string): string {
+function uiStatusKey(value: unknown): string {
+  if (typeof value !== "string") return ""
   return value.trim().toLowerCase().replace(/\s+/g, "_")
 }
 
