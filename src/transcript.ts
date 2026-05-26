@@ -164,9 +164,11 @@ export function mergeHistoryTranscript(current: TranscriptItem[], history: Histo
     if (item.meta?.timelineMessageId) liveByTimelineMessageId.set(item.meta.timelineMessageId, item)
   }
 
+  const historyTranscript = transcriptFromHistory(history)
   const usedLiveItems = new Set<string>()
   const transcriptIdByLiveId = new Map<string, string>()
-  const merged = transcriptFromHistory(history).flatMap((item) => {
+  const transcriptIdByCurrentId = currentTranscriptIdMap(current, historyTranscript)
+  const merged = historyTranscript.flatMap((item) => {
     if (item.role !== "activity") return [item]
     const liveItem = matchingLiveCapabilityItem(item, liveByTimelineMessageId, liveByInvocationId, liveByResultRef)
     if (!liveItem) return [item]
@@ -177,17 +179,21 @@ export function mergeHistoryTranscript(current: TranscriptItem[], history: Histo
         meta: { ...liveItem.meta, ...item.meta },
       }
       transcriptIdByLiveId.set(liveItem.id, mergedItem.id)
+      transcriptIdByCurrentId.set(liveItem.id, mergedItem.id)
       return [mergedItem]
     }
     transcriptIdByLiveId.set(liveItem.id, liveItem.id)
+    transcriptIdByCurrentId.set(liveItem.id, liveItem.id)
     return [liveItem]
   })
 
   const positionedLiveItems = placeUnmatchedLiveCapabilityItems(
     merged,
+    current,
     liveCapabilityItems,
     usedLiveItems,
     transcriptIdByLiveId,
+    transcriptIdByCurrentId,
     history,
   )
   return mergeTranscript(positionedLiveItems, preservedThinkingItems)
@@ -230,9 +236,11 @@ function activityMetaForTool(tool: ToolCallInfo, messageId: string): TranscriptM
 
 function placeUnmatchedLiveCapabilityItems(
   transcript: TranscriptItem[],
+  current: TranscriptItem[],
   liveItems: TranscriptItem[],
   usedLiveItems: Set<string>,
   transcriptIdByLiveId: Map<string, string>,
+  transcriptIdByCurrentId: Map<string, string>,
   history: HistoryResponse,
 ): TranscriptItem[] {
   let positioned = transcript
@@ -240,16 +248,74 @@ function placeUnmatchedLiveCapabilityItems(
     if (usedLiveItems.has(liveItem.id)) continue
     if (positioned.some((item) => item.id === liveItem.id)) continue
     const anchorId =
-      followingLiveCapabilityAnchor(liveItems, liveItem, transcriptIdByLiveId, positioned) ??
-      historyAnchorAfterLiveCapability(history, liveItem)
+      followingCurrentTranscriptAnchor(current, liveItem, transcriptIdByCurrentId, positioned) ??
+      followingLiveCapabilityAnchor(liveItems, liveItem, transcriptIdByLiveId, positioned)
     const anchorIndex = anchorId ? positioned.findIndex((item) => item.id === anchorId) : -1
-    if (anchorIndex < 0) {
-      positioned = [...positioned, liveItem]
+    if (anchorIndex >= 0) {
+      positioned = [...positioned.slice(0, anchorIndex), liveItem, ...positioned.slice(anchorIndex)]
       continue
     }
-    positioned = [...positioned.slice(0, anchorIndex), liveItem, ...positioned.slice(anchorIndex)]
+    const previousId = previousCurrentTranscriptAnchor(current, liveItem, transcriptIdByCurrentId, positioned)
+    const previousIndex = previousId ? positioned.findIndex((item) => item.id === previousId) : -1
+    if (previousIndex < 0) {
+      const historyAnchorId = historyAnchorAfterLiveCapability(history, liveItem)
+      const historyAnchorIndex = historyAnchorId ? positioned.findIndex((item) => item.id === historyAnchorId) : -1
+      positioned = historyAnchorIndex >= 0
+        ? [...positioned.slice(0, historyAnchorIndex), liveItem, ...positioned.slice(historyAnchorIndex)]
+        : [...positioned, liveItem]
+      continue
+    }
+    positioned = [...positioned.slice(0, previousIndex + 1), liveItem, ...positioned.slice(previousIndex + 1)]
   }
   return positioned
+}
+
+function currentTranscriptIdMap(current: TranscriptItem[], historyTranscript: TranscriptItem[]): Map<string, string> {
+  const map = new Map<string, string>()
+  const usedHistoryIds = new Set<string>()
+  for (const item of current) {
+    const matched = historyTranscript.find((candidate) => !usedHistoryIds.has(candidate.id) && transcriptItemsMatch(item, candidate))
+    if (!matched) continue
+    map.set(item.id, matched.id)
+    usedHistoryIds.add(matched.id)
+  }
+  return map
+}
+
+function transcriptItemsMatch(current: TranscriptItem, history: TranscriptItem): boolean {
+  if (current.threadId !== history.threadId || current.role !== history.role) return false
+  if (current.role === "activity" || history.role === "activity") return current.id === history.id
+  return current.text === history.text
+}
+
+function followingCurrentTranscriptAnchor(
+  current: TranscriptItem[],
+  liveItem: TranscriptItem,
+  transcriptIdByCurrentId: Map<string, string>,
+  transcript: TranscriptItem[],
+): string | null {
+  const liveIndex = current.findIndex((item) => item.id === liveItem.id)
+  for (const laterItem of current.slice(liveIndex + 1)) {
+    const transcriptId = transcriptIdByCurrentId.get(laterItem.id) ?? laterItem.id
+    if (transcript.some((item) => item.id === transcriptId)) return transcriptId
+  }
+  return null
+}
+
+function previousCurrentTranscriptAnchor(
+  current: TranscriptItem[],
+  liveItem: TranscriptItem,
+  transcriptIdByCurrentId: Map<string, string>,
+  transcript: TranscriptItem[],
+): string | null {
+  const liveIndex = current.findIndex((item) => item.id === liveItem.id)
+  for (let index = liveIndex - 1; index >= 0; index -= 1) {
+    const previousItem = current[index]
+    if (!previousItem) continue
+    const transcriptId = transcriptIdByCurrentId.get(previousItem.id) ?? previousItem.id
+    if (transcript.some((item) => item.id === transcriptId)) return transcriptId
+  }
+  return null
 }
 
 function followingLiveCapabilityAnchor(

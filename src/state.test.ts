@@ -810,4 +810,61 @@ describe("UI state", () => {
     expect(activityText(withFinalHistory.transcript[1])).toContain("Failed shell")
     expect(activityText(withFinalHistory.transcript[2])).toContain("glob")
   })
+
+  test("keeps unmatched failed previews after preceding assistant text", () => {
+    const withAssistantText = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "response",
+        content: "I can try grep another way.",
+        thread_id: "thread-1",
+      },
+    })
+    const withFailedGrep = reduceUiState(withAssistantText, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        invocation_id: "grep-1",
+        capability_id: "grep",
+        status: "failed",
+        title: "grep",
+        output_summary: "tool failed: invalid_input",
+        output_kind: "text",
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+    const withFinalHistory = reduceUiState(withFailedGrep, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_message_id: "user-1",
+            user_input: "try something else",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+          {
+            turn_number: 2,
+            user_input: "",
+            response: "I can try grep another way.",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+        ],
+        has_more: false,
+      },
+    })
+
+    expect(withFinalHistory.transcript.map((item) => item.id)).toEqual([
+      "user-1",
+      "turn-2-assistant",
+      "capability-grep-1",
+    ])
+    expect(activityText(withFinalHistory.transcript[2])).toContain("Failed grep")
+  })
 })
