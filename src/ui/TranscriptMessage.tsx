@@ -62,9 +62,9 @@ export function TranscriptMessage({
   }
 
   if (item.role === "activity") {
-    const lines = item.activity ? transcriptActivityLines(item.activity) : item.text.split("\n")
+    const lines = transcriptActivityLines(item.activity)
     const [headline, ...detail] = lines
-    const status = item.activity?.status ?? uiStatusKey(item.state ?? "")
+    const status = item.activity.status
     const failed = status === "failed" || status === "killed"
     const running = status === "started" || status === "running"
     const rail = failed ? "#d85d5d" : running ? "#8a8a8a" : "#2ea043"
@@ -142,9 +142,4 @@ function collapsedActivitySummary(lines: string[]): string | null {
   if (output) return output.slice("output: ".length)
   const firstVisible = lines.find((line) => line && !line.startsWith("result: ") && !line.startsWith("input: "))
   return firstVisible ?? null
-}
-
-function uiStatusKey(value: unknown): string {
-  if (typeof value !== "string") return ""
-  return value.trim().toLowerCase().replace(/\s+/g, "_")
 }

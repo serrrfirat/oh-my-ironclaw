@@ -177,6 +177,24 @@ export type CapabilityDisplayPreviewInfo = {
 
 export type ToolCallInfo = ToolResultReferenceInfo | CapabilityDisplayPreviewInfo
 
+export type TimelineMessageInfo =
+  | {
+      kind: "user" | "assistant" | "system" | "summary"
+      id: string
+      thread_id: string
+      sequence: number
+      status: string
+      content: string
+    }
+  | {
+      kind: "tool_result_reference" | "capability_display_preview"
+      id: string
+      thread_id: string
+      sequence: number
+      status: string
+      activity: ToolCallInfo
+    }
+
 export type TurnInfo = {
   turn_number: number
   user_message_id?: string | null
@@ -212,6 +230,7 @@ export type InProgressInfo = {
 
 export type HistoryResponse = {
   thread_id: string
+  messages?: TimelineMessageInfo[]
   turns: TurnInfo[]
   has_more: boolean
   next_cursor?: string | null

@@ -28,26 +28,23 @@ describe("WebChat event mapping", () => {
 
     try {
       const history = await client.history("thread-1")
-      expect(history.turns).toEqual([
+      expect(history.turns).toEqual([])
+      expect(history.messages).toEqual([
         {
-          turn_number: 2,
-          user_message_id: "tool-1",
-          user_input: "",
-          response: null,
-          state: "finalized",
-          started_at: "",
-          completed_at: null,
-          tool_calls: [
-            {
-              kind: "tool_result_reference",
-              name: "Capability",
-              has_result: true,
-              has_error: false,
-              call_id: "result:run.tool",
-              result_preview: "capability completed",
-              result: "result:run.tool",
-            },
-          ],
+          kind: "tool_result_reference",
+          id: "tool-1",
+          thread_id: "thread-1",
+          sequence: 2,
+          status: "finalized",
+          activity: {
+            kind: "tool_result_reference",
+            name: "Capability",
+            has_result: true,
+            has_error: false,
+            call_id: "result:run.tool",
+            result_preview: "capability completed",
+            result: "result:run.tool",
+          },
         },
       ])
     } finally {
@@ -92,38 +89,35 @@ describe("WebChat event mapping", () => {
 
     try {
       const history = await client.history("thread-1")
-      expect(history.turns).toEqual([
+      expect(history.turns).toEqual([])
+      expect(history.messages).toEqual([
         {
-          turn_number: 2,
-          user_message_id: "preview-1",
-          user_input: "",
-          response: null,
-          state: "finalized",
-          started_at: "",
-          completed_at: null,
-          tool_calls: [
-            {
-              kind: "capability_display_preview",
-              message_id: "preview-1",
-              name: "read_file",
-              has_result: true,
-              has_error: false,
-              call_id: "run-1",
-              capability_id: "builtin.read_file",
-              status: "completed",
-              subtitle: "src/main.rs",
-              input_summary: "path: src/main.rs",
-              output_summary: "text output",
-              output_preview: "fn main() {}",
-              output_kind: "text",
-              output_bytes: 12,
-              result_ref: "result:tool-output",
-              truncated: false,
-              result_preview: "text output",
-              result: "result:tool-output",
-              error: null,
-            },
-          ],
+          kind: "capability_display_preview",
+          id: "preview-1",
+          thread_id: "thread-1",
+          sequence: 2,
+          status: "finalized",
+          activity: {
+            kind: "capability_display_preview",
+            message_id: "preview-1",
+            name: "read_file",
+            has_result: true,
+            has_error: false,
+            call_id: "run-1",
+            capability_id: "builtin.read_file",
+            status: "completed",
+            subtitle: "src/main.rs",
+            input_summary: "path: src/main.rs",
+            output_summary: "text output",
+            output_preview: "fn main() {}",
+            output_kind: "text",
+            output_bytes: 12,
+            result_ref: "result:tool-output",
+            truncated: false,
+            result_preview: "text output",
+            result: "result:tool-output",
+            error: null,
+          },
         },
       ])
     } finally {

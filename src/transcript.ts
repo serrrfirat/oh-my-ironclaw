@@ -1,4 +1,4 @@
-import type { AppEvent, HistoryResponse, ToolCallInfo } from "./gateway/types"
+import type { AppEvent, HistoryResponse, TimelineMessageInfo, ToolCallInfo } from "./gateway/types"
 
 export type TranscriptActivity = {
   kind: "capability_activity" | "capability_display_preview" | "tool_result_reference"
@@ -24,17 +24,63 @@ export type TranscriptMeta = {
   projectionId?: string | null
 }
 
-export type TranscriptItem = {
+type TranscriptBase = {
   id: string
-  role: "user" | "assistant" | "system" | "activity" | "thinking"
-  text: string
   threadId?: string | null
   state?: string
   meta?: TranscriptMeta
-  activity?: TranscriptActivity
 }
 
-export function transcriptFromHistory(history: HistoryResponse, includeToolPlaceholders = false): TranscriptItem[] {
+export type TranscriptItem =
+  | (TranscriptBase & { role: "user" | "assistant" | "system" | "thinking"; text: string })
+  | (TranscriptBase & { role: "activity"; activity: TranscriptActivity })
+
+export function transcriptFromHistory(history: HistoryResponse): TranscriptItem[] {
+  if (history.messages) return transcriptFromTimelineMessages(history.messages)
+  return transcriptFromLegacyTurns(history)
+}
+
+function transcriptFromTimelineMessages(messages: TimelineMessageInfo[]): TranscriptItem[] {
+  return messages.flatMap((message) => {
+    switch (message.kind) {
+      case "user":
+        return [transcriptTextItem(message, "user")]
+      case "assistant":
+      case "summary":
+        return [transcriptTextItem(message, "assistant")]
+      case "system":
+        return [transcriptTextItem(message, "system")]
+      case "tool_result_reference":
+      case "capability_display_preview": {
+        const activity = toolTranscriptActivity(message.activity)
+        if (!activity) return []
+        return [{
+          id: message.id,
+          role: "activity" as const,
+          threadId: message.thread_id,
+          state: message.status,
+          activity,
+          meta: activityMetaForTool(message.activity, message.id),
+        }]
+      }
+    }
+  })
+}
+
+function transcriptTextItem(
+  message: Extract<TimelineMessageInfo, { kind: "user" | "assistant" | "system" | "summary" }>,
+  role: "user" | "assistant" | "system",
+): TranscriptItem {
+  return {
+    id: message.id,
+    role,
+    text: message.content,
+    threadId: message.thread_id,
+    state: message.status,
+  }
+}
+
+function transcriptFromLegacyTurns(history: HistoryResponse): TranscriptItem[] {
   return history.turns.flatMap((turn) => {
     const items: TranscriptItem[] = []
     if (turn.user_input) {
@@ -57,17 +103,15 @@ export function transcriptFromHistory(history: HistoryResponse, includeToolPlace
     }
     for (const [index, tool] of turn.tool_calls.entries()) {
       const activity = toolTranscriptActivity(tool)
-      const text = activity ? transcriptActivityText(activity) : null
-      if (!activity && !includeToolPlaceholders) continue
+      if (!activity) continue
       const timelineMessageId = tool.kind === "capability_display_preview" ? tool.message_id ?? null : null
       const resultRef = tool.kind === "capability_display_preview" ? tool.result_ref ?? tool.result ?? null : tool.call_id ?? tool.result ?? null
       items.push({
-        id: timelineMessageId ? capabilityPreviewTranscriptId(timelineMessageId) : `turn-${turn.turn_number}-tool-${tool.call_id ?? index}`,
+        id: timelineMessageId ?? `turn-${turn.turn_number}-tool-${tool.call_id ?? index}`,
         role: "activity",
-        text: text ?? "",
         threadId: history.thread_id,
         state: tool.kind === "capability_display_preview" ? tool.status ?? (tool.has_error ? "failed" : turn.state) : tool.has_error ? "failed" : turn.state,
-        activity: activity ?? undefined,
+        activity,
         meta: {
           resultRef,
           capabilityId: tool.kind === "capability_display_preview" ? tool.capability_id ?? null : null,
@@ -103,7 +147,7 @@ export function mergeTranscript(prefix: TranscriptItem[], suffix: TranscriptItem
 
 export function mergeHistoryTranscript(current: TranscriptItem[], history: HistoryResponse): TranscriptItem[] {
   const liveCapabilityItems = current.filter(
-    (item) => item.role === "activity" && item.id.startsWith("capability-") && item.threadId === history.thread_id,
+    (item) => item.role === "activity" && item.threadId === history.thread_id,
   )
   const liveThinkingItems = current.filter(
     (item) => item.role === "thinking" && item.threadId === history.thread_id,
@@ -122,16 +166,15 @@ export function mergeHistoryTranscript(current: TranscriptItem[], history: Histo
   }
 
   const usedLiveItems = new Set<string>()
-  const merged = transcriptFromHistory(history, true).flatMap((item) => {
+  const merged = transcriptFromHistory(history).flatMap((item) => {
     if (item.role !== "activity") return [item]
     const liveItem = matchingLiveCapabilityItem(item, liveByTimelineMessageId, liveByInvocationId, liveByResultRef)
-    if (!liveItem) return item.text ? [item] : []
+    if (!liveItem) return [item]
     usedLiveItems.add(liveItem.id)
     if (item.meta?.timelineMessageId) {
       return [
         {
           ...item,
-          text: item.text || liveItem.text,
           meta: { ...liveItem.meta, ...item.meta },
         },
       ]
@@ -139,14 +182,16 @@ export function mergeHistoryTranscript(current: TranscriptItem[], history: Histo
     return [liveItem]
   })
 
-  return mergeTranscript(
+  const positionedLiveItems = placeUnmatchedLiveCapabilityItems(
     merged,
-    [...liveCapabilityItems.filter((item) => !usedLiveItems.has(item.id)), ...preservedThinkingItems],
+    liveCapabilityItems.filter((item) => !usedLiveItems.has(item.id)),
+    history,
   )
+  return mergeTranscript(positionedLiveItems, preservedThinkingItems)
 }
 
 export function capabilityPreviewTranscriptId(timelineMessageId: string): string {
-  return `capability-preview-${timelineMessageId}`
+  return timelineMessageId
 }
 
 function matchingLiveCapabilityItem(
@@ -166,7 +211,88 @@ function matchingLiveCapabilityItem(
   return null
 }
 
+function activityMetaForTool(tool: ToolCallInfo, messageId: string): TranscriptMeta {
+  if (tool.kind === "capability_display_preview") {
+    return {
+      resultRef: tool.result_ref ?? tool.result ?? null,
+      capabilityId: tool.capability_id ?? null,
+      invocationId: tool.call_id ?? null,
+      timelineMessageId: messageId,
+    }
+  }
+  return {
+    resultRef: tool.call_id ?? tool.result ?? null,
+  }
+}
+
+function placeUnmatchedLiveCapabilityItems(
+  transcript: TranscriptItem[],
+  liveItems: TranscriptItem[],
+  history: HistoryResponse,
+): TranscriptItem[] {
+  let positioned = transcript
+  for (const liveItem of liveItems) {
+    if (positioned.some((item) => item.id === liveItem.id)) continue
+    const anchorId = historyAnchorAfterLiveCapability(history, liveItem)
+    const anchorIndex = anchorId ? positioned.findIndex((item) => item.id === anchorId) : -1
+    if (anchorIndex < 0) {
+      positioned = [...positioned, liveItem]
+      continue
+    }
+    positioned = [...positioned.slice(0, anchorIndex), liveItem, ...positioned.slice(anchorIndex)]
+  }
+  return positioned
+}
+
+function historyAnchorAfterLiveCapability(history: HistoryResponse, liveItem: TranscriptItem): string | null {
+  if (history.messages) return timelineAnchorAfterLiveCapability(history.messages, liveItem)
+  return legacyAnchorAfterLiveCapability(history, liveItem)
+}
+
+function timelineAnchorAfterLiveCapability(messages: TimelineMessageInfo[], liveItem: TranscriptItem): string | null {
+  const matchedMessage = messages.find((message) => {
+    if (message.kind !== "tool_result_reference" && message.kind !== "capability_display_preview") return false
+    return toolMatchesLiveItem(message.activity, liveItem)
+  })
+  if (!matchedMessage) return null
+  const anchor = messages.find((message) => message.sequence > matchedMessage.sequence && transcriptMessageIsVisible(message))
+  return anchor?.id ?? null
+}
+
+function transcriptMessageIsVisible(message: TimelineMessageInfo): boolean {
+  return message.kind === "user" || message.kind === "assistant" || message.kind === "system" || message.kind === "summary"
+}
+
+function legacyAnchorAfterLiveCapability(history: HistoryResponse, liveItem: TranscriptItem): string | null {
+  for (let turnIndex = 0; turnIndex < history.turns.length; turnIndex += 1) {
+    const turn = history.turns[turnIndex]
+    if (!turn.tool_calls.some((tool) => toolMatchesLiveItem(tool, liveItem))) continue
+    if (turn.response) return `turn-${turn.turn_number}-assistant`
+    for (const laterTurn of history.turns.slice(turnIndex + 1)) {
+      if (laterTurn.user_input) return laterTurn.user_message_id ?? `turn-${laterTurn.turn_number}-user`
+      if (laterTurn.narrative) return `turn-${laterTurn.turn_number}-narrative`
+      if (laterTurn.response) return `turn-${laterTurn.turn_number}-assistant`
+    }
+  }
+  return null
+}
+
+function toolMatchesLiveItem(tool: ToolCallInfo, liveItem: TranscriptItem): boolean {
+  if (liveItem.role !== "activity") return false
+  const resultRef = liveItem.meta?.resultRef
+  const invocationId = liveItem.meta?.invocationId
+  if (resultRef && toolResultRef(tool) === resultRef) return true
+  if (invocationId && tool.call_id === invocationId) return true
+  return false
+}
+
+function toolResultRef(tool: ToolCallInfo): string | null {
+  if (tool.kind === "capability_display_preview") return tool.result_ref ?? tool.result ?? null
+  return tool.call_id ?? tool.result ?? null
+}
+
 export function hasAssistantAfterLatestUser(history: HistoryResponse): boolean {
+  if (history.messages) return hasAssistantMessageAfterLatestUser(history.messages)
   let hasUser = false
   let assistantAfterUser = false
   for (const turn of history.turns) {
@@ -179,10 +305,28 @@ export function hasAssistantAfterLatestUser(history: HistoryResponse): boolean {
   return assistantAfterUser
 }
 
+function hasAssistantMessageAfterLatestUser(messages: TimelineMessageInfo[]): boolean {
+  let hasUser = false
+  let assistantAfterUser = false
+  for (const message of messages) {
+    if (message.kind === "user") {
+      hasUser = true
+      assistantAfterUser = false
+    }
+    if (hasUser && (message.kind === "assistant" || message.kind === "summary")) assistantAfterUser = true
+  }
+  return assistantAfterUser
+}
+
 export function upsertTranscriptItem(items: TranscriptItem[], item: TranscriptItem): TranscriptItem[] {
   const index = items.findIndex((existing) => existing.id === item.id)
   if (index < 0) return [...items, item]
   return items.map((existing, current) => (current === index ? item : existing))
+}
+
+export function transcriptItemContentLength(item: TranscriptItem): number {
+  if (item.role === "activity") return transcriptActivityText(item.activity).length
+  return item.text.length
 }
 
 export function upsertCapabilityTranscriptItem(items: TranscriptItem[], item: TranscriptItem): TranscriptItem[] {
@@ -199,15 +343,15 @@ export function upsertCapabilityTranscriptItem(items: TranscriptItem[], item: Tr
     if (current !== index) return existing
     if (existing.meta?.timelineMessageId && !item.meta?.timelineMessageId) {
       return {
-          ...existing,
-          threadId: item.threadId ?? existing.threadId,
-          state: item.state,
-          meta: {
-            ...item.meta,
-            ...existing.meta,
-            resultRef: existing.meta.resultRef ?? item.meta?.resultRef ?? null,
-          },
-        }
+        ...existing,
+        threadId: item.threadId ?? existing.threadId,
+        state: item.state,
+        meta: {
+          ...item.meta,
+          ...existing.meta,
+          resultRef: existing.meta.resultRef ?? item.meta?.resultRef ?? null,
+        },
+      }
     }
     return item
   })

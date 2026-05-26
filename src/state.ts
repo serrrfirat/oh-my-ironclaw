@@ -7,7 +7,6 @@ import {
   hasAssistantAfterLatestUser,
   mergeHistoryTranscript,
   mergeTranscript,
-  transcriptActivityText,
   transcriptFromHistory,
   upsertCapabilityTranscriptItem,
   upsertTranscriptItem,
@@ -304,7 +303,9 @@ function appendAssistantChunk(state: UiState, content: string, threadId?: string
       status: "streaming",
       isThinking: true,
       transcript: state.transcript.map((item) =>
-        item.id === existingId ? { ...item, text: item.text + content, meta: assistantTimingMeta(state, item) } : item,
+        item.id === existingId && item.role === "assistant"
+          ? { ...item, text: item.text + content, meta: assistantTimingMeta(state, item) }
+          : item,
       ),
     }
   }
@@ -396,7 +397,6 @@ function applyCapabilityActivity(
     transcript: upsertCapabilityTranscriptItem(state.transcript, {
       id,
       role: "activity",
-      text: transcriptActivityText(transcriptActivity),
       threadId: event.thread_id,
       state: event.status,
       activity: transcriptActivity,
@@ -434,7 +434,6 @@ function applyCapabilityDisplayPreview(
     transcript: upsertCapabilityTranscriptItem(state.transcript, {
       id,
       role: "activity",
-      text: transcriptActivityText(transcriptActivity),
       threadId: event.thread_id,
       state: event.status,
       activity: transcriptActivity,

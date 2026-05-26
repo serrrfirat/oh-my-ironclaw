@@ -13,6 +13,7 @@ import type {
   RebornTimelineResponse,
   RebornWebChatEventFrame,
   SendMessageResponse,
+  TimelineMessageInfo,
   ThreadInfo,
   ThreadListResponse,
   TurnInfo,
@@ -65,6 +66,7 @@ export class GatewayClient {
     )
     return {
       thread_id: response.thread.thread_id,
+      messages: response.messages.flatMap(mapMessageToTimelineMessage),
       turns: response.messages.flatMap(mapMessageToTurn),
       has_more: Boolean(response.next_cursor),
       next_cursor: response.next_cursor ?? null,
@@ -207,39 +209,7 @@ function mapThread(thread: RebornThreadRecord): ThreadInfo {
 }
 
 function mapMessageToTurn(message: RebornMessageRecord, index: number): TurnInfo[] {
-  if (message.kind === "checkpoint_reference") return []
-  if (message.kind === "tool_result_reference") {
-    const tool = toolResultReference(message)
-    if (!tool) return []
-    return [
-      {
-        turn_number: message.sequence ?? index,
-        user_message_id: message.message_id,
-        user_input: "",
-        response: null,
-        state: message.status,
-        started_at: "",
-        completed_at: null,
-        tool_calls: [tool],
-      },
-    ]
-  }
-  if (message.kind === "capability_display_preview") {
-    const tool = capabilityDisplayPreviewReference(message)
-    if (!tool) return []
-    return [
-      {
-        turn_number: message.sequence ?? index,
-        user_message_id: message.message_id,
-        user_input: "",
-        response: null,
-        state: message.status,
-        started_at: "",
-        completed_at: null,
-        tool_calls: [tool],
-      },
-    ]
-  }
+  if (message.kind === "checkpoint_reference" || message.kind === "tool_result_reference" || message.kind === "capability_display_preview") return []
 
   const content = message.content ?? ""
   const isAssistant = message.kind === "assistant" || message.kind === "system" || message.kind === "summary"
@@ -255,6 +225,43 @@ function mapMessageToTurn(message: RebornMessageRecord, index: number): TurnInfo
       tool_calls: [],
     },
   ]
+}
+
+function mapMessageToTimelineMessage(message: RebornMessageRecord): TimelineMessageInfo[] {
+  if (message.kind === "checkpoint_reference") return []
+  if (message.kind === "tool_result_reference") {
+    const activity = toolResultReference(message)
+    if (!activity) return []
+    return [{
+      kind: message.kind,
+      id: message.message_id,
+      thread_id: message.thread_id,
+      sequence: message.sequence,
+      status: message.status,
+      activity,
+    }]
+  }
+  if (message.kind === "capability_display_preview") {
+    const activity = capabilityDisplayPreviewReference(message)
+    if (!activity) return []
+    return [{
+      kind: message.kind,
+      id: message.message_id,
+      thread_id: message.thread_id,
+      sequence: message.sequence,
+      status: message.status,
+      activity,
+    }]
+  }
+
+  return [{
+    kind: message.kind,
+    id: message.message_id,
+    thread_id: message.thread_id,
+    sequence: message.sequence,
+    status: message.status,
+    content: message.content ?? "",
+  }]
 }
 
 function toolResultReference(message: RebornMessageRecord): TurnInfo["tool_calls"][number] | null {

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { initialUiState, reduceUiState } from "./state"
+import { transcriptActivityLines, type TranscriptItem } from "./transcript"
+
+function activityText(item: TranscriptItem | undefined): string {
+  if (!item || item.role !== "activity") return ""
+  return transcriptActivityLines(item.activity).join("\n")
+}
 
 describe("UI state", () => {
   test("renders failed run statuses inline", () => {
@@ -444,8 +450,8 @@ describe("UI state", () => {
       role: "activity",
       state: "completed",
     })
-    expect(completed.transcript[0].text).toContain("builtin.list_dir")
-    expect(completed.transcript[0].text).toContain("42 B output")
+    expect(activityText(completed.transcript[0])).toContain("builtin.list_dir")
+    expect(activityText(completed.transcript[0])).toContain("42 B output")
   })
 
   test("enriches capability activity with display previews", () => {
@@ -492,11 +498,11 @@ describe("UI state", () => {
       role: "activity",
       state: "completed",
     })
-    expect(previewed.transcript[0].text).toContain("read_file")
-    expect(previewed.transcript[0].text).toContain("input: path: src/main.rs")
-    expect(previewed.transcript[0].text).toContain("output: text output · text · 12 B")
-    expect(previewed.transcript[0].text).toContain("fn main() {}")
-    expect(previewed.transcript[0].text).not.toContain("result: result:tool-output")
+    expect(activityText(previewed.transcript[0])).toContain("read_file")
+    expect(activityText(previewed.transcript[0])).toContain("input: path: src/main.rs")
+    expect(activityText(previewed.transcript[0])).toContain("output: text output · text · 12 B")
+    expect(activityText(previewed.transcript[0])).toContain("fn main() {}")
+    expect(activityText(previewed.transcript[0])).not.toContain("result: result:tool-output")
   })
 
   test("uses timeline message ids from live display previews", () => {
@@ -531,7 +537,7 @@ describe("UI state", () => {
 
     expect(previewed.transcript).toHaveLength(1)
     expect(previewed.transcript[0]).toMatchObject({
-      id: "capability-preview-preview-1",
+      id: "preview-1",
       role: "activity",
       meta: {
         invocationId: "run-1",
@@ -539,7 +545,7 @@ describe("UI state", () => {
         resultRef: "result:tool-output",
       },
     })
-    expect(previewed.transcript[0].text).toContain("fn main() {}")
+    expect(activityText(previewed.transcript[0])).toContain("fn main() {}")
   })
 
   test("renders durable timeline capability display previews from history", () => {
@@ -597,7 +603,7 @@ describe("UI state", () => {
       },
     })
 
-    expect(state.transcript.map((item) => item.id)).toEqual(["user-1", "capability-preview-preview-1", "turn-3-assistant"])
+    expect(state.transcript.map((item) => item.id)).toEqual(["user-1", "preview-1", "turn-3-assistant"])
     expect(state.transcript[1]).toMatchObject({
       role: "activity",
       meta: {
@@ -606,10 +612,10 @@ describe("UI state", () => {
         resultRef: "result:tool-output",
       },
     })
-    expect(state.transcript[1].text).toContain("read_file")
-    expect(state.transcript[1].text).toContain("input: path: src/main.rs")
-    expect(state.transcript[1].text).toContain("output: text output · text · 12 B")
-    expect(state.transcript[1].text).toContain("fn main() {}")
+    expect(activityText(state.transcript[1])).toContain("read_file")
+    expect(activityText(state.transcript[1])).toContain("input: path: src/main.rs")
+    expect(activityText(state.transcript[1])).toContain("output: text output · text · 12 B")
+    expect(activityText(state.transcript[1])).toContain("fn main() {}")
   })
 
   test("preserves live capability previews when final history arrives", () => {
@@ -670,7 +676,7 @@ describe("UI state", () => {
       "capability-run-1",
       "turn-2-assistant",
     ])
-    expect(withFinalHistory.transcript.find((item) => item.id === "capability-run-1")?.text).toContain("fn main() {}")
+    expect(activityText(withFinalHistory.transcript.find((item) => item.id === "capability-run-1"))).toContain("fn main() {}")
     expect(withFinalHistory.transcript.some((item) => item.id === "turn-2-tool-result:tool-output")).toBe(false)
   })
 })

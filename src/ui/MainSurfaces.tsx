@@ -1,7 +1,7 @@
 import type { SyntaxStyle, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { useEffect, useRef, useState, type RefObject } from "react"
 import type { PendingGateInfo, ThreadInfo } from "../gateway/types"
-import type { TranscriptItem } from "../transcript"
+import { transcriptItemContentLength, type TranscriptItem } from "../transcript"
 import { TranscriptMessage } from "./TranscriptMessage"
 import { sourceColor, type SlashCommand } from "./slashCommands"
 
@@ -9,42 +9,9 @@ export type GateAction = "approved" | "denied"
 
 const SLASH_COMMAND_POPUP_LIMIT = 8
 
-export function WelcomeSurface({
-  baseUrl,
-  composerWidth,
-  connected,
-  height,
-  inputRef,
-  isThinking,
-  lastError,
-  localDevYolo,
-  railColor,
-  selectedSlashCommandIndex,
-  selectedModel,
-  selectedModelIndex,
-  selectedThreadIndex,
-  showModelPalette,
-  showSlashCommands,
-  showThreadPalette,
-  slashCommands,
-  spinner,
-  thinkingLabel,
-  status,
-  activeThreadId,
-  models,
-  threads,
-  width,
-  onInputChange,
-  onSubmit,
-}: {
-  baseUrl: string
-  composerWidth: number
-  connected: boolean
-  height: number
+export type ComposerCommonProps = {
   inputRef: RefObject<TextareaRenderable | null>
   isThinking: boolean
-  lastError?: string | null
-  localDevYolo: boolean
   railColor: string
   selectedSlashCommandIndex: number
   selectedModel: string
@@ -56,13 +23,33 @@ export function WelcomeSurface({
   slashCommands: SlashCommand[]
   spinner: string
   thinkingLabel: string
-  status: string
   activeThreadId?: string | null
   models: string[]
   threads: ThreadInfo[]
-  width: number
   onInputChange: () => void
   onSubmit: () => void
+}
+
+export function WelcomeSurface({
+  baseUrl,
+  composerWidth,
+  composer,
+  connected,
+  height,
+  lastError,
+  localDevYolo,
+  status,
+  width,
+}: {
+  baseUrl: string
+  composerWidth: number
+  composer: ComposerCommonProps
+  connected: boolean
+  height: number
+  lastError?: string | null
+  localDevYolo: boolean
+  status: string
+  width: number
 }) {
   const topSpacer = Math.max(1, Math.floor(height * 0.32) - 5)
   const logoColors = useRainbowLogoColors(localDevYolo)
@@ -81,26 +68,9 @@ export function WelcomeSurface({
       <box style={{ height: 2 }} />
       <Composer
         focused
-        inputRef={inputRef}
-        isThinking={isThinking}
-        railColor={railColor}
-        selectedSlashCommandIndex={selectedSlashCommandIndex}
-        selectedModel={selectedModel}
-        selectedModelIndex={selectedModelIndex}
-        selectedThreadIndex={selectedThreadIndex}
-        showModelPalette={showModelPalette}
-        showSlashCommands={showSlashCommands}
-        showThreadPalette={showThreadPalette}
-        slashCommands={slashCommands}
+        {...composer}
         showThinkingStatus
-        spinner={spinner}
-        thinkingLabel={thinkingLabel}
-        activeThreadId={activeThreadId}
-        models={models}
-        threads={threads}
         width={composerWidth}
-        onInputChange={onInputChange}
-        onSubmit={onSubmit}
       />
       <HintLine width={composerWidth} />
       <box style={{ height: 3 }} />
@@ -120,75 +90,41 @@ export function WelcomeSurface({
 
 export function ConversationSurface({
   composerWidth,
+  composer,
   contentWidth,
   height,
-  inputRef,
-  isThinking,
   lastError,
   markdownStyle,
   pendingGate,
-  railColor,
   selectedGateAction,
-  selectedSlashCommandIndex,
-  selectedModel,
-  selectedModelIndex,
-  selectedThreadIndex,
   showOlderHistoryHint,
-  showModelPalette,
-  showSlashCommands,
-  showThreadPalette,
-  slashCommands,
-  spinner,
-  thinkingLabel,
-  activeThreadId,
-  models,
-  threads,
   transcript,
   expandedActivityIds,
-  onInputChange,
   onToggleActivityExpanded,
   onResolve,
   onSelectGateAction,
-  onSubmit,
 }: {
   composerWidth: number
+  composer: ComposerCommonProps
   contentWidth: number
   height: number
-  inputRef: RefObject<TextareaRenderable | null>
-  isThinking: boolean
   lastError?: string | null
   markdownStyle: SyntaxStyle
   pendingGate: PendingGateInfo | null
-  railColor: string
   selectedGateAction: GateAction
-  selectedSlashCommandIndex: number
-  selectedModel: string
-  selectedModelIndex: number
-  selectedThreadIndex: number
   showOlderHistoryHint: boolean
-  showModelPalette: boolean
-  showSlashCommands: boolean
-  showThreadPalette: boolean
-  slashCommands: SlashCommand[]
-  spinner: string
-  thinkingLabel: string
-  activeThreadId?: string | null
-  models: string[]
-  threads: ThreadInfo[]
   transcript: TranscriptItem[]
   expandedActivityIds: Set<string>
-  onInputChange: () => void
   onToggleActivityExpanded: (id: string) => void
   onResolve: (action: GateAction) => void
   onSelectGateAction: (action: GateAction) => void
-  onSubmit: () => void
 }) {
-  const slashPopupHeight = showSlashCommands ? slashCommandPopupHeight(slashCommands) : 0
-  const threadPopupHeight = showThreadPalette ? threadPaletteHeight(threads) : 0
-  const modelPopupHeight = showModelPalette ? modelPaletteHeight(models) : 0
+  const slashPopupHeight = composer.showSlashCommands ? slashCommandPopupHeight(composer.slashCommands) : 0
+  const threadPopupHeight = composer.showThreadPalette ? threadPaletteHeight(composer.threads) : 0
+  const modelPopupHeight = composer.showModelPalette ? modelPaletteHeight(composer.models) : 0
   const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight)
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
-  const transcriptEndKey = transcript.map((item) => `${item.id}:${item.text.length}`).join("|")
+  const transcriptEndKey = transcript.map((item) => `${item.id}:${transcriptItemContentLength(item)}`).join("|")
   const expandedActivityKey = [...expandedActivityIds].sort().join("|")
 
   useEffect(() => {
@@ -217,13 +153,20 @@ export function ConversationSurface({
             item={item}
             expanded={expandedActivityIds.has(item.id)}
             markdownStyle={markdownStyle}
-            selectedModel={selectedModel}
-            spinner={spinner}
+            selectedModel={composer.selectedModel}
+            spinner={composer.spinner}
             width={contentWidth}
             onToggleActivityExpanded={onToggleActivityExpanded}
           />
         ))}
-        {isThinking ? <ThinkingMessage selectedModel={selectedModel} spinner={spinner} thinkingLabel={thinkingLabel} width={contentWidth} /> : null}
+        {composer.isThinking ? (
+          <ThinkingMessage
+            selectedModel={composer.selectedModel}
+            spinner={composer.spinner}
+            thinkingLabel={composer.thinkingLabel}
+            width={contentWidth}
+          />
+        ) : null}
       </scrollbox>
       {pendingGate ? (
         <GatePanel
@@ -238,26 +181,9 @@ export function ConversationSurface({
       )}
       <Composer
         focused={!pendingGate}
-        inputRef={inputRef}
-        isThinking={isThinking}
-        railColor={railColor}
-        selectedSlashCommandIndex={selectedSlashCommandIndex}
-        selectedModel={selectedModel}
-        selectedModelIndex={selectedModelIndex}
-        selectedThreadIndex={selectedThreadIndex}
-        showModelPalette={showModelPalette}
-        showSlashCommands={showSlashCommands}
-        showThreadPalette={showThreadPalette}
-        slashCommands={slashCommands}
+        {...composer}
         showThinkingStatus={false}
-        spinner={spinner}
-        thinkingLabel={thinkingLabel}
-        activeThreadId={activeThreadId}
-        models={models}
-        threads={threads}
         width={composerWidth}
-        onInputChange={onInputChange}
-        onSubmit={onSubmit}
       />
       {lastError ? <StatusLine connected={false} status="error" message={lastError} width={composerWidth} /> : null}
     </box>
@@ -330,27 +256,9 @@ function Composer({
   onSubmit,
 }: {
   focused: boolean
-  inputRef: RefObject<TextareaRenderable | null>
-  isThinking: boolean
-  railColor: string
-  selectedSlashCommandIndex: number
-  selectedModel: string
-  selectedModelIndex: number
-  selectedThreadIndex: number
-  showModelPalette: boolean
-  showSlashCommands: boolean
-  showThreadPalette: boolean
-  slashCommands: SlashCommand[]
   showThinkingStatus?: boolean
-  spinner: string
-  thinkingLabel: string
-  activeThreadId?: string | null
-  models: string[]
-  threads: ThreadInfo[]
   width: number
-  onInputChange: () => void
-  onSubmit: () => void
-}) {
+} & ComposerCommonProps) {
   return (
     <box style={{ width, flexDirection: "column" }}>
       {showModelPalette ? (

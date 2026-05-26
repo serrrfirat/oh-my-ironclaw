@@ -3,12 +3,12 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useReducer, useRef, useState } from "react"
 import type { ClientConfig } from "../config"
 import { GatewayClient } from "../gateway/client"
-import type { AppEvent, ThreadInfo } from "../gateway/types"
+import type { AppEvent, HistoryResponse, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
 import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebornProfile"
 import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
-import { ConversationSurface, WelcomeSurface, type GateAction } from "./MainSurfaces"
+import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
 import { SettingsSurface, SETTINGS_SECTION_COUNT } from "./SettingsSurface"
 import {
   filteredSlashCommands,
@@ -22,6 +22,8 @@ type AppProps = {
   config: ClientConfig
 }
 
+type ActiveOverlay = "commands" | "threads" | "models" | "settings" | null
+
 export function App({ config }: AppProps) {
   const renderer = useRenderer()
   const { width, height } = useTerminalDimensions()
@@ -33,11 +35,8 @@ export function App({ config }: AppProps) {
   const [selectedThreadIndex, setSelectedThreadIndex] = useState(0)
   const [selectedGateAction, setSelectedGateAction] = useState<GateAction>("approved")
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
-  const [showCommandPalette, setShowCommandPalette] = useState(false)
-  const [showThreadPalette, setShowThreadPalette] = useState(false)
+  const [activeOverlay, setActiveOverlay] = useState<ActiveOverlay>(null)
   const [paletteThreads, setPaletteThreads] = useState<ThreadInfo[]>([])
-  const [showModelPalette, setShowModelPalette] = useState(false)
-  const [showSettings, setShowSettings] = useState(false)
   const [selectedSettingsIndex, setSelectedSettingsIndex] = useState(0)
   const [activeRebornProfile, setActiveRebornProfile] = useState<string | null>(null)
   const [availableModels, setAvailableModels] = useState(config.models)
@@ -46,6 +45,10 @@ export function App({ config }: AppProps) {
   const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(() => new Set())
   const activityFrame = useActivityFrame(state.isThinking)
   const thinkingLabel = thinkingLabelForActivity(state.activity, state.status, state.isThinking)
+  const showCommandPalette = activeOverlay === "commands"
+  const showThreadPalette = activeOverlay === "threads"
+  const showModelPalette = activeOverlay === "models"
+  const showSettings = activeOverlay === "settings"
   const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
   const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
@@ -70,7 +73,7 @@ export function App({ config }: AppProps) {
       if (key.name === "escape") {
         key.preventDefault()
         key.stopPropagation()
-        setShowSettings(false)
+        setActiveOverlay(null)
         return
       }
       if (key.name === "up" || key.name === "k") {
@@ -96,7 +99,7 @@ export function App({ config }: AppProps) {
       if (key.name === "escape") {
         key.preventDefault()
         key.stopPropagation()
-        setShowModelPalette(false)
+        setActiveOverlay(null)
         return
       }
       if (key.name === "up") {
@@ -122,7 +125,7 @@ export function App({ config }: AppProps) {
       if (key.name === "escape") {
         key.preventDefault()
         key.stopPropagation()
-        setShowThreadPalette(false)
+        setActiveOverlay(null)
         return
       }
       if (key.name === "up") {
@@ -149,7 +152,7 @@ export function App({ config }: AppProps) {
       key.stopPropagation()
       if (showSlashCommands) {
         setInput("")
-        setShowCommandPalette(false)
+        setActiveOverlay(null)
         textareaRef.current?.clear()
         return
       }
@@ -164,7 +167,7 @@ export function App({ config }: AppProps) {
       key.preventDefault()
       key.stopPropagation()
       setSelectedCommandIndex(0)
-      setShowCommandPalette(true)
+      setActiveOverlay("commands")
       return
     }
     if (key.ctrl && key.name === "t") {
@@ -287,7 +290,9 @@ export function App({ config }: AppProps) {
 
   useEffect(() => {
     setSelectedCommandIndex(0)
-    if (!isSlashCommandInput(input)) setShowCommandPalette(false)
+    if (!isSlashCommandInput(input)) {
+      setActiveOverlay((overlay) => (overlay === "commands" ? null : overlay))
+    }
   }, [input])
 
   useEffect(() => {
@@ -377,7 +382,7 @@ export function App({ config }: AppProps) {
       const activeIndex = threads.findIndex((thread) => thread.id === state.activeThreadId)
       setPaletteThreads(threads)
       setSelectedThreadIndex(activeIndex >= 0 ? activeIndex : 0)
-      setShowThreadPalette(true)
+      setActiveOverlay("threads")
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
     }
@@ -387,7 +392,7 @@ export function App({ config }: AppProps) {
     const models = withSelectedModel(availableModels, selectedModel)
     setAvailableModels(models)
     setSelectedModelIndex(modelIndex(models, selectedModel))
-    setShowModelPalette(true)
+    setActiveOverlay("models")
   }
 
   async function selectModel(index: number) {
@@ -397,14 +402,14 @@ export function App({ config }: AppProps) {
     setSelectedModel(model)
     setAvailableModels(models)
     setSelectedModelIndex(modelIndex(models, model))
-    setShowModelPalette(false)
+    setActiveOverlay(null)
     await submitContent(`/model ${model}`)
   }
 
   async function selectThread(index: number) {
     const thread = paletteThreads[wrapIndex(index, paletteThreads.length)]
     if (!thread) return
-    setShowThreadPalette(false)
+    setActiveOverlay(null)
     await loadThread(thread.id)
   }
 
@@ -452,44 +457,41 @@ export function App({ config }: AppProps) {
     if (!command) return
     if (command.action === "threads") {
       setInput("")
-      setShowCommandPalette(false)
+      setActiveOverlay(null)
       textareaRef.current?.clear()
       await openThreadPalette()
       return
     }
     if (command.action === "models") {
       setInput("")
-      setShowCommandPalette(false)
+      setActiveOverlay(null)
       textareaRef.current?.clear()
       await openModelPalette()
       return
     }
     if (command.action === "cancel-run") {
       setInput("")
-      setShowCommandPalette(false)
+      setActiveOverlay(null)
       textareaRef.current?.clear()
       await cancelActiveRun()
       return
     }
     if (command.action === "load-older") {
       setInput("")
-      setShowCommandPalette(false)
+      setActiveOverlay(null)
       textareaRef.current?.clear()
       await loadOlderHistory()
       return
     }
     if (command.action === "settings") {
       setInput("")
-      setShowCommandPalette(false)
-      setShowModelPalette(false)
-      setShowThreadPalette(false)
+      setActiveOverlay("settings")
       textareaRef.current?.clear()
-      setShowSettings(true)
       return
     }
     if (command.action === "local-command" && command.localArgs && config.mode === "local") {
       setInput("")
-      setShowCommandPalette(false)
+      setActiveOverlay(null)
       textareaRef.current?.clear()
       await runLocalCliCommand(command.name, command.localArgs)
       return
@@ -498,7 +500,7 @@ export function App({ config }: AppProps) {
       renderer.destroy()
       return
     }
-    setShowCommandPalette(false)
+    setActiveOverlay(null)
     await submitContent(command.name)
   }
 
@@ -553,11 +555,11 @@ export function App({ config }: AppProps) {
       await sleep(delay)
       try {
         const history = await client.history(threadId)
-        for (const turn of history.turns) {
-          if (turn.response) applyModelCommandResponse(turn.response)
+        for (const response of assistantResponses(history)) {
+          applyModelCommandResponse(response)
         }
         dispatch({ type: "history", history })
-        const assistantCount = history.turns.filter((turn) => turn.response).length
+        const assistantCount = assistantResponses(history).length
         if (assistantCount > previousAssistantCount || history.pending_gate) return
       } catch (error) {
         dispatch({ type: "error", message: errorMessage(error) })
@@ -589,9 +591,7 @@ export function App({ config }: AppProps) {
       setSelectedModel(parsedList.activeModel)
       setAvailableModels(parsedList.models)
       setSelectedModelIndex(modelIndex(parsedList.models, parsedList.activeModel))
-      setShowModelPalette(parsedList.models.length > 0)
-      setShowCommandPalette(false)
-      setShowThreadPalette(false)
+      setActiveOverlay(parsedList.models.length > 0 ? "models" : null)
       return true
     }
 
@@ -623,6 +623,27 @@ export function App({ config }: AppProps) {
   const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
   const composerWidth = clamp(width - 8, 42, 82)
   const conversationWidth = Math.max(1, width - 4)
+  const handleInputChange = () => setInput(textareaRef.current?.plainText ?? "")
+  const composer: ComposerCommonProps = {
+    inputRef: textareaRef,
+    isThinking: state.isThinking,
+    railColor: activityFrame.railColor,
+    selectedSlashCommandIndex: wrapIndex(selectedCommandIndex, slashCommands.length),
+    selectedModel,
+    selectedModelIndex,
+    selectedThreadIndex,
+    showModelPalette,
+    showSlashCommands,
+    showThreadPalette,
+    slashCommands,
+    spinner: activityFrame.spinner,
+    thinkingLabel,
+    activeThreadId: state.activeThreadId,
+    models: availableModels,
+    threads: showThreadPalette ? paletteThreads : state.threads,
+    onInputChange: handleInputChange,
+    onSubmit: submit,
+  }
 
   return (
     <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505" }}>
@@ -639,65 +660,31 @@ export function App({ config }: AppProps) {
       ) : hasConversation ? (
         <ConversationSurface
           contentWidth={conversationWidth}
+          composer={composer}
           composerWidth={conversationWidth}
           height={height}
-          inputRef={textareaRef}
-          isThinking={state.isThinking}
           lastError={state.lastError}
           markdownStyle={markdownStyle}
           pendingGate={state.pendingGate ?? null}
-          railColor={activityFrame.railColor}
           selectedGateAction={selectedGateAction}
-          selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
-          selectedModel={selectedModel}
-          selectedModelIndex={selectedModelIndex}
-          selectedThreadIndex={selectedThreadIndex}
           showOlderHistoryHint={state.hasOlderHistory}
-          showModelPalette={showModelPalette}
-          showSlashCommands={showSlashCommands}
-          showThreadPalette={showThreadPalette}
-          slashCommands={slashCommands}
-          spinner={activityFrame.spinner}
-          thinkingLabel={thinkingLabel}
-          activeThreadId={state.activeThreadId}
-          models={availableModels}
-          threads={showThreadPalette ? paletteThreads : state.threads}
           transcript={state.transcript}
           expandedActivityIds={expandedActivityIds}
-          onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
           onToggleActivityExpanded={toggleActivityExpanded}
           onResolve={(action) => void resolveGate(action)}
           onSelectGateAction={setSelectedGateAction}
-          onSubmit={submit}
         />
       ) : (
         <WelcomeSurface
           baseUrl={config.baseUrl}
+          composer={composer}
           composerWidth={composerWidth}
           connected={state.connected}
           height={height}
-          inputRef={textareaRef}
-          isThinking={state.isThinking}
           lastError={state.lastError}
           localDevYolo={localDevYolo}
-          railColor={activityFrame.railColor}
-          selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
-          selectedModel={selectedModel}
-          selectedModelIndex={selectedModelIndex}
-          selectedThreadIndex={selectedThreadIndex}
-          showModelPalette={showModelPalette}
-          showSlashCommands={showSlashCommands}
-          showThreadPalette={showThreadPalette}
-          slashCommands={slashCommands}
-          spinner={activityFrame.spinner}
-          thinkingLabel={thinkingLabel}
           status={state.status}
-          activeThreadId={state.activeThreadId}
-          models={availableModels}
-          threads={showThreadPalette ? paletteThreads : state.threads}
           width={width}
-          onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
-          onSubmit={submit}
         />
       )}
     </box>
@@ -738,6 +725,15 @@ function activeThreadFallback(threadId?: string | null): ThreadInfo[] {
       channel: "webchat_v2",
     },
   ]
+}
+
+function assistantResponses(history: HistoryResponse): string[] {
+  if (history.messages) {
+    return history.messages.flatMap((message) =>
+      (message.kind === "assistant" || message.kind === "summary") && message.content ? [message.content] : [],
+    )
+  }
+  return history.turns.flatMap((turn) => (turn.response ? [turn.response] : []))
 }
 
 function wrapIndex(index: number, length: number): number {
