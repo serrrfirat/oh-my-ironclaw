@@ -202,7 +202,7 @@ function mapThread(thread: RebornThreadRecord): ThreadInfo {
     turn_count: 0,
     created_at: "",
     updated_at: "",
-    title: thread.title ?? thread.thread_id,
+    title: thread.title ?? null,
     thread_type: "webchat_v2",
     channel: "webchat_v2",
   }

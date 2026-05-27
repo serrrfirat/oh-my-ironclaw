@@ -1,6 +1,7 @@
 import type { SyntaxStyle, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { useEffect, useRef, useState, type RefObject } from "react"
 import type { PendingGateInfo, ThreadInfo } from "../gateway/types"
+import { threadDisplayTitle, type ThreadPreviewMap } from "../threadPreviews"
 import { transcriptItemContentLength, type TranscriptItem } from "../transcript"
 import { activityGroupSummary, groupTranscriptEntries } from "./activityGroups"
 import { TranscriptMessage } from "./TranscriptMessage"
@@ -23,6 +24,8 @@ export type ComposerCommonProps = {
   showThreadPalette: boolean
   slashCommands: SlashCommand[]
   spinner: string
+  threadPreviews: ThreadPreviewMap
+  threadSearch: string
   thinkingLabel: string
   activeThreadId?: string | null
   models: string[]
@@ -307,6 +310,8 @@ function Composer({
   slashCommands,
   showThinkingStatus = true,
   spinner,
+  threadPreviews,
+  threadSearch,
   thinkingLabel,
   activeThreadId,
   models,
@@ -333,6 +338,8 @@ function Composer({
         <ThreadPalette
           activeThreadId={activeThreadId}
           selectedIndex={selectedThreadIndex}
+          threadPreviews={threadPreviews}
+          threadSearch={threadSearch}
           threads={threads}
           width={width}
         />
@@ -384,21 +391,29 @@ function Composer({
 function ThreadPalette({
   activeThreadId,
   selectedIndex,
+  threadPreviews,
+  threadSearch,
   threads,
   width,
 }: {
   activeThreadId?: string | null
   selectedIndex: number
+  threadPreviews: ThreadPreviewMap
+  threadSearch: string
   threads: ThreadInfo[]
   width: number
 }) {
-  const visibleThreads = threads.slice(0, 8)
+  const visibleThreads = threads.slice(0, 10)
   const selectedVisibleIndex = wrapIndex(selectedIndex, visibleThreads.length)
   return (
-    <box style={{ width, flexDirection: "column", backgroundColor: "#101010", paddingTop: 1, paddingBottom: 1 }}>
-      <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#8cffb0">threads</text>
-        <text fg="#777777"> · up/down select · enter open · esc close</text>
+    <box style={{ width, flexDirection: "column", backgroundColor: "#171717", paddingTop: 1, paddingBottom: 1 }}>
+      <box style={{ height: 2, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
+        <text fg="#e8e8e8">Sessions</text>
+        <text fg="#777777">{padLeft("esc", Math.max(1, width - 10))}</text>
+      </box>
+      <box style={{ height: 2, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
+        <text fg="#ffb887">{threadSearch ? "" : " "}</text>
+        <text fg={threadSearch ? "#f0f0f0" : "#8a8a8a"}>{truncate(threadSearch || "Search", width - 4)}</text>
       </box>
       {visibleThreads.length ? (
         visibleThreads.map((thread, index) => (
@@ -406,15 +421,24 @@ function ThreadPalette({
             key={thread.id}
             active={thread.id === activeThreadId}
             selected={index === selectedVisibleIndex}
+            threadPreviews={threadPreviews}
             thread={thread}
             width={width}
           />
         ))
       ) : (
-        <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-          <text fg="#777777">No threads yet.</text>
+        <box style={{ height: 3, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
+          <text fg="#777777">No results found</text>
         </box>
       )}
+      <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, marginTop: 1 }}>
+        <text fg="#f0f0f0">new</text>
+        <text fg="#777777"> /new   </text>
+        <text fg="#f0f0f0">open</text>
+        <text fg="#777777"> enter   </text>
+        <text fg="#f0f0f0">search</text>
+        <text fg="#777777"> type</text>
+      </box>
     </box>
   )
 }
@@ -423,21 +447,23 @@ function ThreadRow({
   active,
   selected,
   thread,
+  threadPreviews,
   width,
 }: {
   active: boolean
   selected: boolean
   thread: ThreadInfo
+  threadPreviews: ThreadPreviewMap
   width: number
 }) {
   const marker = selected ? ">" : active ? "*" : " "
-  const title = thread.title || thread.id
-  const suffix = active ? " active" : ` ${thread.state}`
+  const title = threadDisplayTitle(thread, threadPreviews)
+  const suffix = active ? " active" : ""
   return (
-    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#101010" }}>
-      <text fg={selected || active ? "#2ee66b" : "#707070"}>{marker} </text>
-      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{truncate(title, Math.max(8, width - suffix.length - 8))}</text>
-      <text fg={active ? "#8cffb0" : "#777777"}>{suffix}</text>
+    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#ffb887" : "#171717" }}>
+      <text fg={selected ? "#101010" : active ? "#8cffb0" : "#707070"}>{marker} </text>
+      <text fg={selected ? "#101010" : "#d0d0d0"}>{truncate(title, Math.max(8, width - suffix.length - 8))}</text>
+      <text fg={selected ? "#101010" : active ? "#8cffb0" : "#777777"}>{suffix}</text>
     </box>
   )
 }
@@ -682,6 +708,10 @@ function padEnd(value: string, length: number): string {
   return value.length >= length ? value.slice(0, length) : value + " ".repeat(length - value.length)
 }
 
+function padLeft(value: string, length: number): string {
+  return value.length >= length ? value.slice(0, length) : " ".repeat(length - value.length) + value
+}
+
 function commandPopupHint(start: number, count: number, total: number): string {
   const range = total > count ? ` · ${start + 1}-${start + count}/${total}` : ""
   return `up/down select · enter run · esc close${range}`
@@ -692,7 +722,7 @@ function slashCommandPopupHeight(commands: SlashCommand[]): number {
 }
 
 function threadPaletteHeight(threads: ThreadInfo[]): number {
-  return Math.min(Math.max(threads.length, 1), 8) + 3
+  return Math.min(Math.max(threads.length, 1), 10) + 6
 }
 
 function modelPaletteHeight(models: string[]): number {

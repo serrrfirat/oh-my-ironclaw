@@ -9,6 +9,7 @@ import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebo
 import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
 import { filterSkills, parseSkillListOutput, skillDetailPath, type SkillListItem, type SkillListResult } from "../skillList"
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
+import { filterThreads, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
 import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
 import { SettingsSurface, SETTINGS_SECTION_COUNT } from "./SettingsSurface"
 import { SkillsSurface, type SkillDetailView } from "./SkillsSurface"
@@ -40,6 +41,8 @@ export function App({ config }: AppProps) {
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   const [activeOverlay, setActiveOverlay] = useState<ActiveOverlay>(null)
   const [paletteThreads, setPaletteThreads] = useState<ThreadInfo[]>([])
+  const [threadSearch, setThreadSearch] = useState("")
+  const [threadPreviews, setThreadPreviews] = useState<ThreadPreviewMap>({})
   const [selectedSettingsIndex, setSelectedSettingsIndex] = useState(0)
   const [activeRebornProfile, setActiveRebornProfile] = useState<string | null>(null)
   const [availableModels, setAvailableModels] = useState(config.models)
@@ -61,6 +64,7 @@ export function App({ config }: AppProps) {
   const showSkills = activeOverlay === "skills"
   const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
   const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
+  const filteredThreadList = useMemo(() => filterThreads(paletteThreads, threadSearch, threadPreviews), [paletteThreads, threadSearch, threadPreviews])
   const filteredSkillList = useMemo(() => filterSkills(skillList.skills, skillSearch), [skillList.skills, skillSearch])
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
   const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
@@ -204,16 +208,16 @@ export function App({ config }: AppProps) {
         setActiveOverlay(null)
         return
       }
-      if (key.name === "up") {
+      if (key.name === "up" || key.name === "k") {
         key.preventDefault()
         key.stopPropagation()
-        setSelectedThreadIndex((index) => wrapIndex(index - 1, paletteThreads.length))
+        setSelectedThreadIndex((index) => wrapIndex(index - 1, filteredThreadList.length))
         return
       }
-      if (key.name === "down" || key.name === "tab") {
+      if (key.name === "down" || key.name === "tab" || key.name === "j") {
         key.preventDefault()
         key.stopPropagation()
-        setSelectedThreadIndex((index) => wrapIndex(index + 1, paletteThreads.length))
+        setSelectedThreadIndex((index) => wrapIndex(index + 1, filteredThreadList.length))
         return
       }
       if (isPlainEnter(key)) {
@@ -222,6 +226,29 @@ export function App({ config }: AppProps) {
         void selectThread(selectedThreadIndex)
         return
       }
+      if (key.name === "backspace" || key.name === "delete") {
+        key.preventDefault()
+        key.stopPropagation()
+        setThreadSearch((query) => query.slice(0, -1))
+        setSelectedThreadIndex(0)
+        return
+      }
+      if (key.ctrl && key.name === "u") {
+        key.preventDefault()
+        key.stopPropagation()
+        setThreadSearch("")
+        setSelectedThreadIndex(0)
+        return
+      }
+      const text = printableKeyText(key)
+      if (text) {
+        key.preventDefault()
+        key.stopPropagation()
+        setThreadSearch((query) => query + text)
+        setSelectedThreadIndex(0)
+        return
+      }
+      return
     }
     if (key.name === "escape") {
       key.preventDefault()
@@ -467,8 +494,10 @@ export function App({ config }: AppProps) {
       dispatch({ type: "threads", threads, activeThreadId: state.activeThreadId })
       const activeIndex = threads.findIndex((thread) => thread.id === state.activeThreadId)
       setPaletteThreads(threads)
+      setThreadSearch("")
       setSelectedThreadIndex(activeIndex >= 0 ? activeIndex : 0)
       setActiveOverlay("threads")
+      void loadThreadPreviews(threads)
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
     }
@@ -527,10 +556,30 @@ export function App({ config }: AppProps) {
   }
 
   async function selectThread(index: number) {
-    const thread = paletteThreads[wrapIndex(index, paletteThreads.length)]
+    const thread = filteredThreadList[wrapIndex(index, filteredThreadList.length)]
     if (!thread) return
     setActiveOverlay(null)
     await loadThread(thread.id)
+  }
+
+  async function loadThreadPreviews(threads: ThreadInfo[]) {
+    const missingThreads = threads.filter((thread) => !threadPreviews[thread.id])
+    if (missingThreads.length === 0) return
+    const previews = await Promise.all(missingThreads.slice(0, 30).map(async (thread) => {
+      try {
+        const history = await client.history(thread.id, 12)
+        return [thread.id, threadPreviewFromHistory(history)] as const
+      } catch {
+        return [thread.id, ""] as const
+      }
+    }))
+    setThreadPreviews((current) => {
+      const next = { ...current }
+      for (const [threadId, preview] of previews) {
+        if (preview) next[threadId] = preview
+      }
+      return next
+    })
   }
 
   async function createThread() {
@@ -764,10 +813,12 @@ export function App({ config }: AppProps) {
     showThreadPalette,
     slashCommands,
     spinner: activityFrame.spinner,
+    threadPreviews,
+    threadSearch,
     thinkingLabel,
     activeThreadId: state.activeThreadId,
     models: availableModels,
-    threads: showThreadPalette ? paletteThreads : state.threads,
+    threads: showThreadPalette ? filteredThreadList : state.threads,
     onInputChange: handleInputChange,
     onSubmit: submit,
   }
