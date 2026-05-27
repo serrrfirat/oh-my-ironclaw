@@ -28,6 +28,8 @@ export type ThreadInfo = {
 export type RebornThreadRecord = {
   thread_id: string
   title?: string | null
+  created_at?: string | null
+  updated_at?: string | null
   created_by_actor_id?: string | null
   metadata_json?: string | null
 }

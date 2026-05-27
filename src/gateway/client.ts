@@ -19,6 +19,8 @@ import type {
   TurnInfo,
 } from "./types"
 
+const THREAD_LIST_PAGE_LIMIT = 100
+
 export class GatewayClient {
   constructor(private readonly config: ClientConfig) {}
 
@@ -27,7 +29,10 @@ export class GatewayClient {
   }
 
   async health(): Promise<void> {
-    await this.threads()
+    await this.threadPage(1).catch((error: unknown) => {
+      if (isUnavailableThreadList(error)) return
+      throw error
+    })
   }
 
   async status(): Promise<unknown> {
@@ -35,13 +40,8 @@ export class GatewayClient {
   }
 
   async threads(): Promise<ThreadListResponse> {
-    const response = await this.requestJson<RebornListThreadsResponse>("/api/webchat/v2/threads", { method: "GET" }).catch(
-      (error: unknown) => {
-        if (isUnavailableThreadList(error)) return { threads: [] }
-        throw error
-      },
-    )
-    const threads = response.threads.map(mapThread)
+    const records = await this.threadRecords()
+    const threads = records.map(mapThread)
     return {
       threads,
       active_thread: threads[0]?.id ?? null,
@@ -149,6 +149,26 @@ export class GatewayClient {
     })
   }
 
+  private async threadRecords(): Promise<RebornThreadRecord[]> {
+    const records: RebornThreadRecord[] = []
+    let cursor: string | null | undefined
+    do {
+      const page = await this.threadPage(THREAD_LIST_PAGE_LIMIT, cursor).catch((error: unknown) => {
+        if (isUnavailableThreadList(error)) return { threads: [], next_cursor: null }
+        throw error
+      })
+      records.push(...page.threads)
+      cursor = page.next_cursor
+    } while (cursor)
+    return records
+  }
+
+  private async threadPage(limit: number, cursor?: string | null): Promise<RebornListThreadsResponse> {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (cursor) params.set("cursor", cursor)
+    return this.requestJson<RebornListThreadsResponse>(`/api/webchat/v2/threads?${params}`, { method: "GET" })
+  }
+
   private async requestJson<T>(path: string, init: RequestInit & { auth?: boolean }): Promise<T> {
     const response = await this.request(path, init)
     return response.json() as Promise<T>
@@ -200,8 +220,8 @@ function mapThread(thread: RebornThreadRecord): ThreadInfo {
     id: thread.thread_id,
     state: "active",
     turn_count: 0,
-    created_at: "",
-    updated_at: "",
+    created_at: thread.created_at ?? "",
+    updated_at: thread.updated_at ?? "",
     title: thread.title ?? null,
     thread_type: "webchat_v2",
     channel: "webchat_v2",

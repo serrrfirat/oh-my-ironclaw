@@ -1,6 +1,49 @@
 import { describe, expect, test } from "bun:test"
 import { GatewayClient, mapWebChatEvent, mapWebChatEvents } from "./client"
 
+describe("Gateway client", () => {
+  test("loads every paginated thread page", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    const requests: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requests.push(url)
+      const cursor = new URL(url).searchParams.get("cursor")
+      return new Response(
+        JSON.stringify(cursor
+          ? {
+              threads: [{
+                thread_id: "thread-2",
+                title: null,
+                created_at: "2026-05-02T10:00:00Z",
+                updated_at: "2026-05-03T10:00:00Z",
+              }],
+              next_cursor: null,
+            }
+          : {
+              threads: [{
+                thread_id: "thread-1",
+                title: "First thread",
+                created_at: "2026-05-01T10:00:00Z",
+              }],
+              next_cursor: "cursor-1",
+            }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )
+    }) as unknown as typeof fetch
+
+    try {
+      const response = await client.threads()
+      expect(response.threads.map((thread) => thread.id)).toEqual(["thread-1", "thread-2"])
+      expect(response.threads[1]?.updated_at).toBe("2026-05-03T10:00:00Z")
+      expect(requests.map((url) => new URL(url).searchParams.get("cursor"))).toEqual([null, "cursor-1"])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
 describe("WebChat event mapping", () => {
   test("maps timeline tool result references to tool summaries", async () => {
     const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)

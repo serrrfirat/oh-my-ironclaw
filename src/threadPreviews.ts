@@ -29,6 +29,13 @@ export function filterThreads(threads: ThreadInfo[], query: string, previews: Th
   })
 }
 
+export function sortThreadsByRecent(threads: ThreadInfo[]): ThreadInfo[] {
+  return threads
+    .map((thread, index) => ({ index, thread, timestamp: threadTimestamp(thread) }))
+    .sort((left, right) => right.timestamp - left.timestamp || left.index - right.index)
+    .map((item) => item.thread)
+}
+
 function firstHistoryContent(history: HistoryResponse): string {
   if (history.messages) {
     const message = history.messages.find((item) =>
@@ -44,6 +51,13 @@ function firstHistoryContent(history: HistoryResponse): string {
     if (turn.narrative?.trim()) return turn.narrative
   }
   return ""
+}
+
+function threadTimestamp(thread: ThreadInfo): number {
+  const value = thread.updated_at || thread.created_at
+  if (!value) return 0
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : 0
 }
 
 function firstSentence(value: string): string {

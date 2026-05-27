@@ -9,7 +9,7 @@ import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebo
 import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
 import { filterSkills, parseSkillListOutput, skillDetailPath, type SkillListItem, type SkillListResult } from "../skillList"
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
-import { filterThreads, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
+import { filterThreads, sortThreadsByRecent, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
 import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
 import { SettingsSurface, SETTINGS_SECTION_COUNT } from "./SettingsSurface"
 import { SkillsSurface, type SkillDetailView } from "./SkillsSurface"
@@ -452,7 +452,7 @@ export function App({ config }: AppProps) {
 
   async function startNewThreadOnConnect(): Promise<string | null> {
     const response = await client.threads()
-    const existingThreads = [response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[]
+    const existingThreads = sortThreadsByRecent([response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[])
     const thread = await client.newThread()
     const threads = mergeThreads([thread], existingThreads)
 
@@ -489,8 +489,8 @@ export function App({ config }: AppProps) {
   async function openThreadPalette() {
     try {
       const response = await client.threads()
-      const remoteThreads = [response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[]
-      const threads = mergeThreads(remoteThreads, state.threads, activeThreadFallback(state.activeThreadId))
+      const remoteThreads = sortThreadsByRecent([response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[])
+      const threads = sortThreadsByRecent(mergeThreads(remoteThreads, state.threads, activeThreadFallback(state.activeThreadId)))
       dispatch({ type: "threads", threads, activeThreadId: state.activeThreadId })
       const activeIndex = threads.findIndex((thread) => thread.id === state.activeThreadId)
       setPaletteThreads(threads)
@@ -565,21 +565,23 @@ export function App({ config }: AppProps) {
   async function loadThreadPreviews(threads: ThreadInfo[]) {
     const missingThreads = threads.filter((thread) => !threadPreviews[thread.id])
     if (missingThreads.length === 0) return
-    const previews = await Promise.all(missingThreads.slice(0, 30).map(async (thread) => {
-      try {
-        const history = await client.history(thread.id, 12)
-        return [thread.id, threadPreviewFromHistory(history)] as const
-      } catch {
-        return [thread.id, ""] as const
-      }
-    }))
-    setThreadPreviews((current) => {
-      const next = { ...current }
-      for (const [threadId, preview] of previews) {
-        if (preview) next[threadId] = preview
-      }
-      return next
-    })
+    for (let index = 0; index < missingThreads.length; index += 10) {
+      const previews = await Promise.all(missingThreads.slice(index, index + 10).map(async (thread) => {
+        try {
+          const history = await client.history(thread.id, 12)
+          return [thread.id, threadPreviewFromHistory(history)] as const
+        } catch {
+          return [thread.id, ""] as const
+        }
+      }))
+      setThreadPreviews((current) => {
+        const next = { ...current }
+        for (const [threadId, preview] of previews) {
+          if (preview) next[threadId] = preview
+        }
+        return next
+      })
+    }
   }
 
   async function createThread() {

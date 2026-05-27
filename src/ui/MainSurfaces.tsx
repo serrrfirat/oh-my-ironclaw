@@ -10,6 +10,7 @@ import { sourceColor, type SlashCommand } from "./slashCommands"
 export type GateAction = "approved" | "denied"
 
 const SLASH_COMMAND_POPUP_LIMIT = 8
+const THREAD_PALETTE_LIMIT = 10
 
 export type ComposerCommonProps = {
   inputRef: RefObject<TextareaRenderable | null>
@@ -403,8 +404,15 @@ function ThreadPalette({
   threads: ThreadInfo[]
   width: number
 }) {
-  const visibleThreads = threads.slice(0, 10)
-  const selectedVisibleIndex = wrapIndex(selectedIndex, visibleThreads.length)
+  const selectedThreadIndex = wrapIndex(selectedIndex, threads.length)
+  const startIndex = Math.min(
+    Math.max(0, selectedThreadIndex - THREAD_PALETTE_LIMIT + 1),
+    Math.max(0, threads.length - THREAD_PALETTE_LIMIT),
+  )
+  const visibleThreads = threads.slice(startIndex, startIndex + THREAD_PALETTE_LIMIT)
+  const rangeLabel = threads.length > visibleThreads.length
+    ? `${startIndex + 1}-${startIndex + visibleThreads.length}/${threads.length}`
+    : `${threads.length}`
   return (
     <box style={{ width, flexDirection: "column", backgroundColor: "#171717", paddingTop: 1, paddingBottom: 1 }}>
       <box style={{ height: 2, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
@@ -420,7 +428,7 @@ function ThreadPalette({
           <ThreadRow
             key={thread.id}
             active={thread.id === activeThreadId}
-            selected={index === selectedVisibleIndex}
+            selected={startIndex + index === selectedThreadIndex}
             threadPreviews={threadPreviews}
             thread={thread}
             width={width}
@@ -437,7 +445,8 @@ function ThreadPalette({
         <text fg="#f0f0f0">open</text>
         <text fg="#777777"> enter   </text>
         <text fg="#f0f0f0">search</text>
-        <text fg="#777777"> type</text>
+        <text fg="#777777"> type   </text>
+        <text fg="#777777">{rangeLabel}</text>
       </box>
     </box>
   )
@@ -722,7 +731,7 @@ function slashCommandPopupHeight(commands: SlashCommand[]): number {
 }
 
 function threadPaletteHeight(threads: ThreadInfo[]): number {
-  return Math.min(Math.max(threads.length, 1), 10) + 6
+  return Math.min(Math.max(threads.length, 1), THREAD_PALETTE_LIMIT) + 6
 }
 
 function modelPaletteHeight(models: string[]): number {
