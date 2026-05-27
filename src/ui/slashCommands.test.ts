@@ -1,0 +1,66 @@
+import { describe, expect, test } from "bun:test"
+import { localCliCommandForInput, slashCommandsForMode } from "./slashCommands"
+
+describe("slash commands", () => {
+  test("uses product workflow skills command in remote mode", () => {
+    expect(slashCommandsForMode("remote")).toContainEqual(expect.objectContaining({
+      name: "/skills",
+      source: "remote",
+    }))
+  })
+
+  test("uses product workflow extension command in remote mode", () => {
+    expect(slashCommandsForMode("remote")).toContainEqual(expect.objectContaining({
+      name: "/extension",
+      source: "remote",
+    }))
+  })
+
+  test("exposes TUI new thread command in every mode", () => {
+    for (const mode of ["remote", "local"] as const) {
+      expect(slashCommandsForMode(mode)).toContainEqual(expect.objectContaining({
+        name: "/new",
+        source: "tui",
+        action: "new-thread",
+      }))
+    }
+  })
+
+  test("uses local Reborn skill catalog command in local mode", () => {
+    const commands = slashCommandsForMode("local")
+
+    expect(commands).toContainEqual(expect.objectContaining({
+      name: "/skills",
+      source: "local",
+      action: "skills",
+    }))
+    expect(commands.filter((command) => command.name === "/skills")).toHaveLength(1)
+  })
+
+  test("uses local Reborn extension search command in local mode", () => {
+    const commands = slashCommandsForMode("local")
+
+    expect(commands).toContainEqual(expect.objectContaining({
+      name: "/extension",
+      source: "local",
+      localArgs: ["extension", "search"],
+    }))
+    expect(commands.filter((command) => command.name === "/extension")).toHaveLength(1)
+  })
+
+  test("does not map local mode skills input to a transcript CLI command", () => {
+    expect(localCliCommandForInput("/skills", "local")).toBeNull()
+  })
+
+  test("maps local mode extension input to local CLI args", () => {
+    expect(localCliCommandForInput("/extension", "local")).toEqual(["extension", "search"])
+  })
+
+  test("does not intercept skills in remote mode", () => {
+    expect(localCliCommandForInput("/skills", "remote")).toBeNull()
+  })
+
+  test("does not intercept extension in remote mode", () => {
+    expect(localCliCommandForInput("/extension", "remote")).toBeNull()
+  })
+})

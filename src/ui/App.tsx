@@ -1,134 +1,31 @@
-import { SyntaxStyle, type ScrollBoxRenderable, type TextareaRenderable } from "@opentui/core"
+import { SyntaxStyle, type KeyEvent, type TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
-import { useEffect, useMemo, useReducer, useRef, useState, type RefObject } from "react"
-import type { ClientConfig, ClientMode } from "../config"
+import { useEffect, useMemo, useReducer, useRef, useState } from "react"
+import type { ClientConfig } from "../config"
 import { GatewayClient } from "../gateway/client"
-import type { AppEvent, PendingGateInfo, ThreadInfo } from "../gateway/types"
+import type { AppEvent, HistoryResponse, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
 import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebornProfile"
+import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
+import { filterSkills, parseSkillListOutput, skillDetailPath, type SkillListItem, type SkillListResult } from "../skillList"
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
+import { filterThreads, sortThreadsByRecent, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
+import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
+import { SettingsSurface, SETTINGS_SECTION_COUNT } from "./SettingsSurface"
+import { SkillsSurface, type SkillDetailView } from "./SkillsSurface"
+import {
+  filteredSlashCommands,
+  isSlashCommandInput,
+  localCliCommandForInput,
+  slashCommandsForMode,
+  type SlashCommand,
+} from "./slashCommands"
 
 type AppProps = {
   config: ClientConfig
 }
 
-type GateAction = "approved" | "denied"
-type SlashCommandAction = "threads" | "models" | "cancel-run" | "load-older" | "settings" | "local-command" | "quit"
-type SlashCommandSource = "remote" | "local" | "tui"
-type SettingsSection = "Profile" | "Connection" | "Models" | "Secrets" | "Tools" | "Approvals"
-type SettingsMenuItem = { label: SettingsSection; meta: string }
-type SlashCommand = {
-  name: string
-  description: string
-  source: SlashCommandSource
-  action?: SlashCommandAction
-  localArgs?: string[]
-}
-
-const SLASH_COMMAND_POPUP_LIMIT = 8
-const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Models", "Secrets", "Tools", "Approvals"]
-
-const REMOTE_PRODUCT_COMMANDS: SlashCommand[] = [
-  { name: "/model", description: "Show or switch the active model", source: "remote", action: "models" },
-  { name: "/models", description: "Show available models in the picker", source: "remote", action: "models" },
-  { name: "/status", description: "Show Reborn product workflow status", source: "remote" },
-  { name: "/progress", description: "Alias for Reborn product workflow status", source: "remote" },
-]
-
-const LOCAL_CLI_COMMANDS: SlashCommand[] = [
-  {
-    name: "/doctor",
-    description: "Run ironclaw-reborn doctor",
-    source: "local",
-    action: "local-command",
-    localArgs: ["doctor"],
-  },
-  {
-    name: "/profile",
-    description: "Run ironclaw-reborn profile list",
-    source: "local",
-    action: "local-command",
-    localArgs: ["profile", "list"],
-  },
-  {
-    name: "/skills",
-    description: "Run ironclaw-reborn skills list",
-    source: "local",
-    action: "local-command",
-    localArgs: ["skills", "list"],
-  },
-  {
-    name: "/channels",
-    description: "Run ironclaw-reborn channels list",
-    source: "local",
-    action: "local-command",
-    localArgs: ["channels", "list"],
-  },
-  {
-    name: "/hooks",
-    description: "Run ironclaw-reborn hooks list",
-    source: "local",
-    action: "local-command",
-    localArgs: ["hooks", "list"],
-  },
-  {
-    name: "/model-status",
-    description: "Run ironclaw-reborn models status",
-    source: "local",
-    action: "local-command",
-    localArgs: ["models", "status"],
-  },
-  {
-    name: "/logs",
-    description: "Run ironclaw-reborn logs",
-    source: "local",
-    action: "local-command",
-    localArgs: ["logs"],
-  },
-  {
-    name: "/logs-json",
-    description: "Run ironclaw-reborn logs --json",
-    source: "local",
-    action: "local-command",
-    localArgs: ["logs", "--json"],
-  },
-  {
-    name: "/config-path",
-    description: "Run ironclaw-reborn config path",
-    source: "local",
-    action: "local-command",
-    localArgs: ["config", "path"],
-  },
-  {
-    name: "/traces-status",
-    description: "Run ironclaw-reborn traces status",
-    source: "local",
-    action: "local-command",
-    localArgs: ["traces", "status"],
-  },
-  {
-    name: "/traces-queue",
-    description: "Run ironclaw-reborn traces queue-status",
-    source: "local",
-    action: "local-command",
-    localArgs: ["traces", "queue-status"],
-  },
-  {
-    name: "/traces-credit",
-    description: "Run ironclaw-reborn traces credit",
-    source: "local",
-    action: "local-command",
-    localArgs: ["traces", "credit"],
-  },
-]
-
-const TUI_CONTROL_COMMANDS: SlashCommand[] = [
-  { name: "/settings", description: "Open settings dashboard", source: "tui", action: "settings" },
-  { name: "/threads", description: "Open thread picker", source: "tui", action: "threads" },
-  { name: "/history", description: "Load older timeline messages", source: "tui", action: "load-older" },
-  { name: "/run-cancel", description: "Cancel the active WebChat run", source: "tui", action: "cancel-run" },
-  { name: "/quit", description: "Quit this TUI", source: "tui", action: "quit" },
-]
+type ActiveOverlay = "commands" | "threads" | "models" | "settings" | "skills" | null
 
 export function App({ config }: AppProps) {
   const renderer = useRenderer()
@@ -136,51 +33,139 @@ export function App({ config }: AppProps) {
   const client = useMemo(() => new GatewayClient(config), [config])
   const markdownStyle = useMemo(() => SyntaxStyle.create(), [])
   const textareaRef = useRef<TextareaRenderable>(null)
+  const activeThreadIdRef = useRef<string | null | undefined>(null)
   const [state, dispatch] = useReducer(reduceUiState, initialUiState)
   const [input, setInput] = useState("")
   const [selectedThreadIndex, setSelectedThreadIndex] = useState(0)
   const [selectedGateAction, setSelectedGateAction] = useState<GateAction>("approved")
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
-  const [showCommandPalette, setShowCommandPalette] = useState(false)
-  const [showThreadPalette, setShowThreadPalette] = useState(false)
+  const [activeOverlay, setActiveOverlay] = useState<ActiveOverlay>(null)
   const [paletteThreads, setPaletteThreads] = useState<ThreadInfo[]>([])
-  const [showModelPalette, setShowModelPalette] = useState(false)
-  const [showSettings, setShowSettings] = useState(false)
+  const [threadSearch, setThreadSearch] = useState("")
+  const [threadPreviews, setThreadPreviews] = useState<ThreadPreviewMap>({})
   const [selectedSettingsIndex, setSelectedSettingsIndex] = useState(0)
   const [activeRebornProfile, setActiveRebornProfile] = useState<string | null>(null)
   const [availableModels, setAvailableModels] = useState(config.models)
   const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
   const [selectedModel, setSelectedModel] = useState(config.model)
+  const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(() => new Set())
+  const [skillList, setSkillList] = useState<SkillListResult>({ configured: 0, source: "", skills: [], details: {} })
+  const [skillSearch, setSkillSearch] = useState("")
+  const [selectedSkillIndex, setSelectedSkillIndex] = useState(0)
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skillsError, setSkillsError] = useState<string | null>(null)
+  const [skillDetail, setSkillDetail] = useState<SkillDetailView | null>(null)
   const activityFrame = useActivityFrame(state.isThinking)
   const thinkingLabel = thinkingLabelForActivity(state.activity, state.status, state.isThinking)
+  const showCommandPalette = activeOverlay === "commands"
+  const showThreadPalette = activeOverlay === "threads"
+  const showModelPalette = activeOverlay === "models"
+  const showSettings = activeOverlay === "settings"
+  const showSkills = activeOverlay === "skills"
   const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
   const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
+  const filteredThreadList = useMemo(() => filterThreads(paletteThreads, threadSearch, threadPreviews), [paletteThreads, threadSearch, threadPreviews])
+  const filteredSkillList = useMemo(() => filterSkills(skillList.skills, skillSearch), [skillList.skills, skillSearch])
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
   const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
   const canCancelRun = Boolean((state.pendingGate?.thread_id || state.activeThreadId) && (state.pendingGate?.run_id || state.activeRunId))
+
+  const toggleActivityExpanded = (id: string) => {
+    setExpandedActivityIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
       renderer.destroy()
       return
     }
-    if (showSettings) {
+    if (showSkills) {
       if (key.name === "escape") {
         key.preventDefault()
         key.stopPropagation()
-        setShowSettings(false)
+        setActiveOverlay(null)
+        setSkillDetail(null)
+        return
+      }
+      if (skillDetail) {
+        if (key.name === "up" || key.name === "k") {
+          key.preventDefault()
+          key.stopPropagation()
+          setSkillDetail((detail) => detail ? { ...detail, offset: Math.max(0, detail.offset - 1) } : detail)
+          return
+        }
+        if (key.name === "down" || key.name === "j") {
+          key.preventDefault()
+          key.stopPropagation()
+          setSkillDetail((detail) => detail ? { ...detail, offset: detail.offset + 1 } : detail)
+          return
+        }
         return
       }
       if (key.name === "up" || key.name === "k") {
         key.preventDefault()
         key.stopPropagation()
-        setSelectedSettingsIndex((index) => wrapIndex(index - 1, SETTINGS_SECTIONS.length))
+        setSelectedSkillIndex((index) => wrapIndex(index - 1, filteredSkillList.length))
         return
       }
       if (key.name === "down" || key.name === "tab" || key.name === "j") {
         key.preventDefault()
         key.stopPropagation()
-        setSelectedSettingsIndex((index) => wrapIndex(index + 1, SETTINGS_SECTIONS.length))
+        setSelectedSkillIndex((index) => wrapIndex(index + 1, filteredSkillList.length))
+        return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault()
+        key.stopPropagation()
+        void openSelectedSkillDetail()
+        return
+      }
+      if (key.name === "backspace" || key.name === "delete") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSkillSearch((query) => query.slice(0, -1))
+        setSelectedSkillIndex(0)
+        return
+      }
+      if (key.ctrl && key.name === "u") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSkillSearch("")
+        setSelectedSkillIndex(0)
+        return
+      }
+      const text = printableKeyText(key)
+      if (text) {
+        key.preventDefault()
+        key.stopPropagation()
+        setSkillSearch((query) => query + text)
+        setSelectedSkillIndex(0)
+        return
+      }
+      return
+    }
+    if (showSettings) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        setActiveOverlay(null)
+        return
+      }
+      if (key.name === "up" || key.name === "k") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedSettingsIndex((index) => wrapIndex(index - 1, SETTINGS_SECTION_COUNT))
+        return
+      }
+      if (key.name === "down" || key.name === "tab" || key.name === "j") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedSettingsIndex((index) => wrapIndex(index + 1, SETTINGS_SECTION_COUNT))
         return
       }
       if (isPlainEnter(key)) {
@@ -194,7 +179,7 @@ export function App({ config }: AppProps) {
       if (key.name === "escape") {
         key.preventDefault()
         key.stopPropagation()
-        setShowModelPalette(false)
+        setActiveOverlay(null)
         return
       }
       if (key.name === "up") {
@@ -220,19 +205,19 @@ export function App({ config }: AppProps) {
       if (key.name === "escape") {
         key.preventDefault()
         key.stopPropagation()
-        setShowThreadPalette(false)
+        setActiveOverlay(null)
         return
       }
-      if (key.name === "up") {
+      if (key.name === "up" || key.name === "k") {
         key.preventDefault()
         key.stopPropagation()
-        setSelectedThreadIndex((index) => wrapIndex(index - 1, paletteThreads.length))
+        setSelectedThreadIndex((index) => wrapIndex(index - 1, filteredThreadList.length))
         return
       }
-      if (key.name === "down" || key.name === "tab") {
+      if (key.name === "down" || key.name === "tab" || key.name === "j") {
         key.preventDefault()
         key.stopPropagation()
-        setSelectedThreadIndex((index) => wrapIndex(index + 1, paletteThreads.length))
+        setSelectedThreadIndex((index) => wrapIndex(index + 1, filteredThreadList.length))
         return
       }
       if (isPlainEnter(key)) {
@@ -241,14 +226,35 @@ export function App({ config }: AppProps) {
         void selectThread(selectedThreadIndex)
         return
       }
+      if (key.name === "backspace" || key.name === "delete") {
+        key.preventDefault()
+        key.stopPropagation()
+        setThreadSearch((query) => query.slice(0, -1))
+        setSelectedThreadIndex(0)
+        return
+      }
+      if (key.ctrl && key.name === "u") {
+        key.preventDefault()
+        key.stopPropagation()
+        setThreadSearch("")
+        setSelectedThreadIndex(0)
+        return
+      }
+      const text = printableKeyText(key)
+      if (text) {
+        key.preventDefault()
+        key.stopPropagation()
+        setThreadSearch((query) => query + text)
+        setSelectedThreadIndex(0)
+        return
+      }
+      return
     }
     if (key.name === "escape") {
       key.preventDefault()
       key.stopPropagation()
       if (showSlashCommands) {
-        setInput("")
-        setShowCommandPalette(false)
-        textareaRef.current?.clear()
+        clearComposer()
         return
       }
       if (canCancelRun) void cancelActiveRun()
@@ -262,7 +268,7 @@ export function App({ config }: AppProps) {
       key.preventDefault()
       key.stopPropagation()
       setSelectedCommandIndex(0)
-      setShowCommandPalette(true)
+      setActiveOverlay("commands")
       return
     }
     if (key.ctrl && key.name === "t") {
@@ -385,8 +391,14 @@ export function App({ config }: AppProps) {
 
   useEffect(() => {
     setSelectedCommandIndex(0)
-    if (!isSlashCommandInput(input)) setShowCommandPalette(false)
-  }, [slashCommandQuery(input)])
+    if (!isSlashCommandInput(input)) {
+      setActiveOverlay((overlay) => (overlay === "commands" ? null : overlay))
+    }
+  }, [input])
+
+  useEffect(() => {
+    activeThreadIdRef.current = state.activeThreadId
+  }, [state.activeThreadId])
 
   useEffect(() => {
     let cancelled = false
@@ -395,32 +407,10 @@ export function App({ config }: AppProps) {
       try {
         await client.health()
         dispatch({ type: "connected", connected: true, status: "connected" })
-        const threadId = await refreshThreads()
-        if (!cancelled && threadId) connectEvents(threadId)
+        await startNewThreadOnConnect()
       } catch (error) {
         dispatch({ type: "error", message: errorMessage(error) })
       }
-    }
-
-    function connectEvents(threadId: string) {
-      void (async () => {
-        while (!cancelled) {
-          try {
-            for await (const event of client.events(threadId)) {
-              if (cancelled) break
-              if (event.type === "response") applyModelCommandResponse(event.content)
-              dispatch({ type: "event", event })
-              if (isTerminalRunStatusEvent(event)) void refreshThreadFromEvent(event.thread_id)
-            }
-          } catch (error) {
-            if (!cancelled) {
-              dispatch({ type: "connected", connected: false, status: "reconnecting" })
-              dispatch({ type: "error", message: errorMessage(error) })
-              await sleep(1500)
-            }
-          }
-        }
-      })()
     }
 
     void boot()
@@ -429,25 +419,55 @@ export function App({ config }: AppProps) {
     }
   }, [client])
 
-  async function refreshThreads(): Promise<string | null> {
-    const response = await client.threads()
-    let threads = [response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[]
-    let threadId = response.active_thread ?? response.assistant_thread?.id ?? response.threads[0]?.id ?? null
+  useEffect(() => {
+    const threadId = state.activeThreadId
+    if (!threadId) return
+    let cancelled = false
 
-    if (!threadId) {
-      const thread = await client.newThread()
-      threads = [thread]
-      threadId = thread.id
+    void (async () => {
+      while (!cancelled && activeThreadIdRef.current === threadId) {
+        try {
+          for await (const event of client.events(threadId)) {
+            if (cancelled || activeThreadIdRef.current !== threadId) break
+            const eventThreadId = threadIdFromEvent(event)
+            if (eventThreadId && eventThreadId !== activeThreadIdRef.current) continue
+            if (event.type === "response") applyModelCommandResponse(event.content)
+            dispatch({ type: "event", event })
+            if (isTerminalRunStatusEvent(event)) void refreshThreadFromEvent(eventThreadId)
+          }
+        } catch (error) {
+          if (!cancelled && activeThreadIdRef.current === threadId) {
+            dispatch({ type: "connected", connected: false, status: "reconnecting" })
+            dispatch({ type: "error", message: errorMessage(error) })
+            await sleep(1500)
+          }
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
     }
+  }, [client, state.activeThreadId])
 
-    dispatch({ type: "threads", threads, activeThreadId: threadId })
-    if (threadId) await loadThread(threadId)
-    return threadId
+  async function startNewThreadOnConnect(): Promise<string | null> {
+    const response = await client.threads()
+    const existingThreads = sortThreadsByRecent([response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[])
+    const thread = await client.newThread()
+    const threads = mergeThreads([thread], existingThreads)
+
+    activeThreadIdRef.current = thread.id
+    dispatch({ type: "threads", threads, activeThreadId: thread.id })
+    setSelectedThreadIndex(0)
+    await loadThread(thread.id)
+    return thread.id
   }
 
   async function loadThread(threadId: string) {
     try {
+      activeThreadIdRef.current = threadId
       const history = await client.history(threadId)
+      if (activeThreadIdRef.current !== threadId) return
       dispatch({ type: "history", history })
       const index = state.threads.findIndex((thread) => thread.id === threadId)
       if (index >= 0) setSelectedThreadIndex(index)
@@ -469,13 +489,15 @@ export function App({ config }: AppProps) {
   async function openThreadPalette() {
     try {
       const response = await client.threads()
-      const remoteThreads = [response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[]
-      const threads = mergeThreads(remoteThreads, state.threads, activeThreadFallback(state.activeThreadId))
+      const remoteThreads = sortThreadsByRecent([response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[])
+      const threads = sortThreadsByRecent(mergeThreads(remoteThreads, state.threads, activeThreadFallback(state.activeThreadId)))
       dispatch({ type: "threads", threads, activeThreadId: state.activeThreadId })
       const activeIndex = threads.findIndex((thread) => thread.id === state.activeThreadId)
       setPaletteThreads(threads)
+      setThreadSearch("")
       setSelectedThreadIndex(activeIndex >= 0 ? activeIndex : 0)
-      setShowThreadPalette(true)
+      setActiveOverlay("threads")
+      void loadThreadPreviews(threads)
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
     }
@@ -485,7 +507,41 @@ export function App({ config }: AppProps) {
     const models = withSelectedModel(availableModels, selectedModel)
     setAvailableModels(models)
     setSelectedModelIndex(modelIndex(models, selectedModel))
-    setShowModelPalette(true)
+    setActiveOverlay("models")
+  }
+
+  async function openSkillsPalette() {
+    setActiveOverlay("skills")
+    setSkillsLoading(true)
+    setSkillsError(null)
+    setSkillDetail(null)
+    try {
+      const result = await runRebornCli(config, ["skills", "list", "--json", "--verbose"])
+      if (result.exitCode !== 0) {
+        throw new Error(formatLocalCliResult(result))
+      }
+      const parsed = parseSkillListOutput(result.stdout)
+      setSkillList(parsed)
+      setSelectedSkillIndex(0)
+    } catch (error) {
+      setSkillList({ configured: 0, source: "", skills: [], details: {} })
+      setSkillsError(errorMessage(error))
+    } finally {
+      setSkillsLoading(false)
+    }
+  }
+
+  async function openSelectedSkillDetail() {
+    const skill = filteredSkillList[wrapIndex(selectedSkillIndex, filteredSkillList.length)]
+    if (!skill) return
+    const path = skillDetailPath(skill, skillList.details)
+    setSkillDetail({ skill, content: skill.content ?? "", error: null, loading: true, path, offset: 0 })
+    try {
+      const content = await readSkillDetail(skill, path)
+      setSkillDetail({ skill, content, error: null, loading: false, path, offset: 0 })
+    } catch (error) {
+      setSkillDetail({ skill, content: "", error: errorMessage(error), loading: false, path, offset: 0 })
+    }
   }
 
   async function selectModel(index: number) {
@@ -495,21 +551,45 @@ export function App({ config }: AppProps) {
     setSelectedModel(model)
     setAvailableModels(models)
     setSelectedModelIndex(modelIndex(models, model))
-    setShowModelPalette(false)
+    setActiveOverlay(null)
     await submitContent(`/model ${model}`)
   }
 
   async function selectThread(index: number) {
-    const thread = paletteThreads[wrapIndex(index, paletteThreads.length)]
+    const thread = filteredThreadList[wrapIndex(index, filteredThreadList.length)]
     if (!thread) return
-    setShowThreadPalette(false)
+    setActiveOverlay(null)
     await loadThread(thread.id)
+  }
+
+  async function loadThreadPreviews(threads: ThreadInfo[]) {
+    const missingThreads = threads.filter((thread) => !threadPreviews[thread.id])
+    if (missingThreads.length === 0) return
+    for (let index = 0; index < missingThreads.length; index += 10) {
+      const previews = await Promise.all(missingThreads.slice(index, index + 10).map(async (thread) => {
+        try {
+          const history = await client.history(thread.id, 12)
+          return [thread.id, threadPreviewFromHistory(history)] as const
+        } catch {
+          return [thread.id, ""] as const
+        }
+      }))
+      setThreadPreviews((current) => {
+        const next = { ...current }
+        for (const [threadId, preview] of previews) {
+          if (preview) next[threadId] = preview
+        }
+        return next
+      })
+    }
   }
 
   async function createThread() {
     try {
       const thread = await client.newThread()
+      activeThreadIdRef.current = thread.id
       dispatch({ type: "threads", threads: [thread, ...state.threads], activeThreadId: thread.id })
+      setSelectedThreadIndex(0)
       await loadThread(thread.id)
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
@@ -519,6 +599,11 @@ export function App({ config }: AppProps) {
   async function submit() {
     const content = input.trim()
     if (!content) return
+    const slashCommand = commandSet.find((command) => command.name === content)
+    if (slashCommand?.action) {
+      await runSlashCommand(slashCommand)
+      return
+    }
     const localCommand = localCliCommandForInput(content, config.mode)
     if (localCommand) {
       await runLocalCliCommand(content, localCommand)
@@ -530,12 +615,12 @@ export function App({ config }: AppProps) {
   async function submitContent(content: string) {
     const previousAssistantCount = state.transcript.filter((item) => item.role === "assistant").length
     applyOutgoingModelCommand(content)
-    setInput("")
-    textareaRef.current?.clear()
+    clearComposer()
     dispatch({ type: "user_sent", content, threadId: state.activeThreadId })
     try {
       const response = await client.send(content, state.activeThreadId)
       const threadId = response.thread_id ?? state.activeThreadId
+      if (threadId) activeThreadIdRef.current = threadId
       dispatch({ type: "run_started", threadId, runId: response.run_id, status: response.status })
       if (threadId && threadId !== state.activeThreadId) {
         dispatch({ type: "threads", threads: state.threads, activeThreadId: threadId })
@@ -548,62 +633,57 @@ export function App({ config }: AppProps) {
 
   async function runSlashCommand(command: SlashCommand | undefined) {
     if (!command) return
-    if (command.action === "threads") {
-      setInput("")
-      setShowCommandPalette(false)
-      textareaRef.current?.clear()
-      await openThreadPalette()
-      return
+    switch (command.action) {
+      case "threads":
+        clearComposer()
+        await openThreadPalette()
+        return
+      case "models":
+        clearComposer()
+        await openModelPalette()
+        return
+      case "skills":
+        clearComposer("skills")
+        await openSkillsPalette()
+        return
+      case "new-thread":
+        clearComposer()
+        await createThread()
+        return
+      case "cancel-run":
+        clearComposer()
+        await cancelActiveRun()
+        return
+      case "load-older":
+        clearComposer()
+        await loadOlderHistory()
+        return
+      case "settings":
+        clearComposer("settings")
+        return
+      case "local-command":
+        if (command.localArgs && config.mode === "local") {
+          await runLocalCliCommand(command.name, command.localArgs)
+          return
+        }
+        break
+      case "quit":
+        renderer.destroy()
+        return
     }
-    if (command.action === "models") {
-      setInput("")
-      setShowCommandPalette(false)
-      textareaRef.current?.clear()
-      await openModelPalette()
-      return
-    }
-    if (command.action === "cancel-run") {
-      setInput("")
-      setShowCommandPalette(false)
-      textareaRef.current?.clear()
-      await cancelActiveRun()
-      return
-    }
-    if (command.action === "load-older") {
-      setInput("")
-      setShowCommandPalette(false)
-      textareaRef.current?.clear()
-      await loadOlderHistory()
-      return
-    }
-    if (command.action === "settings") {
-      setInput("")
-      setShowCommandPalette(false)
-      setShowModelPalette(false)
-      setShowThreadPalette(false)
-      textareaRef.current?.clear()
-      setShowSettings(true)
-      return
-    }
-    if (command.action === "local-command" && command.localArgs && config.mode === "local") {
-      setInput("")
-      setShowCommandPalette(false)
-      textareaRef.current?.clear()
-      await runLocalCliCommand(command.name, command.localArgs)
-      return
-    }
-    if (command.action === "quit") {
-      renderer.destroy()
-      return
-    }
-    setShowCommandPalette(false)
+    setActiveOverlay(null)
     await submitContent(command.name)
+  }
+
+  function clearComposer(nextOverlay: ActiveOverlay = null) {
+    setInput("")
+    setActiveOverlay(nextOverlay)
+    textareaRef.current?.clear()
   }
 
   async function runLocalCliCommand(content: string, args: string[]) {
     const threadId = state.activeThreadId ?? "local"
-    setInput("")
-    textareaRef.current?.clear()
+    clearComposer()
     dispatch({ type: "user_sent", content, threadId })
     try {
       const result = await runRebornCli(config, args)
@@ -651,11 +731,11 @@ export function App({ config }: AppProps) {
       await sleep(delay)
       try {
         const history = await client.history(threadId)
-        for (const turn of history.turns) {
-          if (turn.response) applyModelCommandResponse(turn.response)
+        for (const response of assistantResponses(history)) {
+          applyModelCommandResponse(response)
         }
         dispatch({ type: "history", history })
-        const assistantCount = history.turns.filter((turn) => turn.response).length
+        const assistantCount = assistantResponses(history).length
         if (assistantCount > previousAssistantCount || history.pending_gate) return
       } catch (error) {
         dispatch({ type: "error", message: errorMessage(error) })
@@ -666,7 +746,9 @@ export function App({ config }: AppProps) {
 
   async function refreshThreadFromEvent(threadId?: string | null) {
     if (!threadId) return
+    if (threadId !== activeThreadIdRef.current) return
     await sleep(150)
+    if (threadId !== activeThreadIdRef.current) return
     await loadThread(threadId)
   }
 
@@ -687,9 +769,7 @@ export function App({ config }: AppProps) {
       setSelectedModel(parsedList.activeModel)
       setAvailableModels(parsedList.models)
       setSelectedModelIndex(modelIndex(parsedList.models, parsedList.activeModel))
-      setShowModelPalette(parsedList.models.length > 0)
-      setShowCommandPalette(false)
-      setShowThreadPalette(false)
+      setActiveOverlay(parsedList.models.length > 0 ? "models" : null)
       return true
     }
 
@@ -721,10 +801,47 @@ export function App({ config }: AppProps) {
   const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
   const composerWidth = clamp(width - 8, 42, 82)
   const conversationWidth = Math.max(1, width - 4)
+  const handleInputChange = () => setInput(textareaRef.current?.plainText ?? "")
+  const composer: ComposerCommonProps = {
+    inputRef: textareaRef,
+    isThinking: state.isThinking,
+    railColor: activityFrame.railColor,
+    selectedSlashCommandIndex: wrapIndex(selectedCommandIndex, slashCommands.length),
+    selectedModel,
+    selectedModelIndex,
+    selectedThreadIndex,
+    showModelPalette,
+    showSlashCommands,
+    showThreadPalette,
+    slashCommands,
+    spinner: activityFrame.spinner,
+    threadPreviews,
+    threadSearch,
+    thinkingLabel,
+    activeThreadId: state.activeThreadId,
+    models: availableModels,
+    threads: showThreadPalette ? filteredThreadList : state.threads,
+    onInputChange: handleInputChange,
+    onSubmit: submit,
+  }
 
   return (
     <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505" }}>
-      {showSettings ? (
+      {showSkills ? (
+        <SkillsSurface
+          detail={skillDetail}
+          error={skillsError}
+          filteredSkills={filteredSkillList}
+          height={height}
+          loading={skillsLoading}
+          markdownStyle={markdownStyle}
+          query={skillSearch}
+          selectedIndex={wrapIndex(selectedSkillIndex, filteredSkillList.length)}
+          source={skillList.source}
+          totalCount={skillList.configured}
+          width={width}
+        />
+      ) : showSettings ? (
         <SettingsSurface
           config={config}
           connected={state.connected}
@@ -737,1149 +854,39 @@ export function App({ config }: AppProps) {
       ) : hasConversation ? (
         <ConversationSurface
           contentWidth={conversationWidth}
+          composer={composer}
           composerWidth={conversationWidth}
           height={height}
-          inputRef={textareaRef}
-          isThinking={state.isThinking}
           lastError={state.lastError}
           markdownStyle={markdownStyle}
           pendingGate={state.pendingGate ?? null}
-          railColor={activityFrame.railColor}
           selectedGateAction={selectedGateAction}
-          selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
-          selectedModel={selectedModel}
-          selectedModelIndex={selectedModelIndex}
-          selectedThreadIndex={selectedThreadIndex}
           showOlderHistoryHint={state.hasOlderHistory}
-          showModelPalette={showModelPalette}
-          showSlashCommands={showSlashCommands}
-          showThreadPalette={showThreadPalette}
-          slashCommands={slashCommands}
-          spinner={activityFrame.spinner}
-          thinkingLabel={thinkingLabel}
-          activeThreadId={state.activeThreadId}
-          models={availableModels}
-          threads={showThreadPalette ? paletteThreads : state.threads}
           transcript={state.transcript}
-          onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
+          expandedActivityIds={expandedActivityIds}
+          onToggleActivityExpanded={toggleActivityExpanded}
           onResolve={(action) => void resolveGate(action)}
           onSelectGateAction={setSelectedGateAction}
-          onSubmit={submit}
         />
       ) : (
         <WelcomeSurface
           baseUrl={config.baseUrl}
+          composer={composer}
           composerWidth={composerWidth}
           connected={state.connected}
           height={height}
-          inputRef={textareaRef}
-          isThinking={state.isThinking}
           lastError={state.lastError}
           localDevYolo={localDevYolo}
-          railColor={activityFrame.railColor}
-          selectedSlashCommandIndex={wrapIndex(selectedCommandIndex, slashCommands.length)}
-          selectedModel={selectedModel}
-          selectedModelIndex={selectedModelIndex}
-          selectedThreadIndex={selectedThreadIndex}
-          showModelPalette={showModelPalette}
-          showSlashCommands={showSlashCommands}
-          showThreadPalette={showThreadPalette}
-          slashCommands={slashCommands}
-          spinner={activityFrame.spinner}
-          thinkingLabel={thinkingLabel}
           status={state.status}
-          activeThreadId={state.activeThreadId}
-          models={availableModels}
-          threads={showThreadPalette ? paletteThreads : state.threads}
           width={width}
-          onInputChange={() => setInput(textareaRef.current?.plainText ?? "")}
-          onSubmit={submit}
         />
       )}
-    </box>
-  )
-}
-
-function SettingsSurface({
-  config,
-  connected,
-  height,
-  selectedIndex,
-  selectedModel,
-  status,
-  width,
-}: {
-  config: ClientConfig
-  connected: boolean
-  height: number
-  selectedIndex: number
-  selectedModel: string
-  status: string
-  width: number
-}) {
-  const contentWidth = Math.max(1, width - 4)
-  const narrow = width < 86
-  const profileName = config.mode === "local" ? "local-dev" : "remote"
-  const serverState = connected ? "online" : "offline"
-  const authState = config.token ? "present" : "missing"
-  const secretCount = config.token ? "1 set · 2 unknown" : "1 missing · 2 unknown"
-  const sourcePath = config.rebornSource ?? "not configured"
-  const menu: SettingsMenuItem[] = SETTINGS_SECTIONS.map((section) => ({
-    label: section,
-    meta: settingsMenuMeta(section, {
-      config,
-      secretCount,
-      selectedModel,
-      serverState,
-      profileName,
-    }),
-  }))
-  const selectedItem = menu[wrapIndex(selectedIndex, menu.length)] ?? menu[0]
-
-  if (narrow) {
-    return (
-      <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-        <SettingsHeader width={contentWidth} />
-        <box style={{ height: 1 }} />
-        <text fg="#f2f2f2">Settings</text>
-        <box style={{ height: 1 }} />
-        <SettingsMenu items={menu} selectedIndex={selectedIndex} width={contentWidth} />
-        <box style={{ height: 1 }} />
-        <SettingsPreview
-          authState={authState}
-          config={config}
-          connected={connected}
-          item={selectedItem}
-          selectedModel={selectedModel}
-          sourcePath={sourcePath}
-          status={status}
-          width={contentWidth}
-        />
-        <SettingsFooter width={contentWidth} />
-      </box>
-    )
-  }
-
-  return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SettingsHeader width={contentWidth} />
-      <box style={{ height: 1 }} />
-      <box style={{ width: contentWidth, flexDirection: "row" }}>
-        <box style={{ width: 32, flexDirection: "column" }}>
-          <text fg="#f2f2f2">Settings</text>
-          <box style={{ height: 1 }} />
-          <SettingsMenu items={menu} selectedIndex={selectedIndex} width={32} />
-        </box>
-        <box style={{ width: 2 }} />
-        <SettingsPreview
-          authState={authState}
-          config={config}
-          connected={connected}
-          item={selectedItem}
-          selectedModel={selectedModel}
-          sourcePath={sourcePath}
-          status={status}
-          width={Math.max(1, contentWidth - 34)}
-        />
-      </box>
-      <SettingsFooter width={contentWidth} />
-    </box>
-  )
-}
-
-function SettingsHeader({ width }: { width: number }) {
-  return (
-    <box style={{ width, height: 2, flexDirection: "column" }}>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg="#8cffb0">ironclaw</text>
-        <text fg="#777777">{padEnd("", Math.max(1, width - 18))}</text>
-        <text fg="#d0d0d0">settings</text>
-      </box>
-      <SettingsDivider width={width} />
-    </box>
-  )
-}
-
-function SettingsMenu({
-  items,
-  selectedIndex,
-  width,
-}: {
-  items: SettingsMenuItem[]
-  selectedIndex: number
-  width: number
-}) {
-  return (
-    <box style={{ width, flexDirection: "column" }}>
-      {items.map((item, index) => (
-        <SettingsMenuRow
-          key={item.label}
-          item={item}
-          selected={index === selectedIndex}
-          width={width}
-        />
-      ))}
-    </box>
-  )
-}
-
-function SettingsMenuRow({
-  item,
-  selected,
-  width,
-}: {
-  item: SettingsMenuItem
-  selected: boolean
-  width: number
-}) {
-  const metaWidth = Math.max(0, width - 15)
-  return (
-    <box style={{ width, height: 1, flexDirection: "row", backgroundColor: selected ? "#141414" : "#050505" }}>
-      <box style={{ width: 1, backgroundColor: selected ? "#2ee66b" : "#050505" }} />
-      <text fg={selected ? "#2ee66b" : "#707070"}>{selected ? "> " : "  "}</text>
-      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{padEnd(item.label, 12)}</text>
-      <text fg="#777777">{truncate(item.meta, metaWidth)}</text>
-    </box>
-  )
-}
-
-function SettingsPreview({
-  authState,
-  config,
-  connected,
-  item,
-  selectedModel,
-  sourcePath,
-  status,
-  width,
-}: {
-  authState: string
-  config: ClientConfig
-  connected: boolean
-  item: SettingsMenuItem
-  selectedModel: string
-  sourcePath: string
-  status: string
-  width: number
-}) {
-  const fields = settingsFieldsForSection(item.label, {
-    authState,
-    config,
-    connected,
-    selectedModel,
-    sourcePath,
-    status,
-  })
-
-  return (
-    <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-      <text fg="#f2f2f2">{item.label}</text>
-      <box style={{ height: 1 }} />
-      {fields.map((field) => (
-        <SettingsField key={field.label} label={field.label} value={field.value} width={width - 4} />
-      ))}
-      <box style={{ height: 1 }} />
-      <text fg="#777777">{truncate("enter opens this section once settings are wired", Math.max(1, width - 4))}</text>
-    </box>
-  )
-}
-
-function settingsMenuMeta(
-  section: SettingsSection,
-  context: {
-    config: ClientConfig
-    profileName: string
-    secretCount: string
-    selectedModel: string
-    serverState: string
-  },
-) {
-  const { config, profileName, secretCount, selectedModel, serverState } = context
-  switch (section) {
-    case "Connection":
-      return serverState
-    case "Models":
-      return selectedModel
-    case "Secrets":
-      return secretCount
-    case "Tools":
-      return config.mode === "local" ? "local + remote" : "remote"
-    case "Approvals":
-      return "ask"
-    default:
-      return profileName
-  }
-}
-
-function settingsFieldsForSection(
-  section: SettingsSection,
-  context: {
-    authState: string
-    config: ClientConfig
-    connected: boolean
-    selectedModel: string
-    sourcePath: string
-    status: string
-  },
-) {
-  const { authState, config, connected, selectedModel, sourcePath, status } = context
-  switch (section) {
-    case "Connection":
-      return [
-        { label: "server", value: config.baseUrl },
-        { label: "state", value: connected ? "online" : "offline" },
-        { label: "status", value: status },
-        { label: "mode", value: config.mode },
-      ]
-    case "Models":
-      return [
-        { label: "active", value: selectedModel },
-        { label: "provider", value: "OpenAI" },
-        { label: "command", value: "/model" },
-        { label: "source", value: "Reborn product workflow" },
-      ]
-    case "Secrets":
-      return [
-        { label: "webui token", value: authState },
-        { label: "user id", value: "unknown" },
-        { label: "storage", value: "env preview only" },
-        { label: "reveal", value: "not wired" },
-      ]
-    case "Tools":
-      return [
-        { label: "remote", value: "product workflow commands" },
-        { label: "local", value: config.mode === "local" ? "CLI commands enabled" : "disabled" },
-        { label: "source", value: sourcePath },
-        { label: "approval", value: "ask" },
-      ]
-    case "Approvals":
-      return [
-        { label: "default", value: "ask" },
-        { label: "shell", value: "ask" },
-        { label: "writes", value: "ask" },
-        { label: "network", value: "ask" },
-      ]
-    default:
-      return [
-        { label: "mode", value: config.mode },
-        { label: "model", value: selectedModel },
-        { label: "server", value: `${connected ? "online" : "offline"} · ${config.baseUrl}` },
-        { label: "auth", value: `env token · ${authState}` },
-        { label: "source", value: sourcePath },
-        { label: "status", value: status },
-      ]
-  }
-}
-
-function SettingsField({ label, value, width }: { label: string; value: string; width: number }) {
-  const labelWidth = 18
-  const valueWidth = Math.max(8, width - labelWidth - 1)
-  return (
-    <box style={{ width, height: 1, flexDirection: "row" }}>
-      <text fg="#8a8a8a">{padEnd(label, labelWidth)}</text>
-      <text fg="#d0d0d0">{truncate(value, valueWidth)}</text>
-    </box>
-  )
-}
-
-function SettingsFooter({ width }: { width: number }) {
-  return (
-    <box style={{ width, height: 1, flexDirection: "row", marginTop: 1 }}>
-      <text fg="#777777">{truncate("up/down section · enter open · esc back", width)}</text>
-    </box>
-  )
-}
-
-function SettingsDivider({ width }: { width: number }) {
-  return (
-    <box style={{ height: 1 }}>
-      <text fg="#1f1f1f">{padEnd("", width).replaceAll(" ", "─")}</text>
-    </box>
-  )
-}
-
-function WelcomeSurface({
-  baseUrl,
-  composerWidth,
-  connected,
-  height,
-  inputRef,
-  isThinking,
-  lastError,
-  localDevYolo,
-  railColor,
-  selectedSlashCommandIndex,
-  selectedModel,
-  selectedModelIndex,
-  selectedThreadIndex,
-  showModelPalette,
-  showSlashCommands,
-  showThreadPalette,
-  slashCommands,
-  spinner,
-  thinkingLabel,
-  status,
-  activeThreadId,
-  models,
-  threads,
-  width,
-  onInputChange,
-  onSubmit,
-}: {
-  baseUrl: string
-  composerWidth: number
-  connected: boolean
-  height: number
-  inputRef: RefObject<TextareaRenderable | null>
-  isThinking: boolean
-  lastError?: string | null
-  localDevYolo: boolean
-  railColor: string
-  selectedSlashCommandIndex: number
-  selectedModel: string
-  selectedModelIndex: number
-  selectedThreadIndex: number
-  showModelPalette: boolean
-  showSlashCommands: boolean
-  showThreadPalette: boolean
-  slashCommands: SlashCommand[]
-  spinner: string
-  thinkingLabel: string
-  status: string
-  activeThreadId?: string | null
-  models: string[]
-  threads: ThreadInfo[]
-  width: number
-  onInputChange: () => void
-  onSubmit: () => void
-}) {
-  const topSpacer = Math.max(1, Math.floor(height * 0.32) - 5)
-  const logoColors = useRainbowLogoColors(localDevYolo)
-  const logoText = localDevYolo ? "IRONCLAW" : "ironclaw"
-  return (
-    <box style={{ width, height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505" }}>
-      <box style={{ height: topSpacer }} />
-      {height >= 15 ? (
-        <box style={{ flexDirection: "row", alignItems: "flex-start" }}>
-          <ascii-font text={logoText} font="block" color={logoColors} backgroundColor="#050505" />
-          {localDevYolo ? <YoloSplashTag /> : null}
-        </box>
-      ) : (
-        <text fg={logoColors[0] ?? "#8cffb0"}>{logoText}</text>
-      )}
-      <box style={{ height: 2 }} />
-      <Composer
-        focused
-        inputRef={inputRef}
-        isThinking={isThinking}
-        railColor={railColor}
-        selectedSlashCommandIndex={selectedSlashCommandIndex}
-        selectedModel={selectedModel}
-        selectedModelIndex={selectedModelIndex}
-        selectedThreadIndex={selectedThreadIndex}
-        showModelPalette={showModelPalette}
-        showSlashCommands={showSlashCommands}
-        showThreadPalette={showThreadPalette}
-        slashCommands={slashCommands}
-        showThinkingStatus
-        spinner={spinner}
-        thinkingLabel={thinkingLabel}
-        activeThreadId={activeThreadId}
-        models={models}
-        threads={threads}
-        width={composerWidth}
-        onInputChange={onInputChange}
-        onSubmit={onSubmit}
-      />
-      <HintLine width={composerWidth} />
-      <box style={{ height: 3 }} />
-      <text fg="#777777">
-        <span fg="#f6ad3c">* Tip</span> Press <span fg="#cfcfcf">ctrl+z</span> to suspend the terminal and return to your shell
-      </text>
-      {lastError ? (
-        <box style={{ height: 1, width: composerWidth }}>
-          <text fg="#696969">
-            {connected ? "online" : "offline"} | {status} | {truncate(baseUrl, Math.max(0, composerWidth - 18))}
-          </text>
-        </box>
-      ) : null}
-    </box>
-  )
-}
-
-function ConversationSurface({
-  composerWidth,
-  contentWidth,
-  height,
-  inputRef,
-  isThinking,
-  lastError,
-  markdownStyle,
-  pendingGate,
-  railColor,
-  selectedGateAction,
-  selectedSlashCommandIndex,
-  selectedModel,
-  selectedModelIndex,
-  selectedThreadIndex,
-  showOlderHistoryHint,
-  showModelPalette,
-  showSlashCommands,
-  showThreadPalette,
-  slashCommands,
-  spinner,
-  thinkingLabel,
-  activeThreadId,
-  models,
-  threads,
-  transcript,
-  onInputChange,
-  onResolve,
-  onSelectGateAction,
-  onSubmit,
-}: {
-  composerWidth: number
-  contentWidth: number
-  height: number
-  inputRef: RefObject<TextareaRenderable | null>
-  isThinking: boolean
-  lastError?: string | null
-  markdownStyle: SyntaxStyle
-  pendingGate: PendingGateInfo | null
-  railColor: string
-  selectedGateAction: GateAction
-  selectedSlashCommandIndex: number
-  selectedModel: string
-  selectedModelIndex: number
-  selectedThreadIndex: number
-  showOlderHistoryHint: boolean
-  showModelPalette: boolean
-  showSlashCommands: boolean
-  showThreadPalette: boolean
-  slashCommands: SlashCommand[]
-  spinner: string
-  thinkingLabel: string
-  activeThreadId?: string | null
-  models: string[]
-  threads: ThreadInfo[]
-  transcript: Array<{ id: string; role: string; text: string; state?: string }>
-  onInputChange: () => void
-  onResolve: (action: GateAction) => void
-  onSelectGateAction: (action: GateAction) => void
-  onSubmit: () => void
-}) {
-  const slashPopupHeight = showSlashCommands ? slashCommandPopupHeight(slashCommands) : 0
-  const threadPopupHeight = showThreadPalette ? threadPaletteHeight(threads) : 0
-  const modelPopupHeight = showModelPalette ? modelPaletteHeight(models) : 0
-  const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight)
-  const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
-  const transcriptEndKey = transcript.map((item) => `${item.id}:${item.text.length}`).join("|")
-
-  useEffect(() => {
-    const scrollbox = transcriptScrollRef.current
-    if (!scrollbox) return
-    scrollbox.scrollTo({ x: 0, y: scrollbox.scrollHeight })
-  }, [transcriptEndKey, transcriptHeight])
-
-  return (
-    <box style={{ height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505", paddingTop: 1 }}>
-      <scrollbox
-        ref={transcriptScrollRef}
-        style={{
-          width: contentWidth,
-          height: transcriptHeight,
-          paddingBottom: 1,
-          stickyScroll: true,
-          stickyStart: "bottom",
-          scrollY: true,
-        }}
-      >
-        {showOlderHistoryHint ? <LoadOlderHint width={contentWidth} /> : null}
-        {transcript.map((item) => (
-          <TranscriptMessage key={item.id} item={item} markdownStyle={markdownStyle} selectedModel={selectedModel} width={contentWidth} />
-        ))}
-        {isThinking ? <ThinkingMessage selectedModel={selectedModel} spinner={spinner} thinkingLabel={thinkingLabel} width={contentWidth} /> : null}
-      </scrollbox>
-      {pendingGate ? (
-        <GatePanel
-          gate={pendingGate}
-          selectedAction={selectedGateAction}
-          width={composerWidth}
-          onSelect={onSelectGateAction}
-          onResolve={onResolve}
-        />
-      ) : (
-        <box style={{ width: composerWidth, height: 1 }} />
-      )}
-      <Composer
-        focused={!pendingGate}
-        inputRef={inputRef}
-        isThinking={isThinking}
-        railColor={railColor}
-        selectedSlashCommandIndex={selectedSlashCommandIndex}
-        selectedModel={selectedModel}
-        selectedModelIndex={selectedModelIndex}
-        selectedThreadIndex={selectedThreadIndex}
-        showModelPalette={showModelPalette}
-        showSlashCommands={showSlashCommands}
-        showThreadPalette={showThreadPalette}
-        slashCommands={slashCommands}
-        showThinkingStatus={false}
-        spinner={spinner}
-        thinkingLabel={thinkingLabel}
-        activeThreadId={activeThreadId}
-        models={models}
-        threads={threads}
-        width={composerWidth}
-        onInputChange={onInputChange}
-        onSubmit={onSubmit}
-      />
-      {lastError ? <StatusLine connected={false} status="error" message={lastError} width={composerWidth} /> : null}
-    </box>
-  )
-}
-
-function TranscriptMessage({
-  item,
-  markdownStyle,
-  selectedModel,
-  width,
-}: {
-  item: { id: string; role: string; text: string; state?: string }
-  markdownStyle: SyntaxStyle
-  selectedModel: string
-  width: number
-}) {
-  if (item.role === "user") {
-    return (
-      <box style={{ width, flexDirection: "row", backgroundColor: "#141414", marginBottom: 2 }}>
-        <box style={{ width: 1, backgroundColor: "#2ee66b" }} />
-        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-          <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
-        </box>
-      </box>
-    )
-  }
-
-  if (item.role === "assistant") {
-    return (
-      <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
-        <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
-        <BuildLine selectedModel={selectedModel} />
-      </box>
-    )
-  }
-
-  if (item.role === "activity") {
-    const status = uiStatusKey(item.state ?? "")
-    const rail = status === "failed" || status === "killed" ? "#ff6b6b" : status === "completed" ? "#2ee66b" : "#8cffb0"
-    const [headline, ...detail] = item.text.split("\n")
-    return (
-      <box style={{ width, flexDirection: "row", backgroundColor: "#111111", marginBottom: 2 }}>
-        <box style={{ width: 1, backgroundColor: rail }} />
-        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-          <text fg={rail}>{headline || "Using tool"}</text>
-          {detail.length ? <text fg="#8a8a8a">{truncate(detail.join(" · "), Math.max(1, width - 5))}</text> : null}
-        </box>
-      </box>
-    )
-  }
-
-  return (
-    <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
-      <text fg="#d29922">{item.text || " "}</text>
-    </box>
-  )
-}
-
-function BuildLine({ selectedModel }: { selectedModel: string }) {
-  return (
-    <box style={{ height: 1, flexDirection: "row", marginTop: 1 }}>
-      <text fg="#2ee66b">▣</text>
-      <text fg="#2ee66b"> Build</text>
-      <text fg="#777777"> · </text>
-      <text fg="#d0d0d0">{selectedModel}</text>
-      <text fg="#777777"> · 1.6s</text>
-    </box>
-  )
-}
-
-function ThinkingMessage({
-  selectedModel,
-  spinner,
-  thinkingLabel,
-  width,
-}: {
-  selectedModel: string
-  spinner: string
-  thinkingLabel: string
-  width: number
-}) {
-  return (
-    <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg="#2ee66b">{spinner}</text>
-        <text fg="#2ee66b"> Build</text>
-        <text fg="#777777"> · </text>
-        <text fg="#d0d0d0">{selectedModel}</text>
-        <text fg="#777777"> · {thinkingLabel}</text>
-      </box>
-    </box>
-  )
-}
-
-function LoadOlderHint({ width }: { width: number }) {
-  return (
-    <box style={{ width, height: 2, flexDirection: "column", paddingLeft: 3, marginBottom: 1 }}>
-      <text fg="#777777">{truncate("/history or pageup to load older messages", Math.max(1, width - 3))}</text>
-    </box>
-  )
-}
-
-function YoloSplashTag() {
-  return (
-    <box style={{ width: 16, height: 3, flexDirection: "column", marginLeft: 0, marginTop: 2 }}>
-      <text fg="#fff36d">     yolo</text>
-      <text fg="#ffb86b">   mode</text>
-      <text fg="#ff7ad9"> on!</text>
-    </box>
-  )
-}
-
-function Composer({
-  focused,
-  inputRef,
-  isThinking,
-  railColor,
-  selectedSlashCommandIndex,
-  selectedModel,
-  selectedModelIndex,
-  selectedThreadIndex,
-  showModelPalette,
-  showSlashCommands,
-  showThreadPalette,
-  slashCommands,
-  showThinkingStatus = true,
-  spinner,
-  thinkingLabel,
-  activeThreadId,
-  models,
-  threads,
-  width,
-  onInputChange,
-  onSubmit,
-}: {
-  focused: boolean
-  inputRef: RefObject<TextareaRenderable | null>
-  isThinking: boolean
-  railColor: string
-  selectedSlashCommandIndex: number
-  selectedModel: string
-  selectedModelIndex: number
-  selectedThreadIndex: number
-  showModelPalette: boolean
-  showSlashCommands: boolean
-  showThreadPalette: boolean
-  slashCommands: SlashCommand[]
-  showThinkingStatus?: boolean
-  spinner: string
-  thinkingLabel: string
-  activeThreadId?: string | null
-  models: string[]
-  threads: ThreadInfo[]
-  width: number
-  onInputChange: () => void
-  onSubmit: () => void
-}) {
-  return (
-    <box style={{ width, flexDirection: "column" }}>
-      {showModelPalette ? (
-        <ModelPalette
-          models={models}
-          selectedIndex={selectedModelIndex}
-          selectedModel={selectedModel}
-          width={width}
-        />
-      ) : null}
-      {showThreadPalette ? (
-        <ThreadPalette
-          activeThreadId={activeThreadId}
-          selectedIndex={selectedThreadIndex}
-          threads={threads}
-          width={width}
-        />
-      ) : null}
-      {showSlashCommands ? (
-        <SlashCommandPopup
-          commands={slashCommands}
-          selectedIndex={selectedSlashCommandIndex}
-          width={width}
-        />
-      ) : null}
-      <box style={{ width, height: 6, flexDirection: "row", backgroundColor: "#1f1f1f" }}>
-        <box style={{ width: 1, backgroundColor: isThinking ? railColor : "#2ee66b" }} />
-        <box style={{ flexDirection: "column", flexGrow: 1, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-          <textarea
-            ref={inputRef}
-            focused={focused}
-            placeholder={'Ask anything... "What is the tech stack of this project?"'}
-            initialValue=""
-            backgroundColor="#1f1f1f"
-            focusedBackgroundColor="#1f1f1f"
-            textColor="#d9d9d9"
-            focusedTextColor="#f2f2f2"
-            placeholderColor="#8a8a8a"
-            keyBindings={[
-              { name: "return", action: "submit" },
-              { name: "kpenter", action: "submit" },
-              { name: "linefeed", action: "submit" },
-              { name: "return", shift: true, action: "newline" },
-              { name: "kpenter", shift: true, action: "newline" },
-            ]}
-            onContentChange={onInputChange}
-            onSubmit={onSubmit}
-            style={{ height: 3 }}
-          />
-          <box style={{ height: 1, flexDirection: "row" }}>
-            <text fg="#2ee66b">Build</text>
-            <text fg="#777777"> . </text>
-            <text fg="#d0d0d0">{selectedModel}</text>
-            <text fg="#858585"> OpenAI</text>
-            {isThinking && showThinkingStatus ? <text fg={railColor}> {spinner} {thinkingLabel}</text> : null}
-          </box>
-        </box>
-      </box>
-    </box>
-  )
-}
-
-function ThreadPalette({
-  activeThreadId,
-  selectedIndex,
-  threads,
-  width,
-}: {
-  activeThreadId?: string | null
-  selectedIndex: number
-  threads: ThreadInfo[]
-  width: number
-}) {
-  const visibleThreads = threads.slice(0, 8)
-  const selectedVisibleIndex = wrapIndex(selectedIndex, visibleThreads.length)
-  return (
-    <box style={{ width, flexDirection: "column", backgroundColor: "#101010", paddingTop: 1, paddingBottom: 1 }}>
-      <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#8cffb0">threads</text>
-        <text fg="#777777"> · up/down select · enter open · esc close</text>
-      </box>
-      {visibleThreads.length ? (
-        visibleThreads.map((thread, index) => (
-          <ThreadRow
-            key={thread.id}
-            active={thread.id === activeThreadId}
-            selected={index === selectedVisibleIndex}
-            thread={thread}
-            width={width}
-          />
-        ))
-      ) : (
-        <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-          <text fg="#777777">No threads yet.</text>
-        </box>
-      )}
-    </box>
-  )
-}
-
-function ThreadRow({
-  active,
-  selected,
-  thread,
-  width,
-}: {
-  active: boolean
-  selected: boolean
-  thread: ThreadInfo
-  width: number
-}) {
-  const marker = selected ? ">" : active ? "*" : " "
-  const title = thread.title || thread.id
-  const suffix = active ? " active" : ` ${thread.state}`
-  return (
-    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#101010" }}>
-      <text fg={selected || active ? "#2ee66b" : "#707070"}>{marker} </text>
-      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{truncate(title, Math.max(8, width - suffix.length - 8))}</text>
-      <text fg={active ? "#8cffb0" : "#777777"}>{suffix}</text>
-    </box>
-  )
-}
-
-function ModelPalette({
-  models,
-  selectedIndex,
-  selectedModel,
-  width,
-}: {
-  models: string[]
-  selectedIndex: number
-  selectedModel: string
-  width: number
-}) {
-  const visibleModels = models.slice(0, 8)
-  const selectedVisibleIndex = wrapIndex(selectedIndex, visibleModels.length)
-  return (
-    <box style={{ width, flexDirection: "column", backgroundColor: "#101010", paddingTop: 1, paddingBottom: 1 }}>
-      <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#8cffb0">models</text>
-        <text fg="#777777"> · up/down select · enter use · esc close</text>
-      </box>
-      {visibleModels.map((model, index) => (
-        <ModelRow
-          key={model}
-          active={model === selectedModel}
-          model={model}
-          selected={index === selectedVisibleIndex}
-          width={width}
-        />
-      ))}
-      <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#606060">{truncate("sends /model through Reborn command workflow", Math.max(1, width - 4))}</text>
-      </box>
-    </box>
-  )
-}
-
-function ModelRow({
-  active,
-  model,
-  selected,
-  width,
-}: {
-  active: boolean
-  model: string
-  selected: boolean
-  width: number
-}) {
-  const marker = selected ? ">" : active ? "*" : " "
-  const suffix = active ? " selected" : ""
-  return (
-    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#101010" }}>
-      <text fg={selected || active ? "#2ee66b" : "#707070"}>{marker} </text>
-      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{truncate(model, Math.max(8, width - suffix.length - 8))}</text>
-      <text fg={active ? "#8cffb0" : "#777777"}>{suffix}</text>
-    </box>
-  )
-}
-
-function SlashCommandPopup({
-  commands,
-  selectedIndex,
-  width,
-}: {
-  commands: SlashCommand[]
-  selectedIndex: number
-  width: number
-}) {
-  const selected = wrapIndex(selectedIndex, commands.length)
-  const start = clamp(selected - SLASH_COMMAND_POPUP_LIMIT + 1, 0, Math.max(0, commands.length - SLASH_COMMAND_POPUP_LIMIT))
-  const visibleCommands = commands.slice(start, start + SLASH_COMMAND_POPUP_LIMIT)
-  return (
-    <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingTop: 1, paddingBottom: 1 }}>
-      {visibleCommands.map((command, index) => (
-        <SlashCommandRow
-          key={command.name}
-          command={command}
-          selected={start + index === selected}
-          width={width}
-        />
-      ))}
-      <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#606060">{truncate(commandPopupHint(start, visibleCommands.length, commands.length), width - 4)}</text>
-      </box>
-    </box>
-  )
-}
-
-function SlashCommandRow({
-  command,
-  selected,
-  width,
-}: {
-  command: SlashCommand
-  selected: boolean
-  width: number
-}) {
-  const marker = selected ? ">" : " "
-  const commandWidth = 17
-  const sourceWidth = 9
-  const descriptionWidth = Math.max(10, width - commandWidth - sourceWidth - 8)
-  return (
-    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#111111" }}>
-      <text fg={selected ? "#2ee66b" : "#707070"}>{marker} </text>
-      <text fg={selected ? "#8cffb0" : "#d0d0d0"}>{padEnd(command.name, commandWidth)}</text>
-      <text fg={sourceColor(command.source)}>{padEnd(command.source, sourceWidth)}</text>
-      <text fg="#777777">{truncate(command.description, descriptionWidth)}</text>
-    </box>
-  )
-}
-
-function HintLine({ width }: { width: number }) {
-  return (
-    <box style={{ width, height: 1, flexDirection: "row", justifyContent: "flex-end" }}>
-      <text fg="#cfcfcf">ctrl+p</text>
-      <text fg="#777777"> commands   </text>
-      <text fg="#cfcfcf">ctrl+t</text>
-      <text fg="#777777"> threads   </text>
-      <text fg="#cfcfcf">ctrl+m</text>
-      <text fg="#777777"> model   </text>
-      <text fg="#cfcfcf">ctrl+x</text>
-      <text fg="#777777"> cancel</text>
-    </box>
-  )
-}
-
-function StatusLine({
-  baseUrl,
-  connected,
-  message,
-  status,
-  width,
-}: {
-  baseUrl?: string
-  connected: boolean
-  message: string
-  status: string
-  width: number
-}) {
-  return (
-    <box style={{ width, height: 2, flexDirection: "column" }}>
-      <text fg={connected ? "#8fd694" : "#f08a8a"}>{connected ? "online" : "offline"} | {status}</text>
-      <text fg="#777777">{truncate(baseUrl ? `${message} | ${baseUrl}` : message, width)}</text>
-    </box>
-  )
-}
-
-function GatePanel({
-  gate,
-  selectedAction,
-  width,
-  onSelect,
-  onResolve,
-}: {
-  gate: PendingGateInfo
-  selectedAction: GateAction
-  width: number
-  onSelect: (action: GateAction) => void
-  onResolve: (action: GateAction) => void
-}) {
-  return (
-    <box
-      focused
-      style={{ width, height: 8, backgroundColor: "#181818", flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
-    >
-      <text fg="#f0b45f">Approval required: {gate.tool_name}</text>
-      <text fg="#d7d7d7">{truncate(gate.description, width - 6)}</text>
-      <text fg="#858585">{truncate(gate.parameters, width - 6)}</text>
-      <box style={{ flexDirection: "row", height: 3, marginTop: 1 }}>
-        <GateButton
-          label="Approve"
-          action="approved"
-          selected={selectedAction === "approved"}
-          onSelect={onSelect}
-          onResolve={onResolve}
-        />
-        <box style={{ width: 2 }} />
-        <GateButton
-          label="Deny"
-          action="denied"
-          selected={selectedAction === "denied"}
-          onSelect={onSelect}
-          onResolve={onResolve}
-        />
-        <text fg="#777777">  left/right select, enter activate</text>
-      </box>
-    </box>
-  )
-}
-
-function GateButton({
-  label,
-  action,
-  selected,
-  onSelect,
-  onResolve,
-}: {
-  label: string
-  action: GateAction
-  selected: boolean
-  onSelect: (action: GateAction) => void
-  onResolve: (action: GateAction) => void
-}) {
-  const isApprove = action === "approved"
-  const backgroundColor = selected ? (isApprove ? "#12351f" : "#3a1616") : "#242424"
-  const borderColor = selected ? (isApprove ? "#2ea043" : "#f85149") : "#3d3d3d"
-  const textColor = selected ? "#f5f5f5" : isApprove ? "#8fd694" : "#f08a8a"
-
-  return (
-    <box
-      focusable
-      onMouseOver={() => onSelect(action)}
-      onMouseDown={() => onSelect(action)}
-      onMouseUp={() => onResolve(action)}
-      style={{
-        border: true,
-        borderColor,
-        backgroundColor,
-        width: 14,
-        height: 3,
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      <text fg={textColor}>{selected ? "> " : "  "}{label}{selected ? " <" : "  "}</text>
     </box>
   )
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
-}
-
-function truncate(value: string, max: number): string {
-  if (value.length <= max) return value
-  return `${value.slice(0, Math.max(0, max - 3))}...`
-}
-
-function padEnd(value: string, length: number): string {
-  return value.length >= length ? value.slice(0, length) : value + " ".repeat(length - value.length)
-}
-
-function commandPopupHint(start: number, count: number, total: number): string {
-  const range = total > count ? ` · ${start + 1}-${start + count}/${total}` : ""
-  return `up/down select · enter run · esc close${range}`
-}
-
-function sourceColor(source: SlashCommandSource): string {
-  switch (source) {
-    case "remote":
-      return "#8cffb0"
-    case "local":
-      return "#f6ad3c"
-    case "tui":
-      return "#7aa2f7"
-  }
-}
-
-function slashCommandPopupHeight(commands: SlashCommand[]): number {
-  return Math.min(commands.length, SLASH_COMMAND_POPUP_LIMIT) + 3
-}
-
-function threadPaletteHeight(threads: ThreadInfo[]): number {
-  return Math.min(Math.max(threads.length, 1), 8) + 3
-}
-
-function modelPaletteHeight(models: string[]): number {
-  return Math.min(Math.max(models.length, 1), 8) + 3
 }
 
 function modelIndex(models: string[], model: string): number {
@@ -1914,39 +921,13 @@ function activeThreadFallback(threadId?: string | null): ThreadInfo[] {
   ]
 }
 
-function slashCommandsForMode(mode: ClientMode): SlashCommand[] {
-  return [
-    ...REMOTE_PRODUCT_COMMANDS,
-    ...(mode === "local" ? LOCAL_CLI_COMMANDS : []),
-    ...TUI_CONTROL_COMMANDS,
-  ]
-}
-
-function localCliCommandForInput(input: string, mode: ClientMode): string[] | null {
-  if (mode !== "local") return null
-  const trimmed = input.trim()
-  const command = LOCAL_CLI_COMMANDS.find((candidate) => candidate.name === trimmed)
-  return command?.localArgs ?? null
-}
-
-function filteredSlashCommands(input: string, commands: SlashCommand[]): SlashCommand[] {
-  if (!isSlashCommandInput(input)) return []
-  const query = slashCommandQuery(input)
-  if (!query) return commands
-  return commands.filter((command) => {
-    const haystack = `${command.name} ${command.source} ${command.description}`.toLowerCase()
-    return haystack.includes(query)
-  })
-}
-
-function isSlashCommandInput(input: string): boolean {
-  const trimmed = input.trimStart()
-  return trimmed.startsWith("/") && !trimmed.includes(" ")
-}
-
-function slashCommandQuery(input: string): string {
-  if (!isSlashCommandInput(input)) return ""
-  return input.trimStart().slice(1).toLowerCase()
+function assistantResponses(history: HistoryResponse): string[] {
+  if (history.messages) {
+    return history.messages.flatMap((message) =>
+      (message.kind === "assistant" || message.kind === "summary") && message.content ? [message.content] : [],
+    )
+  }
+  return history.turns.flatMap((turn) => (turn.response ? [turn.response] : []))
 }
 
 function wrapIndex(index: number, length: number): number {
@@ -1974,67 +955,21 @@ function isPlainEnter(key: {
   )
 }
 
+function printableKeyText(key: KeyEvent): string {
+  if (key.ctrl || key.meta || key.option || key.super || key.hyper) return ""
+  if (key.sequence.length === 1 && key.sequence >= " " && key.sequence !== "\u007f") return key.sequence
+  if (key.name.length === 1) return key.name
+  return ""
+}
+
 function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, { type: "run_status" }> {
   if (event.type !== "run_status") return false
   return ["completed", "failed", "cancelled", "killed"].includes(event.status)
 }
 
-type CliResult = {
-  command: string
-  exitCode: number
-  stdout: string
-  stderr: string
-}
-
-async function runRebornCli(config: ClientConfig, args: string[]): Promise<CliResult> {
-  const invocation = rebornCliInvocation(config, args)
-  const proc = Bun.spawn(invocation.argv, {
-    cwd: invocation.cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: process.env,
-  })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  return { command: invocation.command, exitCode, stdout, stderr }
-}
-
-function rebornCliInvocation(config: ClientConfig, args: string[]): { argv: string[]; command: string; cwd?: string } {
-  if (!config.rebornSource) {
-    const argv = [config.rebornBin, ...args]
-    return { argv, command: shellCommand(argv) }
-  }
-
-  const argv = ["cargo", "run", "-p", "ironclaw"]
-  if (config.rebornFeatures) argv.push("--features", config.rebornFeatures)
-  argv.push("--bin", "ironclaw", "--", ...args)
-  return {
-    argv,
-    command: `(cd ${shellWord(config.rebornSource)} && ${shellCommand(argv)})`,
-    cwd: config.rebornSource,
-  }
-}
-
-function formatRebornCliCommand(config: ClientConfig, args: string[]): string {
-  return rebornCliInvocation(config, args).command
-}
-
-function formatLocalCliResult(result: CliResult): string {
-  const body = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n\n")
-  const suffix = result.exitCode === 0 ? "" : `\n\n(exit ${result.exitCode})`
-  return `$ ${result.command}\n\n${body || "(no output)"}${suffix}`
-}
-
-function shellCommand(argv: string[]): string {
-  return argv.map(shellWord).join(" ")
-}
-
-function shellWord(value: string): string {
-  if (/^[A-Za-z0-9_./:=+-]+$/.test(value)) return value
-  return `'${value.replaceAll("'", "'\\''")}'`
+function threadIdFromEvent(event: AppEvent): string | null {
+  if (!("thread_id" in event)) return null
+  return typeof event.thread_id === "string" ? event.thread_id : null
 }
 
 function thinkingLabelForActivity(activity: ActivityItem[], status: string, isThinking: boolean): string {
@@ -2058,8 +993,15 @@ function thinkingLabelForActivity(activity: ActivityItem[], status: string, isTh
   }
 }
 
-function uiStatusKey(value: string): string {
+function uiStatusKey(value: unknown): string {
+  if (typeof value !== "string") return ""
   return value.trim().toLowerCase().replace(/\s+/g, "_")
+}
+
+async function readSkillDetail(skill: SkillListItem, path: string | null): Promise<string> {
+  if (skill.content) return skill.content
+  if (!path) throw new Error("Reborn CLI did not return enough metadata to locate SKILL.md.")
+  return Bun.file(path).text()
 }
 
 function useActivityFrame(active: boolean): { spinner: string; railColor: string } {
@@ -2085,29 +1027,6 @@ function useActivityFrame(active: boolean): { spinner: string; railColor: string
     spinner: spinnerFrames[frame % spinnerFrames.length],
     railColor: railColors[frame % railColors.length],
   }
-}
-
-function useRainbowLogoColors(active: boolean): string[] {
-  const [frame, setFrame] = useState(0)
-
-  useEffect(() => {
-    if (!active) {
-      setFrame(0)
-      return
-    }
-
-    const timer = setInterval(() => {
-      setFrame((current) => current + 1)
-    }, 90)
-
-    return () => clearInterval(timer)
-  }, [active])
-
-  if (!active) return ["#0f7a3a", "#8cffb0"]
-
-  const rainbow = ["#ff5c7a", "#ffb86b", "#fff36d", "#57f287", "#5fd7ff", "#8a7cff", "#ff7ad9", "#ffffff"]
-  const shine = frame % rainbow.length
-  return rainbow.map((_, index) => rainbow[(index + shine) % rainbow.length] ?? "#ffffff")
 }
 
 function errorMessage(error: unknown): string {

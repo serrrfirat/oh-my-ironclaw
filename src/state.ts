@@ -1,12 +1,20 @@
-import type { AppEvent, HistoryResponse, PendingGateInfo, ThreadInfo, ToolCallInfo } from "./gateway/types"
+import type { AppEvent, HistoryResponse, PendingGateInfo, ThreadInfo } from "./gateway/types"
+import {
+  capabilityDisplayPreviewDetail,
+  capabilityEventActivity,
+  capabilityPreviewTranscriptId,
+  capabilityPreviewEventActivity,
+  hasAssistantAfterLatestUser,
+  mergeHistoryTranscript,
+  mergeTranscript,
+  transcriptFromHistory,
+  upsertCapabilityTranscriptItem,
+  upsertTranscriptItem,
+  type TranscriptItem,
+} from "./transcript"
 
-export type TranscriptItem = {
-  id: string
-  role: "user" | "assistant" | "system" | "activity"
-  text: string
-  threadId?: string | null
-  state?: string
-}
+export { transcriptActivityLines, toolSummary } from "./transcript"
+export type { TranscriptActivity, TranscriptItem } from "./transcript"
 
 export type ActivityItem = {
   id: string
@@ -79,7 +87,7 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
       return {
         ...state,
         activeThreadId: action.history.thread_id,
-        transcript: transcriptFromHistory(action.history),
+        transcript: mergeHistoryTranscript(state.transcript, action.history),
         historyCursor: action.history.next_cursor ?? null,
         hasOlderHistory: Boolean(action.history.next_cursor),
         pendingGate: action.history.pending_gate ?? null,
@@ -112,7 +120,13 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         activity: clearRunningActivity(state.activity),
         transcript: [
           ...state.transcript,
-          { id: `user-${Date.now()}`, role: "user", text: action.content, threadId: action.threadId },
+          {
+            id: `user-${Date.now()}`,
+            role: "user",
+            text: action.content,
+            threadId: action.threadId,
+            meta: { sentAtMs: Date.now() },
+          },
         ],
       }
     case "gate_cleared":
@@ -139,6 +153,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
           kind: event.message,
         }),
       }
+    case "thinking_update":
+      return applyThinkingUpdate(state, event)
     case "status":
       return { ...state, status: event.message }
     case "run_status":
@@ -192,6 +208,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
       }
     case "capability_activity":
       return applyCapabilityActivity(state, event)
+    case "capability_display_preview":
+      return applyCapabilityDisplayPreview(state, event)
     case "reasoning_update":
       return {
         ...state,
@@ -258,64 +276,23 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
   }
 }
 
-function transcriptFromHistory(history: HistoryResponse): TranscriptItem[] {
-  return history.turns.flatMap((turn) => {
-    const items: TranscriptItem[] = []
-    if (turn.user_input) {
-      items.push({
-        id: turn.user_message_id ?? `turn-${turn.turn_number}-user`,
-        role: "user",
-        text: turn.user_input,
-        threadId: history.thread_id,
-        state: turn.state,
-      })
-    }
-    if (turn.response) {
-      items.push({
-        id: `turn-${turn.turn_number}-assistant`,
-        role: "assistant",
-        text: turn.response,
-        threadId: history.thread_id,
-        state: turn.state,
-      })
-    }
-    if (turn.narrative) {
-      items.push({
-        id: `turn-${turn.turn_number}-narrative`,
-        role: "system",
-        text: turn.narrative,
-        threadId: history.thread_id,
-        state: turn.state,
-      })
-    }
-    return items
-  })
+function assistantTimingMeta(
+  state: UiState,
+  item?: TranscriptItem,
+  completedAtMs?: number,
+): TranscriptItem["meta"] {
+  const sentAtMs = item?.meta?.sentAtMs ?? latestUserSentAtMs(state.transcript)
+  const meta: TranscriptItem["meta"] = { ...item?.meta }
+  if (sentAtMs) meta.sentAtMs = sentAtMs
+  if (completedAtMs) {
+    meta.completedAtMs = completedAtMs
+    if (sentAtMs) meta.durationMs = Math.max(0, completedAtMs - sentAtMs)
+  }
+  return meta
 }
 
-function mergeTranscript(prefix: TranscriptItem[], suffix: TranscriptItem[]): TranscriptItem[] {
-  const seen = new Set<string>()
-  const merged: TranscriptItem[] = []
-  for (const item of [...prefix, ...suffix]) {
-    if (seen.has(item.id)) continue
-    seen.add(item.id)
-    merged.push(item)
-  }
-  return merged
-}
-
-function hasAssistantAfterLatestUser(history: HistoryResponse): boolean {
-  let hasUser = false
-  let assistantAfterUser = false
-  for (const turn of history.turns) {
-    if (turn.user_input) {
-      hasUser = true
-      assistantAfterUser = false
-    }
-    if (hasUser && turn.response) {
-      assistantAfterUser = true
-    }
-  }
-  return assistantAfterUser
+function latestUserSentAtMs(transcript: TranscriptItem[]): number | undefined {
+  return [...transcript].reverse().find((item) => item.role === "user" && item.meta?.sentAtMs)?.meta?.sentAtMs
 }
 
 function appendAssistantChunk(state: UiState, content: string, threadId?: string | null): UiState {
@@ -326,7 +303,9 @@ function appendAssistantChunk(state: UiState, content: string, threadId?: string
       status: "streaming",
       isThinking: true,
       transcript: state.transcript.map((item) =>
-        item.id === existingId ? { ...item, text: item.text + content } : item,
+        item.id === existingId && item.role === "assistant"
+          ? { ...item, text: item.text + content, meta: assistantTimingMeta(state, item) }
+          : item,
       ),
     }
   }
@@ -337,7 +316,7 @@ function appendAssistantChunk(state: UiState, content: string, threadId?: string
     status: "streaming",
     isThinking: true,
     streamingAssistantId: id,
-    transcript: [...state.transcript, { id, role: "assistant", text: content, threadId }],
+    transcript: [...state.transcript, { id, role: "assistant", text: content, threadId, meta: assistantTimingMeta(state) }],
   }
 }
 
@@ -352,11 +331,14 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
       activeRunId: null,
       streamingAssistantId: null,
       transcript: state.transcript.map((item) =>
-        item.id === existingId ? { ...item, text: content, threadId } : item,
+        item.id === existingId && item.role === "assistant"
+          ? { ...item, text: content, threadId, meta: assistantTimingMeta(state, item, Date.now()) }
+          : item,
       ),
     }
   }
 
+  const completedAtMs = Date.now()
   return {
     ...state,
     status: "idle",
@@ -365,7 +347,13 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
     activeRunId: null,
     transcript: [
       ...state.transcript,
-      { id: `assistant-${Date.now()}`, role: "assistant", text: content, threadId },
+      {
+        id: `assistant-${completedAtMs}`,
+        role: "assistant",
+        text: content,
+        threadId,
+        meta: assistantTimingMeta(state, undefined, completedAtMs),
+      },
     ],
   }
 }
@@ -392,11 +380,11 @@ function applyCapabilityActivity(
   const active = status === "started" || status === "running"
   const failed = status === "failed" || status === "killed"
   const id = `capability-${event.invocation_id}`
-  const text = capabilityActivityText(event)
+  const transcriptActivity = capabilityEventActivity(event)
   const activityItem: ActivityItem = {
     id,
-    label: capabilityActivityLabel(event.capability_id, status),
-    detail: capabilityActivityDetail(event),
+    label: transcriptActivity.title,
+    detail: transcriptActivity.detail ?? undefined,
     status: active ? "running" : failed ? "error" : "ok",
     kind: active ? "tool_running" : `tool_${status}`,
   }
@@ -406,66 +394,84 @@ function applyCapabilityActivity(
     isThinking: active ? true : state.isThinking,
     status: active ? `running ${event.capability_id}` : state.status,
     activity: upsertActivity(state.activity, activityItem),
-    transcript: upsertTranscriptItem(state.transcript, {
+    transcript: upsertCapabilityTranscriptItem(state.transcript, {
       id,
       role: "activity",
-      text,
       threadId: event.thread_id,
       state: event.status,
+      activity: transcriptActivity,
+      meta: {
+        capabilityId: event.capability_id,
+        invocationId: event.invocation_id,
+      },
     }),
   }
 }
 
-function upsertTranscriptItem(items: TranscriptItem[], item: TranscriptItem): TranscriptItem[] {
-  const index = items.findIndex((existing) => existing.id === item.id)
-  if (index < 0) return [...items, item]
-  return items.map((existing, current) => (current === index ? item : existing))
-}
-
-function capabilityActivityText(event: Extract<AppEvent, { type: "capability_activity" }>): string {
+function applyCapabilityDisplayPreview(
+  state: UiState,
+  event: Extract<AppEvent, { type: "capability_display_preview" }>,
+): UiState {
   const status = statusKey(event.status)
-  const lines = [`${capabilityActivityGlyph(status)} ${capabilityActivityLabel(event.capability_id, status)}`]
-  const detail = capabilityActivityDetail(event)
-  if (detail) lines.push(detail)
-  return lines.join("\n")
-}
+  const active = status === "started" || status === "running"
+  const failed = status === "failed" || status === "killed"
+  const id = event.timeline_message_id
+    ? capabilityPreviewTranscriptId(event.timeline_message_id)
+    : `capability-${event.invocation_id}`
+  const transcriptActivity = capabilityPreviewEventActivity(event)
 
-function capabilityActivityGlyph(status: string): string {
-  if (status === "completed") return "✓"
-  if (status === "failed" || status === "killed") return "✕"
-  return "∙"
-}
-
-function capabilityActivityLabel(capabilityId: string, status: string): string {
-  switch (status) {
-    case "started":
-    case "running":
-      return `Using ${capabilityId}`
-    case "completed":
-      return `Completed ${capabilityId}`
-    case "failed":
-      return `Failed ${capabilityId}`
-    case "killed":
-      return `Killed ${capabilityId}`
-    default:
-      return `${statusLabel(status)} ${capabilityId}`
+  return {
+    ...state,
+    isThinking: active ? true : state.isThinking,
+    status: active ? `running ${event.capability_id}` : state.status,
+    activity: upsertActivity(state.activity, {
+      id,
+      label: transcriptActivity.title,
+      detail: capabilityDisplayPreviewDetail(transcriptActivity),
+      status: active ? "running" : failed ? "error" : "ok",
+      kind: active ? "tool_running" : `tool_${status}`,
+    }),
+    transcript: upsertCapabilityTranscriptItem(state.transcript, {
+      id,
+      role: "activity",
+      threadId: event.thread_id,
+      state: event.status,
+      activity: transcriptActivity,
+      meta: {
+        capabilityId: event.capability_id,
+        invocationId: event.invocation_id,
+        timelineMessageId: event.timeline_message_id ?? null,
+        resultRef: event.result_ref ?? null,
+      },
+    }),
   }
 }
 
-function capabilityActivityDetail(event: Extract<AppEvent, { type: "capability_activity" }>): string {
-  const parts = [
-    event.runtime ? `runtime ${event.runtime}` : null,
-    event.provider ? `provider ${event.provider}` : null,
-    typeof event.output_bytes === "number" ? `${formatBytes(event.output_bytes)} output` : null,
-    event.error_kind ? `error ${event.error_kind}` : null,
-  ].filter(Boolean)
-  return parts.join(" · ")
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+function applyThinkingUpdate(
+  state: UiState,
+  event: Extract<AppEvent, { type: "thinking_update" }>,
+): UiState {
+  const id = `thinking-${event.id}`
+  return {
+    ...state,
+    isThinking: true,
+    status: "thinking",
+    activity: upsertActivity(state.activity, {
+      id,
+      label: "Thinking",
+      detail: event.content,
+      status: "running",
+      kind: "thinking",
+    }),
+    transcript: upsertTranscriptItem(state.transcript, {
+      id,
+      role: "thinking",
+      text: event.content,
+      threadId: event.thread_id,
+      state: "running",
+      meta: { projectionId: event.id },
+    }),
+  }
 }
 
 function progressActivityId(threadId: string | null | undefined, kind: string): string {
@@ -559,10 +565,4 @@ function statusKey(status: string): string {
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[-\s]+/g, "_")
     .toLowerCase()
-}
-
-export function toolSummary(tool: ToolCallInfo): string {
-  if (tool.error) return `${tool.name}: ${tool.error}`
-  if (tool.result_preview) return `${tool.name}: ${tool.result_preview}`
-  return tool.name
 }
