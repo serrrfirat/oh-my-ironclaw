@@ -103,6 +103,7 @@ Local mode adds read-only CLI commands:
 
 TUI-only controls:
 
+- `/new`
 - `/settings`
 - `/threads`
 - `/history`

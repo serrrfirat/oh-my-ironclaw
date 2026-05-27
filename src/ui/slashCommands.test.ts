@@ -16,6 +16,16 @@ describe("slash commands", () => {
     }))
   })
 
+  test("exposes TUI new thread command in every mode", () => {
+    for (const mode of ["remote", "local"] as const) {
+      expect(slashCommandsForMode(mode)).toContainEqual(expect.objectContaining({
+        name: "/new",
+        source: "tui",
+        action: "new-thread",
+      }))
+    }
+  })
+
   test("uses local Reborn skill catalog command in local mode", () => {
     const commands = slashCommandsForMode("local")
 

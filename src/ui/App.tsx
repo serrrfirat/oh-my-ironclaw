@@ -524,6 +524,7 @@ export function App({ config }: AppProps) {
     try {
       const thread = await client.newThread()
       dispatch({ type: "threads", threads: [thread, ...state.threads], activeThreadId: thread.id })
+      setSelectedThreadIndex(0)
       await loadThread(thread.id)
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
@@ -578,6 +579,10 @@ export function App({ config }: AppProps) {
       case "skills":
         clearComposer("skills")
         await openSkillsPalette()
+        return
+      case "new-thread":
+        clearComposer()
+        await createThread()
         return
       case "cancel-run":
         clearComposer()

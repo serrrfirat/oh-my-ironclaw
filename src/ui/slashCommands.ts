@@ -1,6 +1,6 @@
 import type { ClientMode } from "../config"
 
-export type SlashCommandAction = "threads" | "models" | "skills" | "cancel-run" | "load-older" | "settings" | "local-command" | "quit"
+export type SlashCommandAction = "threads" | "models" | "skills" | "new-thread" | "cancel-run" | "load-older" | "settings" | "local-command" | "quit"
 export type SlashCommandSource = "remote" | "local" | "tui"
 export type SlashCommand = {
   name: string
@@ -107,6 +107,7 @@ const LOCAL_CLI_COMMANDS: SlashCommand[] = [
 ]
 
 const TUI_CONTROL_COMMANDS: SlashCommand[] = [
+  { name: "/new", description: "Start a new thread", source: "tui", action: "new-thread" },
   { name: "/settings", description: "Open settings dashboard", source: "tui", action: "settings" },
   { name: "/threads", description: "Open thread picker", source: "tui", action: "threads" },
   { name: "/history", description: "Load older timeline messages", source: "tui", action: "load-older" },
