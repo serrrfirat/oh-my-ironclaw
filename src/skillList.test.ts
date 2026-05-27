@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { filterSkills, parseSkillListJson, skillDetailPath } from "./skillList"
+import { filterSkills, parseSkillListJson, parseSkillListOutput, parseSkillListText, skillDetailPath } from "./skillList"
 
 describe("skill list", () => {
   test("parses Reborn CLI skills JSON", () => {
@@ -36,6 +36,43 @@ describe("skill list", () => {
       requiresSkills: ["companion-helper"],
       content: undefined,
       path: undefined,
+    })
+  })
+
+  test("parses JSON embedded in wrapper output", () => {
+    const parsed = parseSkillListOutput(`building local CLI\n{"configured":1,"source":"reborn-local-dev","skills":[{"name":"json-helper","description":"json helper","source":"user"}]}\n`)
+
+    expect(parsed.configured).toBe(1)
+    expect(parsed.skills[0]?.name).toBe("json-helper")
+  })
+
+  test("falls back to text output from Reborn CLI skills list", () => {
+    const parsed = parseSkillListText(`IronClaw Reborn skills
+configured: 1
+source: reborn-local-dev
+profile: local-dev
+reborn_home: /tmp/reborn-home
+local_dev_root: /tmp/reborn-home/local-dev
+owner_id: reborn-cli
+- catalog-helper (user)
+  description: catalog helper
+  version: 1.2.3
+  keywords: catalog, helper
+  tags: local-dev
+  requires_skills: companion-helper
+`)
+
+    expect(parsed.configured).toBe(1)
+    expect(parsed.source).toBe("reborn-local-dev")
+    expect(parsed.details.localDevRoot).toBe("/tmp/reborn-home/local-dev")
+    expect(parsed.skills[0]).toEqual({
+      name: "catalog-helper",
+      version: "1.2.3",
+      description: "catalog helper",
+      source: "user",
+      keywords: ["catalog", "helper"],
+      tags: ["local-dev"],
+      requiresSkills: ["companion-helper"],
     })
   })
 

@@ -7,7 +7,7 @@ import type { AppEvent, HistoryResponse, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
 import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebornProfile"
 import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
-import { filterSkills, parseSkillListJson, skillDetailPath, type SkillListItem, type SkillListResult } from "../skillList"
+import { filterSkills, parseSkillListOutput, skillDetailPath, type SkillListItem, type SkillListResult } from "../skillList"
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
 import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
 import { SettingsSurface, SETTINGS_SECTION_COUNT } from "./SettingsSurface"
@@ -478,7 +478,7 @@ export function App({ config }: AppProps) {
       if (result.exitCode !== 0) {
         throw new Error(formatLocalCliResult(result))
       }
-      const parsed = parseSkillListJson(result.stdout)
+      const parsed = parseSkillListOutput(result.stdout)
       setSkillList(parsed)
       setSelectedSkillIndex(0)
     } catch (error) {
