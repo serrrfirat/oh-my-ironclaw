@@ -46,6 +46,20 @@ describe("skill list", () => {
     expect(parsed.skills[0]?.name).toBe("json-helper")
   })
 
+  test("falls back to text output when brace-shaped diagnostics are not JSON", () => {
+    const parsed = parseSkillListOutput(`IronClaw Reborn skills
+configured: 1
+source: reborn-local-dev
+warning: ignored metadata {not-json}
+- text-helper (user)
+  description: text helper
+`)
+
+    expect(parsed.configured).toBe(1)
+    expect(parsed.skills[0]?.name).toBe("text-helper")
+    expect(parsed.skills[0]?.description).toBe("text helper")
+  })
+
   test("falls back to text output from Reborn CLI skills list", () => {
     const parsed = parseSkillListText(`IronClaw Reborn skills
 configured: 1

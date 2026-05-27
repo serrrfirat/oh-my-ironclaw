@@ -24,7 +24,14 @@ export type SkillListResult = {
 
 export function parseSkillListOutput(stdout: string): SkillListResult {
   const json = extractJsonObject(stdout)
-  if (json) return parseSkillListJson(json)
+  if (json) {
+    try {
+      return parseSkillListJson(json)
+    } catch {
+      // Some local CLI invocations can wrap text with brace-shaped diagnostics.
+      // Treat that as text output instead of failing the skills popup.
+    }
+  }
   return parseSkillListText(stdout)
 }
 
