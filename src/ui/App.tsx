@@ -380,7 +380,7 @@ export function App({ config }: AppProps) {
       try {
         await client.health()
         dispatch({ type: "connected", connected: true, status: "connected" })
-        await refreshThreads()
+        await startNewThreadOnConnect()
       } catch (error) {
         dispatch({ type: "error", message: errorMessage(error) })
       }
@@ -423,21 +423,17 @@ export function App({ config }: AppProps) {
     }
   }, [client, state.activeThreadId])
 
-  async function refreshThreads(): Promise<string | null> {
+  async function startNewThreadOnConnect(): Promise<string | null> {
     const response = await client.threads()
-    let threads = [response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[]
-    let threadId = response.active_thread ?? response.assistant_thread?.id ?? response.threads[0]?.id ?? null
+    const existingThreads = [response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[]
+    const thread = await client.newThread()
+    const threads = mergeThreads([thread], existingThreads)
 
-    if (!threadId) {
-      const thread = await client.newThread()
-      threads = [thread]
-      threadId = thread.id
-    }
-
-    activeThreadIdRef.current = threadId
-    dispatch({ type: "threads", threads, activeThreadId: threadId })
-    if (threadId) await loadThread(threadId)
-    return threadId
+    activeThreadIdRef.current = thread.id
+    dispatch({ type: "threads", threads, activeThreadId: thread.id })
+    setSelectedThreadIndex(0)
+    await loadThread(thread.id)
+    return thread.id
   }
 
   async function loadThread(threadId: string) {
