@@ -22,7 +22,7 @@ describe("slash commands", () => {
     expect(commands).toContainEqual(expect.objectContaining({
       name: "/skills",
       source: "local",
-      localArgs: ["skills", "list"],
+      action: "skills",
     }))
     expect(commands.filter((command) => command.name === "/skills")).toHaveLength(1)
   })
@@ -38,8 +38,8 @@ describe("slash commands", () => {
     expect(commands.filter((command) => command.name === "/extension")).toHaveLength(1)
   })
 
-  test("maps local mode skills input to local CLI args", () => {
-    expect(localCliCommandForInput("/skills", "local")).toEqual(["skills", "list"])
+  test("does not map local mode skills input to a transcript CLI command", () => {
+    expect(localCliCommandForInput("/skills", "local")).toBeNull()
   })
 
   test("maps local mode extension input to local CLI args", () => {

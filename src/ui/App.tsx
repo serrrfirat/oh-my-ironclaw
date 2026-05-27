@@ -1,4 +1,4 @@
-import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
+import { SyntaxStyle, type KeyEvent, type TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useReducer, useRef, useState } from "react"
 import type { ClientConfig } from "../config"
@@ -7,9 +7,11 @@ import type { AppEvent, HistoryResponse, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
 import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebornProfile"
 import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
+import { filterSkills, parseSkillListJson, skillDetailPath, type SkillListItem, type SkillListResult } from "../skillList"
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
 import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
 import { SettingsSurface, SETTINGS_SECTION_COUNT } from "./SettingsSurface"
+import { SkillsSurface, type SkillDetailView } from "./SkillsSurface"
 import {
   filteredSlashCommands,
   isSlashCommandInput,
@@ -22,7 +24,7 @@ type AppProps = {
   config: ClientConfig
 }
 
-type ActiveOverlay = "commands" | "threads" | "models" | "settings" | null
+type ActiveOverlay = "commands" | "threads" | "models" | "settings" | "skills" | null
 
 export function App({ config }: AppProps) {
   const renderer = useRenderer()
@@ -43,14 +45,22 @@ export function App({ config }: AppProps) {
   const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
   const [selectedModel, setSelectedModel] = useState(config.model)
   const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(() => new Set())
+  const [skillList, setSkillList] = useState<SkillListResult>({ configured: 0, source: "", skills: [], details: {} })
+  const [skillSearch, setSkillSearch] = useState("")
+  const [selectedSkillIndex, setSelectedSkillIndex] = useState(0)
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skillsError, setSkillsError] = useState<string | null>(null)
+  const [skillDetail, setSkillDetail] = useState<SkillDetailView | null>(null)
   const activityFrame = useActivityFrame(state.isThinking)
   const thinkingLabel = thinkingLabelForActivity(state.activity, state.status, state.isThinking)
   const showCommandPalette = activeOverlay === "commands"
   const showThreadPalette = activeOverlay === "threads"
   const showModelPalette = activeOverlay === "models"
   const showSettings = activeOverlay === "settings"
+  const showSkills = activeOverlay === "skills"
   const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
   const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
+  const filteredSkillList = useMemo(() => filterSkills(skillList.skills, skillSearch), [skillList.skills, skillSearch])
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
   const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
   const canCancelRun = Boolean((state.pendingGate?.thread_id || state.activeThreadId) && (state.pendingGate?.run_id || state.activeRunId))
@@ -67,6 +77,71 @@ export function App({ config }: AppProps) {
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
       renderer.destroy()
+      return
+    }
+    if (showSkills) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        setActiveOverlay(null)
+        setSkillDetail(null)
+        return
+      }
+      if (skillDetail) {
+        if (key.name === "up" || key.name === "k") {
+          key.preventDefault()
+          key.stopPropagation()
+          setSkillDetail((detail) => detail ? { ...detail, offset: Math.max(0, detail.offset - 1) } : detail)
+          return
+        }
+        if (key.name === "down" || key.name === "j") {
+          key.preventDefault()
+          key.stopPropagation()
+          setSkillDetail((detail) => detail ? { ...detail, offset: detail.offset + 1 } : detail)
+          return
+        }
+        return
+      }
+      if (key.name === "up" || key.name === "k") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedSkillIndex((index) => wrapIndex(index - 1, filteredSkillList.length))
+        return
+      }
+      if (key.name === "down" || key.name === "tab" || key.name === "j") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedSkillIndex((index) => wrapIndex(index + 1, filteredSkillList.length))
+        return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault()
+        key.stopPropagation()
+        void openSelectedSkillDetail()
+        return
+      }
+      if (key.name === "backspace" || key.name === "delete") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSkillSearch((query) => query.slice(0, -1))
+        setSelectedSkillIndex(0)
+        return
+      }
+      if (key.ctrl && key.name === "u") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSkillSearch("")
+        setSelectedSkillIndex(0)
+        return
+      }
+      const text = printableKeyText(key)
+      if (text) {
+        key.preventDefault()
+        key.stopPropagation()
+        setSkillSearch((query) => query + text)
+        setSelectedSkillIndex(0)
+        return
+      }
       return
     }
     if (showSettings) {
@@ -393,6 +468,40 @@ export function App({ config }: AppProps) {
     setActiveOverlay("models")
   }
 
+  async function openSkillsPalette() {
+    setActiveOverlay("skills")
+    setSkillsLoading(true)
+    setSkillsError(null)
+    setSkillDetail(null)
+    try {
+      const result = await runRebornCli(config, ["skills", "list", "--json", "--verbose"])
+      if (result.exitCode !== 0) {
+        throw new Error(formatLocalCliResult(result))
+      }
+      const parsed = parseSkillListJson(result.stdout)
+      setSkillList(parsed)
+      setSelectedSkillIndex(0)
+    } catch (error) {
+      setSkillList({ configured: 0, source: "", skills: [], details: {} })
+      setSkillsError(errorMessage(error))
+    } finally {
+      setSkillsLoading(false)
+    }
+  }
+
+  async function openSelectedSkillDetail() {
+    const skill = filteredSkillList[wrapIndex(selectedSkillIndex, filteredSkillList.length)]
+    if (!skill) return
+    const path = skillDetailPath(skill, skillList.details)
+    setSkillDetail({ skill, content: skill.content ?? "", error: null, loading: true, path, offset: 0 })
+    try {
+      const content = await readSkillDetail(skill, path)
+      setSkillDetail({ skill, content, error: null, loading: false, path, offset: 0 })
+    } catch (error) {
+      setSkillDetail({ skill, content: "", error: errorMessage(error), loading: false, path, offset: 0 })
+    }
+  }
+
   async function selectModel(index: number) {
     const model = availableModels[wrapIndex(index, availableModels.length)]
     if (!model) return
@@ -424,6 +533,11 @@ export function App({ config }: AppProps) {
   async function submit() {
     const content = input.trim()
     if (!content) return
+    const slashCommand = commandSet.find((command) => command.name === content)
+    if (slashCommand?.action) {
+      await runSlashCommand(slashCommand)
+      return
+    }
     const localCommand = localCliCommandForInput(content, config.mode)
     if (localCommand) {
       await runLocalCliCommand(content, localCommand)
@@ -460,6 +574,10 @@ export function App({ config }: AppProps) {
       case "models":
         clearComposer()
         await openModelPalette()
+        return
+      case "skills":
+        clearComposer("skills")
+        await openSkillsPalette()
         return
       case "cancel-run":
         clearComposer()
@@ -634,7 +752,21 @@ export function App({ config }: AppProps) {
 
   return (
     <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505" }}>
-      {showSettings ? (
+      {showSkills ? (
+        <SkillsSurface
+          detail={skillDetail}
+          error={skillsError}
+          filteredSkills={filteredSkillList}
+          height={height}
+          loading={skillsLoading}
+          markdownStyle={markdownStyle}
+          query={skillSearch}
+          selectedIndex={wrapIndex(selectedSkillIndex, filteredSkillList.length)}
+          source={skillList.source}
+          totalCount={skillList.configured}
+          width={width}
+        />
+      ) : showSettings ? (
         <SettingsSurface
           config={config}
           connected={state.connected}
@@ -748,6 +880,13 @@ function isPlainEnter(key: {
   )
 }
 
+function printableKeyText(key: KeyEvent): string {
+  if (key.ctrl || key.meta || key.option || key.super || key.hyper) return ""
+  if (key.sequence.length === 1 && key.sequence >= " " && key.sequence !== "\u007f") return key.sequence
+  if (key.name.length === 1) return key.name
+  return ""
+}
+
 function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, { type: "run_status" }> {
   if (event.type !== "run_status") return false
   return ["completed", "failed", "cancelled", "killed"].includes(event.status)
@@ -777,6 +916,12 @@ function thinkingLabelForActivity(activity: ActivityItem[], status: string, isTh
 function uiStatusKey(value: unknown): string {
   if (typeof value !== "string") return ""
   return value.trim().toLowerCase().replace(/\s+/g, "_")
+}
+
+async function readSkillDetail(skill: SkillListItem, path: string | null): Promise<string> {
+  if (skill.content) return skill.content
+  if (!path) throw new Error("Reborn CLI did not return enough metadata to locate SKILL.md.")
+  return Bun.file(path).text()
 }
 
 function useActivityFrame(active: boolean): { spinner: string; railColor: string } {

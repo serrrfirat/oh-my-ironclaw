@@ -85,7 +85,7 @@ Remote/Product Workflow commands:
 - `/status`
 - `/progress`
 
-In local mode, `/skills` uses the local Reborn skill catalog CLI and `/extension` searches local Reborn extensions. In remote mode, both commands are sent through the product workflow.
+In local mode, `/skills` opens a searchable TUI skill catalog backed by `ironclaw-reborn skills list --json --verbose`, and `/extension` searches local Reborn extensions. In remote mode, both commands are sent through the product workflow.
 
 Local mode adds read-only CLI commands:
 

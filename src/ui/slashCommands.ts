@@ -1,6 +1,6 @@
 import type { ClientMode } from "../config"
 
-export type SlashCommandAction = "threads" | "models" | "cancel-run" | "load-older" | "settings" | "local-command" | "quit"
+export type SlashCommandAction = "threads" | "models" | "skills" | "cancel-run" | "load-older" | "settings" | "local-command" | "quit"
 export type SlashCommandSource = "remote" | "local" | "tui"
 export type SlashCommand = {
   name: string
@@ -33,8 +33,7 @@ const LOCAL_SKILLS_COMMAND: SlashCommand = {
   name: "/skills",
   description: "Show Reborn local skill catalog",
   source: "local",
-  action: "local-command",
-  localArgs: ["skills", "list"],
+  action: "skills",
 }
 
 const LOCAL_EXTENSION_COMMAND: SlashCommand = {
@@ -128,7 +127,6 @@ export function slashCommandsForMode(mode: ClientMode): SlashCommand[] {
 export function localCliCommandForInput(input: string, mode: ClientMode): string[] | null {
   if (mode !== "local") return null
   const trimmed = input.trim()
-  if (LOCAL_SKILLS_COMMAND.name === trimmed) return LOCAL_SKILLS_COMMAND.localArgs ?? null
   if (LOCAL_EXTENSION_COMMAND.name === trimmed) return LOCAL_EXTENSION_COMMAND.localArgs ?? null
   const command = LOCAL_CLI_COMMANDS.find((candidate) => candidate.name === trimmed)
   return command?.localArgs ?? null
