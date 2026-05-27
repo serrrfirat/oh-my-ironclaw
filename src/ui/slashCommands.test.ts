@@ -9,6 +9,13 @@ describe("slash commands", () => {
     }))
   })
 
+  test("uses product workflow extension command in remote mode", () => {
+    expect(slashCommandsForMode("remote")).toContainEqual(expect.objectContaining({
+      name: "/extension",
+      source: "remote",
+    }))
+  })
+
   test("uses local Reborn skill catalog command in local mode", () => {
     const commands = slashCommandsForMode("local")
 
@@ -20,11 +27,30 @@ describe("slash commands", () => {
     expect(commands.filter((command) => command.name === "/skills")).toHaveLength(1)
   })
 
+  test("uses local Reborn extension search command in local mode", () => {
+    const commands = slashCommandsForMode("local")
+
+    expect(commands).toContainEqual(expect.objectContaining({
+      name: "/extension",
+      source: "local",
+      localArgs: ["extension", "search"],
+    }))
+    expect(commands.filter((command) => command.name === "/extension")).toHaveLength(1)
+  })
+
   test("maps local mode skills input to local CLI args", () => {
     expect(localCliCommandForInput("/skills", "local")).toEqual(["skills", "list"])
   })
 
+  test("maps local mode extension input to local CLI args", () => {
+    expect(localCliCommandForInput("/extension", "local")).toEqual(["extension", "search"])
+  })
+
   test("does not intercept skills in remote mode", () => {
     expect(localCliCommandForInput("/skills", "remote")).toBeNull()
+  })
+
+  test("does not intercept extension in remote mode", () => {
+    expect(localCliCommandForInput("/extension", "remote")).toBeNull()
   })
 })

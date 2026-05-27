@@ -81,10 +81,11 @@ Remote/Product Workflow commands:
 - `/model`
 - `/models`
 - `/skills`
+- `/extension`
 - `/status`
 - `/progress`
 
-In local mode, `/skills` uses the local Reborn skill catalog CLI. In remote mode, `/skills` is sent through the product workflow.
+In local mode, `/skills` uses the local Reborn skill catalog CLI and `/extension` searches local Reborn extensions. In remote mode, both commands are sent through the product workflow.
 
 Local mode adds read-only CLI commands:
 
