@@ -2,6 +2,7 @@ import type { SyntaxStyle, ScrollBoxRenderable, TextareaRenderable } from "@open
 import { useEffect, useRef, useState, type RefObject } from "react"
 import type { PendingGateInfo, ThreadInfo } from "../gateway/types"
 import { transcriptItemContentLength, type TranscriptItem } from "../transcript"
+import { activityGroupSummary, groupTranscriptEntries } from "./activityGroups"
 import { TranscriptMessage } from "./TranscriptMessage"
 import { sourceColor, type SlashCommand } from "./slashCommands"
 
@@ -125,6 +126,7 @@ export function ConversationSurface({
   const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight)
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const transcriptEndKey = transcript.map((item) => `${item.id}:${transcriptItemContentLength(item)}`).join("|")
+  const transcriptEntries = groupTranscriptEntries(transcript)
 
   useEffect(() => {
     const scrollbox = transcriptScrollRef.current
@@ -146,11 +148,24 @@ export function ConversationSurface({
         }}
       >
         {showOlderHistoryHint ? <LoadOlderHint width={contentWidth} /> : null}
-        {transcript.map((item) => (
+        {transcriptEntries.map((entry) => entry.kind === "activity_group" ? (
+          <ActivityGroup
+            key={entry.id}
+            expanded={expandedActivityIds.has(entry.id)}
+            expandedActivityIds={expandedActivityIds}
+            groupId={entry.id}
+            items={entry.items}
+            markdownStyle={markdownStyle}
+            selectedModel={composer.selectedModel}
+            spinner={composer.spinner}
+            width={contentWidth}
+            onToggleActivityExpanded={onToggleActivityExpanded}
+          />
+        ) : (
           <TranscriptMessage
-            key={item.id}
-            item={item}
-            expanded={expandedActivityIds.has(item.id)}
+            key={entry.item.id}
+            item={entry.item}
+            expanded={expandedActivityIds.has(entry.item.id)}
             markdownStyle={markdownStyle}
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
@@ -217,6 +232,52 @@ function LoadOlderHint({ width }: { width: number }) {
   return (
     <box style={{ width, height: 2, flexDirection: "column", paddingLeft: 3, marginBottom: 1 }}>
       <text fg="#777777">{truncate("/history or pageup to load older messages", Math.max(1, width - 3))}</text>
+    </box>
+  )
+}
+
+function ActivityGroup({
+  expanded,
+  expandedActivityIds,
+  groupId,
+  items,
+  markdownStyle,
+  selectedModel,
+  spinner,
+  width,
+  onToggleActivityExpanded,
+}: {
+  expanded: boolean
+  expandedActivityIds: Set<string>
+  groupId: string
+  items: Array<Extract<TranscriptItem, { role: "activity" }>>
+  markdownStyle: SyntaxStyle
+  selectedModel: string
+  spinner: string
+  width: number
+  onToggleActivityExpanded: (id: string) => void
+}) {
+  return (
+    <box style={{ width, flexDirection: "column", marginBottom: 2 }}>
+      <box
+        onMouseDown={() => onToggleActivityExpanded(groupId)}
+        style={{ width, height: 1, flexDirection: "row", paddingLeft: 3, paddingRight: 2 }}
+      >
+        <text fg="#777777">{expanded ? "▾ " : "▸ "}</text>
+        <text fg="#777777">{truncate(activityGroupSummary(items), Math.max(1, width - 7))}</text>
+      </box>
+      {expanded ? items.map((item) => (
+        <TranscriptMessage
+          key={item.id}
+          item={item}
+          expanded={expandedActivityIds.has(item.id)}
+          markdownStyle={markdownStyle}
+          selectedModel={selectedModel}
+          spinner={spinner}
+          width={width}
+          onToggleActivityExpanded={onToggleActivityExpanded}
+        />
+      )) : null}
     </box>
   )
 }
