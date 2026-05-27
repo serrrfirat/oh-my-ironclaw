@@ -32,6 +32,7 @@ export function App({ config }: AppProps) {
   const client = useMemo(() => new GatewayClient(config), [config])
   const markdownStyle = useMemo(() => SyntaxStyle.create(), [])
   const textareaRef = useRef<TextareaRenderable>(null)
+  const activeThreadIdRef = useRef<string | null | undefined>(null)
   const [state, dispatch] = useReducer(reduceUiState, initialUiState)
   const [input, setInput] = useState("")
   const [selectedThreadIndex, setSelectedThreadIndex] = useState(0)
@@ -369,38 +370,20 @@ export function App({ config }: AppProps) {
   }, [input])
 
   useEffect(() => {
+    activeThreadIdRef.current = state.activeThreadId
+  }, [state.activeThreadId])
+
+  useEffect(() => {
     let cancelled = false
 
     async function boot() {
       try {
         await client.health()
         dispatch({ type: "connected", connected: true, status: "connected" })
-        const threadId = await refreshThreads()
-        if (!cancelled && threadId) connectEvents(threadId)
+        await refreshThreads()
       } catch (error) {
         dispatch({ type: "error", message: errorMessage(error) })
       }
-    }
-
-    function connectEvents(threadId: string) {
-      void (async () => {
-        while (!cancelled) {
-          try {
-            for await (const event of client.events(threadId)) {
-              if (cancelled) break
-              if (event.type === "response") applyModelCommandResponse(event.content)
-              dispatch({ type: "event", event })
-              if (isTerminalRunStatusEvent(event)) void refreshThreadFromEvent(event.thread_id)
-            }
-          } catch (error) {
-            if (!cancelled) {
-              dispatch({ type: "connected", connected: false, status: "reconnecting" })
-              dispatch({ type: "error", message: errorMessage(error) })
-              await sleep(1500)
-            }
-          }
-        }
-      })()
     }
 
     void boot()
@@ -408,6 +391,37 @@ export function App({ config }: AppProps) {
       cancelled = true
     }
   }, [client])
+
+  useEffect(() => {
+    const threadId = state.activeThreadId
+    if (!threadId) return
+    let cancelled = false
+
+    void (async () => {
+      while (!cancelled && activeThreadIdRef.current === threadId) {
+        try {
+          for await (const event of client.events(threadId)) {
+            if (cancelled || activeThreadIdRef.current !== threadId) break
+            const eventThreadId = threadIdFromEvent(event)
+            if (eventThreadId && eventThreadId !== activeThreadIdRef.current) continue
+            if (event.type === "response") applyModelCommandResponse(event.content)
+            dispatch({ type: "event", event })
+            if (isTerminalRunStatusEvent(event)) void refreshThreadFromEvent(eventThreadId)
+          }
+        } catch (error) {
+          if (!cancelled && activeThreadIdRef.current === threadId) {
+            dispatch({ type: "connected", connected: false, status: "reconnecting" })
+            dispatch({ type: "error", message: errorMessage(error) })
+            await sleep(1500)
+          }
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [client, state.activeThreadId])
 
   async function refreshThreads(): Promise<string | null> {
     const response = await client.threads()
@@ -420,6 +434,7 @@ export function App({ config }: AppProps) {
       threadId = thread.id
     }
 
+    activeThreadIdRef.current = threadId
     dispatch({ type: "threads", threads, activeThreadId: threadId })
     if (threadId) await loadThread(threadId)
     return threadId
@@ -427,7 +442,9 @@ export function App({ config }: AppProps) {
 
   async function loadThread(threadId: string) {
     try {
+      activeThreadIdRef.current = threadId
       const history = await client.history(threadId)
+      if (activeThreadIdRef.current !== threadId) return
       dispatch({ type: "history", history })
       const index = state.threads.findIndex((thread) => thread.id === threadId)
       if (index >= 0) setSelectedThreadIndex(index)
@@ -523,6 +540,7 @@ export function App({ config }: AppProps) {
   async function createThread() {
     try {
       const thread = await client.newThread()
+      activeThreadIdRef.current = thread.id
       dispatch({ type: "threads", threads: [thread, ...state.threads], activeThreadId: thread.id })
       setSelectedThreadIndex(0)
       await loadThread(thread.id)
@@ -555,6 +573,7 @@ export function App({ config }: AppProps) {
     try {
       const response = await client.send(content, state.activeThreadId)
       const threadId = response.thread_id ?? state.activeThreadId
+      if (threadId) activeThreadIdRef.current = threadId
       dispatch({ type: "run_started", threadId, runId: response.run_id, status: response.status })
       if (threadId && threadId !== state.activeThreadId) {
         dispatch({ type: "threads", threads: state.threads, activeThreadId: threadId })
@@ -680,7 +699,9 @@ export function App({ config }: AppProps) {
 
   async function refreshThreadFromEvent(threadId?: string | null) {
     if (!threadId) return
+    if (threadId !== activeThreadIdRef.current) return
     await sleep(150)
+    if (threadId !== activeThreadIdRef.current) return
     await loadThread(threadId)
   }
 
@@ -895,6 +916,11 @@ function printableKeyText(key: KeyEvent): string {
 function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, { type: "run_status" }> {
   if (event.type !== "run_status") return false
   return ["completed", "failed", "cancelled", "killed"].includes(event.status)
+}
+
+function threadIdFromEvent(event: AppEvent): string | null {
+  if (!("thread_id" in event)) return null
+  return typeof event.thread_id === "string" ? event.thread_id : null
 }
 
 function thinkingLabelForActivity(activity: ActivityItem[], status: string, isThinking: boolean): string {
