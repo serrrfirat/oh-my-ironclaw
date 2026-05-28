@@ -486,7 +486,7 @@ export function upsertCapabilityTranscriptItem(items: TranscriptItem[], item: Tr
 }
 
 export function capabilityEventActivity(event: Extract<AppEvent, { type: "capability_activity" }>): TranscriptActivity {
-  const status = statusKey(event.status)
+  const status = event.error_kind ? "failed" : statusKey(event.status)
   return {
     kind: "capability_activity",
     title: activityTitleForStatus(event.capability_id, status),
@@ -523,7 +523,10 @@ export function capabilityPreviewEventActivity(
 function toolTranscriptActivity(tool: ToolCallInfo): TranscriptActivity | null {
   if (tool.kind === "capability_display_preview") return capabilityToolActivity(tool)
 
-  const status = tool.has_error ? "failed" : "completed"
+  const detail = [tool.error, tool.result_preview && !isGenericCapabilitySummary(tool.result_preview) ? tool.result_preview : null]
+    .filter(Boolean)
+    .join(" · ")
+  const status = tool.has_error || toolTextLooksFailed(detail) ? "failed" : "completed"
   const label = tool.name === "Capability" ? "tool call" : tool.name
   if (!tool.error && (!tool.result_preview || isGenericCapabilitySummary(tool.result_preview)) && label === "tool call") {
     return null
@@ -533,14 +536,21 @@ function toolTranscriptActivity(tool: ToolCallInfo): TranscriptActivity | null {
     kind: "tool_result_reference",
     title: label,
     status,
-    detail: [tool.error, tool.result_preview && !isGenericCapabilitySummary(tool.result_preview) ? tool.result_preview : null]
-      .filter(Boolean)
-      .join(" · "),
+    detail,
   }
 }
 
 function capabilityToolActivity(tool: Extract<ToolCallInfo, { kind: "capability_display_preview" }>): TranscriptActivity {
-  const status = statusKey(tool.status ?? (tool.has_error ? "failed" : "completed"))
+  const statusText = [
+    tool.status,
+    tool.subtitle,
+    tool.output_summary,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+  const status = tool.has_error || toolTextLooksFailed(statusText)
+    ? "failed"
+    : statusKey(tool.status ?? "completed")
   const title = tool.name || tool.capability_id || "tool"
   return {
     kind: "capability_display_preview",
@@ -554,6 +564,10 @@ function capabilityToolActivity(tool: Extract<ToolCallInfo, { kind: "capability_
     outputBytes: tool.output_bytes,
     truncated: tool.truncated,
   }
+}
+
+function toolTextLooksFailed(value: string): boolean {
+  return /\b(error|failed|failure|killed|cancelled|backend)\b/i.test(value)
 }
 
 function isGenericCapabilitySummary(summary: string): boolean {

@@ -23,8 +23,7 @@ export function TranscriptMessage({
   if (item.role === "user") {
     return (
       <box style={{ width, flexDirection: "row", backgroundColor: "#141414", marginBottom: 2 }}>
-        <box style={{ width: 1, backgroundColor: "#2ee66b" }} />
-        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
+        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 3, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
           <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
         </box>
       </box>
@@ -67,7 +66,7 @@ export function TranscriptMessage({
     const status = item.activity.status
     const failed = status === "failed" || status === "killed"
     const running = status === "started" || status === "running"
-    const rail = failed ? "#d85d5d" : running ? "#8a8a8a" : "#2ea043"
+    const activityColor = failed ? "#ff6b6b" : running ? "#a8a8a8" : "#d0d0d0"
     const title = activityTitle(headline)
     const icon = running ? spinner : failed ? "!" : "✓"
     const detailLines = expanded ? activityDetailLines(detail) : []
@@ -78,18 +77,17 @@ export function TranscriptMessage({
         onMouseDown={() => onToggleActivityExpanded(item.id)}
         style={{ width, flexDirection: "row", backgroundColor: "#0d0d0d", marginBottom: 1 }}
       >
-        <box style={{ width: 1, backgroundColor: rail }} />
-        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
+        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 3, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
           <box style={{ height: 1, flexDirection: "row" }}>
             <text fg="#555555">{expanded ? "▾ " : "▸ "}</text>
-            <text fg={rail}>{icon}</text>
-            <text fg={running ? "#a8a8a8" : "#8cffb0"}> {truncate(title || "tool", Math.max(1, width - 10))}</text>
+            <text fg={activityColor}>{icon}</text>
+            <text fg={activityColor}> {truncate(title || "tool", Math.max(1, width - 10))}</text>
           </box>
-          <text fg="#686868">
+          <text fg={failed ? "#f08a8a" : "#686868"}>
             {truncate(`${hint}${summary ? ` · ${summary}` : ""}`, Math.max(1, width - 5))}
           </text>
           {detailLines.map((line, index) => (
-            <text key={`${item.id}-detail-${index}`} fg="#8a8a8a">
+            <text key={`${item.id}-detail-${index}`} fg={failed ? "#f08a8a" : "#8a8a8a"}>
               {truncate(line || " ", Math.max(1, width - 5))}
             </text>
           ))}

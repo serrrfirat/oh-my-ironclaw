@@ -867,4 +867,67 @@ describe("UI state", () => {
     ])
     expect(activityText(withFinalHistory.transcript[2])).toContain("Failed grep")
   })
+
+  test("treats capability activity with an error kind as failed", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_activity",
+        invocation_id: "run-1",
+        capability_id: "shell",
+        status: "completed",
+        runtime: "local",
+        provider: "host",
+        error_kind: "backend",
+        thread_id: "thread-1",
+      },
+    })
+
+    expect(state.activity[0]).toMatchObject({
+      id: "capability-run-1",
+      label: "Failed shell",
+      status: "error",
+      kind: "tool_failed",
+    })
+    expect(activityText(state.transcript[0])).toContain("Failed shell")
+    expect(activityText(state.transcript[0])).toContain("error backend")
+  })
+
+  test("does not treat successful capability output containing failure words as failed", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_input: "list files",
+            state: "completed",
+            started_at: "",
+            tool_calls: [
+              {
+                kind: "capability_display_preview",
+                name: "list_dir",
+                has_result: true,
+                has_error: false,
+                status: "completed",
+                result: "result-1",
+                call_id: "list-dir-1",
+                capability_id: "list_dir",
+                result_ref: "result-1",
+                output_summary: "json output",
+                output_preview: '{ "entries": ["failed-test.fixture"] }',
+                output_kind: "json",
+                output_bytes: 256,
+              },
+            ],
+          },
+        ],
+        has_more: false,
+      },
+    })
+
+    expect(activityText(state.transcript[1])).toContain("list_dir")
+    expect(activityText(state.transcript[1])).not.toContain("Failed list_dir")
+  })
 })

@@ -377,8 +377,9 @@ function applyCapabilityActivity(
   event: Extract<AppEvent, { type: "capability_activity" }>,
 ): UiState {
   const status = statusKey(event.status)
+  const effectiveStatus = event.error_kind ? "failed" : status
   const active = status === "started" || status === "running"
-  const failed = status === "failed" || status === "killed"
+  const failed = effectiveStatus === "failed" || effectiveStatus === "killed"
   const id = `capability-${event.invocation_id}`
   const transcriptActivity = capabilityEventActivity(event)
   const activityItem: ActivityItem = {
@@ -386,7 +387,7 @@ function applyCapabilityActivity(
     label: transcriptActivity.title,
     detail: transcriptActivity.detail ?? undefined,
     status: active ? "running" : failed ? "error" : "ok",
-    kind: active ? "tool_running" : `tool_${status}`,
+    kind: active ? "tool_running" : `tool_${effectiveStatus}`,
   }
 
   return {
