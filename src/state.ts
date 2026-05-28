@@ -155,6 +155,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
       }
     case "thinking_update":
       return applyThinkingUpdate(state, event)
+    case "work_summary_update":
+      return applyWorkSummaryUpdate(state, event)
     case "status":
       return { ...state, status: event.message }
     case "run_status":
@@ -472,6 +474,43 @@ function applyThinkingUpdate(
       state: "running",
       meta: { projectionId: event.id },
     }),
+  }
+}
+
+function applyWorkSummaryUpdate(
+  state: UiState,
+  event: Extract<AppEvent, { type: "work_summary_update" }>,
+): UiState {
+  const phase = statusKey(event.phase)
+  return {
+    ...state,
+    isThinking: true,
+    status: workSummaryLabel(phase).toLowerCase(),
+    activeRunId: event.run_id ?? state.activeRunId,
+    activity: upsertActivity(state.activity, {
+      id: event.id,
+      label: workSummaryLabel(phase),
+      detail: event.content,
+      status: "running",
+      kind: `work_summary_${phase}`,
+    }),
+  }
+}
+
+function workSummaryLabel(phase: string): string {
+  switch (phase) {
+    case "planning":
+      return "Planning"
+    case "working":
+      return "Working"
+    case "waiting":
+      return "Waiting"
+    case "retrying":
+      return "Retrying"
+    case "context":
+      return "Gathering context"
+    default:
+      return statusLabel(phase)
   }
 }
 

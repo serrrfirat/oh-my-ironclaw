@@ -1,7 +1,7 @@
 import { SyntaxStyle } from "@opentui/core"
 import { transcriptActivityLines, type TranscriptItem } from "../transcript"
 
-const ACTIVITY_DETAIL_LINE_LIMIT = 14
+const ACTIVITY_DETAIL_LINE_LIMIT = 48
 
 export function TranscriptMessage({
   item,
@@ -87,9 +87,12 @@ export function TranscriptMessage({
             {truncate(`${hint}${summary ? ` · ${summary}` : ""}`, Math.max(1, width - 5))}
           </text>
           {detailLines.map((line, index) => (
-            <text key={`${item.id}-detail-${index}`} fg={failed ? "#f08a8a" : "#8a8a8a"}>
-              {truncate(line || " ", Math.max(1, width - 5))}
-            </text>
+            <ActivityDetailLine
+              key={`${item.id}-detail-${index}`}
+              failed={failed}
+              line={line}
+              width={width}
+            />
           ))}
         </box>
       </box>
@@ -100,6 +103,32 @@ export function TranscriptMessage({
     <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
       <text fg="#d29922">{item.text || " "}</text>
     </box>
+  )
+}
+
+function ActivityDetailLine({ failed, line, width }: { failed: boolean; line: string; width: number }) {
+  const max = Math.max(1, width - 5)
+  if (line.startsWith("input: ")) {
+    return (
+      <text fg={failed ? "#f08a8a" : "#b8b08a"}>
+        {truncate(line, max)}
+      </text>
+    )
+  }
+  if (line.startsWith("output: ")) {
+    return (
+      <text fg={failed ? "#f08a8a" : "#8a8a8a"}>
+        {truncate(line, max)}
+      </text>
+    )
+  }
+  if (line === "truncated") {
+    return <text fg="#777777">{truncate("... truncated", max)}</text>
+  }
+  return (
+    <text fg={failed ? "#f08a8a" : "#d8cfaa"}>
+      {truncate(line || " ", max)}
+    </text>
   )
 }
 

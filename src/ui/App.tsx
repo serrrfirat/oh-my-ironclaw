@@ -26,6 +26,7 @@ type AppProps = {
 }
 
 type ActiveOverlay = "commands" | "threads" | "models" | "settings" | "skills" | null
+const INPUT_HISTORY_LIMIT = 100
 
 export function App({ config }: AppProps) {
   const renderer = useRenderer()
@@ -34,6 +35,10 @@ export function App({ config }: AppProps) {
   const markdownStyle = useMemo(() => SyntaxStyle.create(), [])
   const textareaRef = useRef<TextareaRenderable>(null)
   const activeThreadIdRef = useRef<string | null | undefined>(null)
+  const inputHistoryRef = useRef<string[]>([])
+  const inputHistoryIndexRef = useRef<number | null>(null)
+  const inputHistoryDraftRef = useRef("")
+  const suppressInputHistoryResetRef = useRef(false)
   const [state, dispatch] = useReducer(reduceUiState, initialUiState)
   const [input, setInput] = useState("")
   const [selectedThreadIndex, setSelectedThreadIndex] = useState(0)
@@ -340,11 +345,15 @@ export function App({ config }: AppProps) {
       return
     }
     if (key.name === "up") {
-      setSelectedThreadIndex((index) => Math.max(0, index - 1))
+      key.preventDefault()
+      key.stopPropagation()
+      navigateInputHistory("up")
       return
     }
     if (key.name === "down") {
-      setSelectedThreadIndex((index) => Math.min(Math.max(0, state.threads.length - 1), index + 1))
+      key.preventDefault()
+      key.stopPropagation()
+      navigateInputHistory("down")
       return
     }
     if (key.name === "return" && key.ctrl) {
@@ -599,6 +608,7 @@ export function App({ config }: AppProps) {
   async function submit() {
     const content = input.trim()
     if (!content) return
+    rememberInput(content)
     const slashCommand = commandSet.find((command) => command.name === content)
     if (slashCommand?.action) {
       await runSlashCommand(slashCommand)
@@ -676,9 +686,55 @@ export function App({ config }: AppProps) {
   }
 
   function clearComposer(nextOverlay: ActiveOverlay = null) {
-    setInput("")
+    setComposerText("")
     setActiveOverlay(nextOverlay)
-    textareaRef.current?.clear()
+    resetInputHistoryNavigation()
+  }
+
+  function setComposerText(value: string) {
+    suppressInputHistoryResetRef.current = true
+    setInput(value)
+    textareaRef.current?.setText(value)
+    if (textareaRef.current) textareaRef.current.cursorOffset = value.length
+    suppressInputHistoryResetRef.current = false
+  }
+
+  function rememberInput(content: string) {
+    const history = inputHistoryRef.current
+    if (history[history.length - 1] !== content) {
+      inputHistoryRef.current = [...history, content].slice(-INPUT_HISTORY_LIMIT)
+    }
+    resetInputHistoryNavigation()
+  }
+
+  function navigateInputHistory(direction: "up" | "down") {
+    const history = inputHistoryRef.current
+    if (history.length === 0) return
+
+    const currentIndex = inputHistoryIndexRef.current
+    if (direction === "up") {
+      const nextIndex = currentIndex === null ? history.length - 1 : Math.max(0, currentIndex - 1)
+      if (currentIndex === null) inputHistoryDraftRef.current = input
+      inputHistoryIndexRef.current = nextIndex
+      setComposerText(history[nextIndex] ?? "")
+      return
+    }
+
+    if (currentIndex === null) return
+    if (currentIndex >= history.length - 1) {
+      inputHistoryIndexRef.current = null
+      setComposerText(inputHistoryDraftRef.current)
+      return
+    }
+
+    const nextIndex = currentIndex + 1
+    inputHistoryIndexRef.current = nextIndex
+    setComposerText(history[nextIndex] ?? "")
+  }
+
+  function resetInputHistoryNavigation() {
+    inputHistoryIndexRef.current = null
+    inputHistoryDraftRef.current = ""
   }
 
   async function runLocalCliCommand(content: string, args: string[]) {
@@ -801,13 +857,17 @@ export function App({ config }: AppProps) {
   const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
   const composerWidth = clamp(width - 8, 42, 82)
   const conversationWidth = Math.max(1, width - 4)
-  const handleInputChange = () => setInput(textareaRef.current?.plainText ?? "")
+  const handleInputChange = () => {
+    setInput(textareaRef.current?.plainText ?? "")
+    if (!suppressInputHistoryResetRef.current) resetInputHistoryNavigation()
+  }
   const composer: ComposerCommonProps = {
     inputRef: textareaRef,
     isThinking: state.isThinking,
     railColor: activityFrame.railColor,
     selectedSlashCommandIndex: wrapIndex(selectedCommandIndex, slashCommands.length),
     selectedModel,
+    selectedProvider: providerLabel(config.provider),
     selectedModelIndex,
     selectedThreadIndex,
     showModelPalette,
@@ -848,6 +908,7 @@ export function App({ config }: AppProps) {
           height={height}
           selectedIndex={selectedSettingsIndex}
           selectedModel={selectedModel}
+          selectedProvider={providerLabel(config.provider)}
           status={state.status}
           width={width}
         />
@@ -892,6 +953,24 @@ function clamp(value: number, min: number, max: number): number {
 function modelIndex(models: string[], model: string): number {
   const index = models.indexOf(model)
   return index >= 0 ? index : 0
+}
+
+function providerLabel(provider: string): string {
+  switch (provider) {
+    case "nearai":
+      return "NEAR AI"
+    case "openai":
+      return "OpenAI"
+    case "anthropic":
+      return "Anthropic"
+    case "gemini":
+    case "google":
+      return "Google"
+    case "ollama":
+      return "Ollama"
+    default:
+      return provider
+  }
 }
 
 function mergeThreads(...groups: Array<ThreadInfo[]>): ThreadInfo[] {
@@ -988,6 +1067,7 @@ function thinkingLabelForActivity(activity: ActivityItem[], status: string, isTh
     default:
       if (key.endsWith("_completed") || key.endsWith("_failed")) return "thinking"
       if (key.startsWith("running_")) return "using tools"
+      if (key.startsWith("work_summary_")) return key.slice("work_summary_".length).replaceAll("_", " ")
       if (key === "idle") return "thinking"
       return key ? key.replaceAll("_", " ") : "thinking"
   }

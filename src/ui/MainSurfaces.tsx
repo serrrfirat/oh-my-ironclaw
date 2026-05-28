@@ -18,6 +18,7 @@ export type ComposerCommonProps = {
   railColor: string
   selectedSlashCommandIndex: number
   selectedModel: string
+  selectedProvider: string
   selectedModelIndex: number
   selectedThreadIndex: number
   showModelPalette: boolean
@@ -155,7 +156,7 @@ export function ConversationSurface({
         {transcriptEntries.map((entry) => entry.kind === "activity_group" ? (
           <ActivityGroup
             key={entry.id}
-            expanded={expandedActivityIds.has(entry.id)}
+            expanded={!expandedActivityIds.has(entry.id)}
             expandedActivityIds={expandedActivityIds}
             groupId={entry.id}
             items={entry.items}
@@ -169,7 +170,7 @@ export function ConversationSurface({
           <TranscriptMessage
             key={entry.item.id}
             item={entry.item}
-            expanded={expandedActivityIds.has(entry.item.id)}
+            expanded={entry.item.role === "activity" ? !expandedActivityIds.has(entry.item.id) : expandedActivityIds.has(entry.item.id)}
             markdownStyle={markdownStyle}
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
@@ -274,7 +275,7 @@ function ActivityGroup({
         <TranscriptMessage
           key={item.id}
           item={item}
-          expanded={expandedActivityIds.has(item.id)}
+          expanded={!expandedActivityIds.has(item.id)}
           markdownStyle={markdownStyle}
           selectedModel={selectedModel}
           spinner={spinner}
@@ -303,6 +304,7 @@ function Composer({
   railColor,
   selectedSlashCommandIndex,
   selectedModel,
+  selectedProvider,
   selectedModelIndex,
   selectedThreadIndex,
   showModelPalette,
@@ -380,7 +382,7 @@ function Composer({
             <text fg="#2ee66b">Build</text>
             <text fg="#777777"> . </text>
             <text fg="#d0d0d0">{selectedModel}</text>
-            <text fg="#858585"> OpenAI</text>
+            {selectedProvider ? <text fg="#858585"> {selectedProvider}</text> : null}
             {isThinking && showThinkingStatus ? <text fg={railColor}> {spinner} {thinkingLabel}</text> : null}
           </box>
         </box>

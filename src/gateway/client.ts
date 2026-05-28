@@ -530,7 +530,15 @@ function projectionEvents(frame: RebornWebChatEventFrame, threadId: string): App
       content: thinking.body,
       thread_id: threadId,
     }))
-    return [...runStatusEvents, ...textEvents, ...thinkingEvents]
+    const workSummaryEvents = workSummaryFromProjectionItem(item).map((summary): AppEvent => ({
+      type: "work_summary_update",
+      id: summary.id,
+      run_id: summary.run_id,
+      phase: summary.phase,
+      content: summary.body,
+      thread_id: threadId,
+    }))
+    return [...runStatusEvents, ...textEvents, ...thinkingEvents, ...workSummaryEvents]
   })
 
   return events.length > 0 ? events : [{ type: "status", message: frame.type, thread_id: threadId }]
@@ -566,6 +574,45 @@ function thinkingFromProjectionItem(item: Record<string, unknown>): Array<{ id: 
   }
 
   return []
+}
+
+function workSummaryFromProjectionItem(
+  item: Record<string, unknown>,
+): Array<{ id: string; run_id?: string | null; phase: string; body: string }> {
+  if (
+    item.type === "work_summary" &&
+    typeof item.id === "string" &&
+    typeof item.phase === "string" &&
+    typeof item.body === "string"
+  ) {
+    return [{
+      id: item.id,
+      run_id: typeof item.run_id === "string" ? item.run_id : null,
+      phase: item.phase,
+      body: item.body,
+    }]
+  }
+
+  const workSummary = item.work_summary
+  if (workSummary && typeof workSummary === "object") {
+    return workSummaryFromRecord(workSummary as Record<string, unknown>)
+  }
+
+  return []
+}
+
+function workSummaryFromRecord(
+  record: Record<string, unknown>,
+): Array<{ id: string; run_id?: string | null; phase: string; body: string }> {
+  if (typeof record.id !== "string" || typeof record.phase !== "string" || typeof record.body !== "string") {
+    return []
+  }
+  return [{
+    id: record.id,
+    run_id: typeof record.run_id === "string" ? record.run_id : null,
+    phase: record.phase,
+    body: record.body,
+  }]
 }
 
 function runStatusFromProjectionItem(

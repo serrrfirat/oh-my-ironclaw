@@ -319,6 +319,31 @@ describe("UI state", () => {
     })
   })
 
+  test("tracks work summary projection updates as activity without transcript reasoning", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "work_summary_update",
+        id: "work-summary:run-1:1",
+        run_id: "run-1",
+        phase: "planning",
+        content: "checking branch state",
+        thread_id: "thread-1",
+      },
+    })
+
+    expect(state.isThinking).toBe(true)
+    expect(state.activeRunId).toBe("run-1")
+    expect(state.activity[0]).toMatchObject({
+      id: "work-summary:run-1:1",
+      label: "Planning",
+      detail: "checking branch state",
+      status: "running",
+      kind: "work_summary_planning",
+    })
+    expect(state.transcript).toEqual([])
+  })
+
   test("keeps live thinking through in-progress history but drops it after a final reply", () => {
     const withThinking = reduceUiState(initialUiState, {
       type: "event",
@@ -476,7 +501,7 @@ describe("UI state", () => {
         subtitle: "src/main.rs",
         input_summary: "path: src/main.rs",
         output_summary: "text output",
-        output_preview: "fn main() {}",
+        output_preview: "fn main() {\n  println!(\"hi\");\n}",
         output_kind: "text",
         output_bytes: 12,
         result_ref: "result:tool-output",
@@ -488,7 +513,7 @@ describe("UI state", () => {
     expect(previewed.activity[0]).toMatchObject({
       id: "capability-run-1",
       label: "read_file",
-      detail: "src/main.rs · text output · fn main() {}",
+      detail: "src/main.rs · text output · fn main() {",
       status: "ok",
       kind: "tool_completed",
     })
@@ -498,10 +523,10 @@ describe("UI state", () => {
       role: "activity",
       state: "completed",
     })
-    expect(activityText(previewed.transcript[0])).toContain("read_file")
-    expect(activityText(previewed.transcript[0])).toContain("input: path: src/main.rs")
+    expect(activityText(previewed.transcript[0])).toContain("read src/main.rs")
+    expect(activityText(previewed.transcript[0])).not.toContain("input: path: src/main.rs")
     expect(activityText(previewed.transcript[0])).toContain("output: text output · text · 12 B")
-    expect(activityText(previewed.transcript[0])).toContain("fn main() {}")
+    expect(activityText(previewed.transcript[0])).toContain("fn main() {\n  println!(\"hi\");\n}")
     expect(activityText(previewed.transcript[0])).not.toContain("result: result:tool-output")
   })
 
@@ -546,6 +571,90 @@ describe("UI state", () => {
       },
     })
     expect(activityText(previewed.transcript[0])).toContain("fn main() {}")
+  })
+
+  test("renders only body_text for HTTP display previews", () => {
+    const previewed = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        invocation_id: "run-1",
+        capability_id: "http",
+        status: "completed",
+        title: "http",
+        subtitle: "GET https://example.test",
+        input_summary: "url: https://example.test",
+        output_summary: "200 OK",
+        output_preview: JSON.stringify({
+          status: 200,
+          headers: { "content-type": "text/plain" },
+          body_text: "hello from the response body",
+        }),
+        output_kind: "json",
+        output_bytes: 128,
+        result_ref: "result:http",
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+
+    const text = activityText(previewed.transcript[0])
+    expect(text).toContain("http")
+    expect(text).toContain("hello from the response body")
+    expect(text).not.toContain("input: url")
+    expect(text).not.toContain("output: 200 OK")
+    expect(text).not.toContain("content-type")
+  })
+
+  test("renders shell display previews as commands with output", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        invocation_id: "shell-1",
+        capability_id: "shell",
+        status: "completed",
+        title: "shell",
+        input_summary: "command: git status --short",
+        output_summary: "text output",
+        output_preview: " M src/transcript.ts",
+        output_kind: "text",
+        output_bytes: 20,
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+
+    const text = activityText(state.transcript[0])
+    expect(text).toContain("command")
+    expect(text).toContain("$ git status --short")
+    expect(text).toContain(" M src/transcript.ts")
+    expect(text).not.toContain("input: command")
+  })
+
+  test("renders search display previews with pattern and scope", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        invocation_id: "grep-1",
+        capability_id: "grep",
+        status: "completed",
+        title: "grep",
+        input_summary: "pattern: body_text, path: src",
+        output_summary: "2 matches",
+        output_preview: "src/transcript.ts: body_text",
+        output_kind: "text",
+        output_bytes: 28,
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+
+    const text = activityText(state.transcript[0])
+    expect(text).toContain("grep /body_text/ in src")
+    expect(text).toContain("src/transcript.ts: body_text")
+    expect(text).not.toContain("input: pattern")
   })
 
   test("renders durable timeline capability display previews from history", () => {
@@ -612,8 +721,8 @@ describe("UI state", () => {
         resultRef: "result:tool-output",
       },
     })
-    expect(activityText(state.transcript[1])).toContain("read_file")
-    expect(activityText(state.transcript[1])).toContain("input: path: src/main.rs")
+    expect(activityText(state.transcript[1])).toContain("read src/main.rs")
+    expect(activityText(state.transcript[1])).not.toContain("input: path: src/main.rs")
     expect(activityText(state.transcript[1])).toContain("output: text output · text · 12 B")
     expect(activityText(state.transcript[1])).toContain("fn main() {}")
   })
@@ -726,7 +835,7 @@ describe("UI state", () => {
       "capability-run-1",
       "turn-2-assistant",
     ])
-    expect(activityText(withFinalHistory.transcript[1])).toContain("Failed read_file")
+    expect(activityText(withFinalHistory.transcript[1])).toContain("failed read")
   })
 
   test("keeps unmatched failed previews in live tool order", () => {
@@ -807,7 +916,7 @@ describe("UI state", () => {
       "glob-1",
       "turn-2-assistant",
     ])
-    expect(activityText(withFinalHistory.transcript[1])).toContain("Failed shell")
+    expect(activityText(withFinalHistory.transcript[1])).toContain("failed command")
     expect(activityText(withFinalHistory.transcript[2])).toContain("glob")
   })
 
@@ -865,7 +974,7 @@ describe("UI state", () => {
       "turn-2-assistant",
       "capability-grep-1",
     ])
-    expect(activityText(withFinalHistory.transcript[2])).toContain("Failed grep")
+    expect(activityText(withFinalHistory.transcript[2])).toContain("failed grep")
   })
 
   test("treats capability activity with an error kind as failed", () => {

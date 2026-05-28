@@ -265,6 +265,7 @@ export type AppEvent =
   | { type: "run_status"; status: string; run_id?: string | null; thread_id?: string | null; failure_category?: string | null }
   | { type: "thinking"; message: string; thread_id?: string | null }
   | { type: "thinking_update"; id: string; content: string; thread_id?: string | null }
+  | { type: "work_summary_update"; id: string; run_id?: string | null; phase: string; content: string; thread_id?: string | null }
   | {
       type: "capability_activity"
       invocation_id: string

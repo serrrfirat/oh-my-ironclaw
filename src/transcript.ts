@@ -506,6 +506,17 @@ export function capabilityPreviewEventActivity(
   event: Extract<AppEvent, { type: "capability_display_preview" }>,
 ): TranscriptActivity {
   const status = statusKey(event.status)
+  const httpBodyText = httpBodyTextPreview(event.capability_id, event.title, event.output_preview)
+  if (httpBodyText) {
+    return {
+      kind: "capability_display_preview",
+      title: activityTitleForStatus(event.title || event.capability_id, status),
+      status,
+      outputPreview: httpBodyText,
+      truncated: event.truncated,
+    }
+  }
+
   return {
     kind: "capability_display_preview",
     title: activityTitleForStatus(event.title || event.capability_id, status),
@@ -552,6 +563,17 @@ function capabilityToolActivity(tool: Extract<ToolCallInfo, { kind: "capability_
     ? "failed"
     : statusKey(tool.status ?? "completed")
   const title = tool.name || tool.capability_id || "tool"
+  const httpBodyText = httpBodyTextPreview(tool.capability_id, tool.name, tool.output_preview)
+  if (httpBodyText) {
+    return {
+      kind: "capability_display_preview",
+      title: activityTitleForStatus(title, status),
+      status,
+      outputPreview: httpBodyText,
+      truncated: tool.truncated,
+    }
+  }
+
   return {
     kind: "capability_display_preview",
     title: activityTitleForStatus(title, status),
@@ -597,12 +619,15 @@ function activityTitleForStatus(title: string, status: string): string {
 }
 
 export function transcriptActivityLines(activity: TranscriptActivity): string[] {
+  const toolLines = toolSpecificActivityLines(activity)
+  if (toolLines) return toolLines
+
   const lines = [`${activityGlyph(activity.status)} ${activity.title}`]
   if (activity.detail) lines.push(activity.detail)
   if (activity.inputSummary) lines.push(`input: ${activity.inputSummary}`)
   const output = transcriptActivityOutputLine(activity)
   if (output) lines.push(output)
-  if (activity.outputPreview) lines.push(activity.outputPreview)
+  if (activity.outputPreview) lines.push(...activity.outputPreview.split(/\r?\n/))
   if (activity.truncated) lines.push("truncated")
   return lines
 }
@@ -621,6 +646,191 @@ function transcriptActivityOutputLine(activity: TranscriptActivity): string | nu
   return `output: ${parts.join(" · ")}`
 }
 
+function toolSpecificActivityLines(activity: TranscriptActivity): string[] | null {
+  if (activity.kind === "capability_activity") return null
+
+  const tool = toolKey(activity.title)
+  const failed = activity.status === "failed" || activity.status === "killed"
+  const glyph = activityGlyph(activity.status)
+  const preview = outputPreviewLines(activity)
+  const path = pathFromActivity(activity)
+  const target = path ?? cleanSummary(activity.detail) ?? cleanSummary(activity.inputSummary)
+
+  if (isHttpTool(tool, activity.title)) {
+    return [`${glyph} ${activity.title}`, ...preview, ...truncatedLine(activity)]
+  }
+
+  if (isReadTool(tool)) {
+    return [
+      `${glyph} ${failed ? "failed " : ""}read${target ? ` ${target}` : ""}`,
+      ...preview,
+      ...outputMetaLines(activity),
+      ...truncatedLine(activity),
+    ]
+  }
+
+  if (isListTool(tool)) {
+    return [
+      `${glyph} ${failed ? "failed " : ""}list${target ? ` ${target}` : tool ? ` ${tool}` : ""}`,
+      ...preview,
+      ...outputMetaLines(activity),
+      ...truncatedLine(activity),
+    ]
+  }
+
+  if (isSearchTool(tool)) {
+    return [
+      `${glyph} ${failed ? "failed " : ""}${searchLabel(tool)}${searchQuery(activity)}`,
+      ...preview,
+      ...outputMetaLines(activity),
+      ...truncatedLine(activity),
+    ]
+  }
+
+  if (isShellTool(tool)) {
+    return [
+      `${glyph} ${failed ? "failed command" : "command"}`,
+      ...commandLines(activity),
+      ...preview,
+      ...outputMetaLines(activity),
+      ...truncatedLine(activity),
+    ]
+  }
+
+  if (isEditTool(tool)) {
+    return [
+      `${glyph} edit${target ? ` ${target}` : ""}`,
+      ...diffSummaryLines(activity),
+      ...preview,
+      ...outputMetaLines(activity),
+      ...truncatedLine(activity),
+    ]
+  }
+
+  if (isWriteTool(tool)) {
+    return [
+      `${glyph} write${target ? ` ${target}` : ""}`,
+      ...diffSummaryLines(activity),
+      ...preview,
+      ...outputMetaLines(activity),
+      ...truncatedLine(activity),
+    ]
+  }
+
+  return null
+}
+
+function outputPreviewLines(activity: TranscriptActivity): string[] {
+  return activity.outputPreview?.split(/\r?\n/) ?? []
+}
+
+function outputMetaLines(activity: TranscriptActivity): string[] {
+  const output = transcriptActivityOutputLine(activity)
+  return output ? [output] : []
+}
+
+function truncatedLine(activity: TranscriptActivity): string[] {
+  return activity.truncated ? ["truncated"] : []
+}
+
+function toolKey(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/^(using|failed|killed|completed|running)\s+/, "")
+    .replace(/^builtin[._-]/, "")
+    .trim()
+}
+
+function isReadTool(tool: string): boolean {
+  return /\b(read|read_file|cat)\b/.test(tool)
+}
+
+function isListTool(tool: string): boolean {
+  return /\b(list|list_dir|ls)\b/.test(tool)
+}
+
+function isSearchTool(tool: string): boolean {
+  return /\b(grep|glob|search|find|rg)\b/.test(tool)
+}
+
+function isShellTool(tool: string): boolean {
+  return /\b(shell|exec|execute|command|bash|zsh|ctx_execute|ctx_batch_execute)\b/.test(tool)
+}
+
+function isEditTool(tool: string): boolean {
+  return /\b(edit|apply_patch|patch)\b/.test(tool)
+}
+
+function isWriteTool(tool: string): boolean {
+  return /\b(write|write_file|create_file)\b/.test(tool)
+}
+
+function isHttpTool(tool: string, title: string): boolean {
+  return /\bhttps?\b|\bhttp\b/i.test(`${tool} ${title}`)
+}
+
+function searchLabel(tool: string): string {
+  if (tool.includes("glob")) return "glob"
+  if (tool.includes("grep") || tool.includes("rg")) return "grep"
+  return "search"
+}
+
+function searchQuery(activity: TranscriptActivity): string {
+  const pattern = fieldValue(activity.inputSummary, ["pattern", "query", "regex"])
+  const path = fieldValue(activity.inputSummary, ["path", "cwd", "directory", "root"]) ?? pathFromActivity(activity)
+  const parts = [
+    pattern ? ` /${pattern}/` : cleanSummary(activity.inputSummary) ? ` ${cleanSummary(activity.inputSummary)}` : "",
+    path ? ` in ${path}` : "",
+  ]
+  return parts.join("")
+}
+
+function commandLines(activity: TranscriptActivity): string[] {
+  const command = fieldValue(activity.inputSummary, ["command", "cmd", "shell", "args"]) ?? cleanSummary(activity.inputSummary)
+  return command ? [`$ ${command}`] : []
+}
+
+function diffSummaryLines(activity: TranscriptActivity): string[] {
+  return [activity.outputSummary, activity.detail]
+    .map(cleanSummary)
+    .filter((line): line is string => Boolean(line))
+}
+
+function pathFromActivity(activity: TranscriptActivity): string | null {
+  return (
+    cleanPath(activity.detail) ??
+    fieldValue(activity.inputSummary, ["path", "file", "filename", "target", "cwd", "directory"]) ??
+    cleanPath(activity.inputSummary)
+  )
+}
+
+function fieldValue(summary: string | null | undefined, keys: string[]): string | null {
+  if (!summary) return null
+  for (const key of keys) {
+    const match = summary.match(new RegExp(`(?:^|[,;\\s])${key}\\s*[:=]\\s*([^,;\\n]+)`, "i"))
+    const value = match?.[1]?.trim()
+    if (value) return stripQuotes(value)
+  }
+  return null
+}
+
+function cleanPath(value: string | null | undefined): string | null {
+  const cleaned = cleanSummary(value)
+  if (!cleaned) return null
+  if (/^[\w.-]+:\s/.test(cleaned)) return null
+  if (cleaned.includes(" · ")) return cleaned.split(" · ")[0]?.trim() || null
+  return cleaned
+}
+
+function cleanSummary(value: string | null | undefined): string | null {
+  const cleaned = value?.trim()
+  return cleaned || null
+}
+
+function stripQuotes(value: string): string {
+  return value.replace(/^['"]|['"]$/g, "")
+}
+
 export function capabilityDisplayPreviewDetail(activity: TranscriptActivity): string {
   return [
     activity.detail,
@@ -634,6 +844,35 @@ export function capabilityDisplayPreviewDetail(activity: TranscriptActivity): st
 
 function firstLine(text: string): string {
   return text.split(/\r?\n/, 1)[0] ?? ""
+}
+
+function httpBodyTextPreview(capabilityId?: string | null, title?: string | null, outputPreview?: string | null): string | null {
+  if (!outputPreview || !isHttpCapability(capabilityId, title)) return null
+  return findBodyText(parseJsonValue(outputPreview))
+}
+
+function isHttpCapability(capabilityId?: string | null, title?: string | null): boolean {
+  return [capabilityId, title].filter(Boolean).some((value) => /\bhttps?\b|\bhttp\b/i.test(String(value)))
+}
+
+function parseJsonValue(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+function findBodyText(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null
+  if ("body_text" in value && typeof value.body_text === "string") return value.body_text
+
+  for (const nested of Object.values(value)) {
+    const bodyText = findBodyText(nested)
+    if (bodyText) return bodyText
+  }
+
+  return null
 }
 
 function formatBytes(bytes: number): string {

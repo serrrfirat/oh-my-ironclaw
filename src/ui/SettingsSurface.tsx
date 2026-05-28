@@ -13,6 +13,7 @@ export function SettingsSurface({
   height,
   selectedIndex,
   selectedModel,
+  selectedProvider,
   status,
   width,
 }: {
@@ -21,6 +22,7 @@ export function SettingsSurface({
   height: number
   selectedIndex: number
   selectedModel: string
+  selectedProvider: string
   status: string
   width: number
 }) {
@@ -37,6 +39,7 @@ export function SettingsSurface({
       config,
       secretCount,
       selectedModel,
+      selectedProvider,
       serverState,
       profileName,
     }),
@@ -58,6 +61,7 @@ export function SettingsSurface({
           connected={connected}
           item={selectedItem}
           selectedModel={selectedModel}
+          selectedProvider={selectedProvider}
           sourcePath={sourcePath}
           status={status}
           width={contentWidth}
@@ -84,6 +88,7 @@ export function SettingsSurface({
           connected={connected}
           item={selectedItem}
           selectedModel={selectedModel}
+          selectedProvider={selectedProvider}
           sourcePath={sourcePath}
           status={status}
           width={Math.max(1, contentWidth - 34)}
@@ -156,6 +161,7 @@ function SettingsPreview({
   connected,
   item,
   selectedModel,
+  selectedProvider,
   sourcePath,
   status,
   width,
@@ -165,6 +171,7 @@ function SettingsPreview({
   connected: boolean
   item: SettingsMenuItem
   selectedModel: string
+  selectedProvider: string
   sourcePath: string
   status: string
   width: number
@@ -174,6 +181,7 @@ function SettingsPreview({
     config,
     connected,
     selectedModel,
+    selectedProvider,
     sourcePath,
     status,
   })
@@ -198,15 +206,16 @@ function settingsMenuMeta(
     profileName: string
     secretCount: string
     selectedModel: string
+    selectedProvider: string
     serverState: string
   },
 ) {
-  const { config, profileName, secretCount, selectedModel, serverState } = context
+  const { config, profileName, secretCount, selectedModel, selectedProvider, serverState } = context
   switch (section) {
     case "Connection":
       return serverState
     case "Models":
-      return selectedModel
+      return selectedProvider ? `${selectedModel} · ${selectedProvider}` : selectedModel
     case "Secrets":
       return secretCount
     case "Tools":
@@ -225,11 +234,12 @@ function settingsFieldsForSection(
     config: ClientConfig
     connected: boolean
     selectedModel: string
+    selectedProvider: string
     sourcePath: string
     status: string
   },
 ) {
-  const { authState, config, connected, selectedModel, sourcePath, status } = context
+  const { authState, config, connected, selectedModel, selectedProvider, sourcePath, status } = context
   switch (section) {
     case "Connection":
       return [
@@ -241,7 +251,7 @@ function settingsFieldsForSection(
     case "Models":
       return [
         { label: "active", value: selectedModel },
-        { label: "provider", value: "OpenAI" },
+        { label: "provider", value: selectedProvider || "unknown" },
         { label: "command", value: "/model" },
         { label: "source", value: "Reborn product workflow" },
       ]

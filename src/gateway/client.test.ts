@@ -231,6 +231,36 @@ describe("WebChat event mapping", () => {
     })
   })
 
+  test("maps projection work summaries to live activity updates", () => {
+    const event = mapWebChatEvent(
+      {
+        type: "projection_update",
+        cursor: "cursor-1",
+        state: {
+          thread_id: "thread-1",
+          items: [{
+            work_summary: {
+              id: "work-summary:run-1:1",
+              run_id: "run-1",
+              phase: "planning",
+              body: "checking branch state",
+            },
+          }],
+        },
+      },
+      "thread-1",
+    )
+
+    expect(event).toEqual({
+      type: "work_summary_update",
+      id: "work-summary:run-1:1",
+      run_id: "run-1",
+      phase: "planning",
+      content: "checking branch state",
+      thread_id: "thread-1",
+    })
+  })
+
   test("emits every renderable projection item in frame order", () => {
     const events = mapWebChatEvents(
       {
