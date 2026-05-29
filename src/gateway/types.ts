@@ -125,7 +125,7 @@ export type RebornWebChatEventFrame = {
     truncated?: boolean
     updated_at?: string
   }
-  prompt?: { turn_run_id?: string; gate_ref?: string; headline?: string; body?: string }
+  prompt?: { turn_run_id?: string; gate_ref?: string; auth_request_ref?: string; headline?: string; body?: string }
   run_state?: {
     run_id?: string | null
     status?: string | null
@@ -311,7 +311,7 @@ export type AppEvent =
   | { type: "image_generated"; event_id: string; data_url: string; path?: string | null; thread_id?: string | null }
   | { type: "suggestions"; suggestions: string[]; thread_id?: string | null }
   | { type: "turn_cost"; input_tokens: number; output_tokens: number; cost_usd: string; thread_id?: string | null }
-  | { type: "skill_activated"; skill_names: string[]; thread_id?: string | null; feedback?: string[] }
+  | { type: "skill_activated"; id?: string | null; run_id?: string | null; skill_names: string[]; thread_id?: string | null; feedback?: string[] }
   | { type: "extension_status"; extension_name: string; status: string; message?: string | null }
   | { type: "warning"; source: string; message: string; thread_id?: string | null }
   | { type: "error"; message: string; thread_id?: string | null }

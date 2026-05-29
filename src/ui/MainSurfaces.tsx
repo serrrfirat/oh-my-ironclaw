@@ -14,8 +14,10 @@ const THREAD_PALETTE_LIMIT = 10
 
 export type ComposerCommonProps = {
   inputRef: RefObject<TextareaRenderable | null>
+  connected: boolean
   isThinking: boolean
   railColor: string
+  turnElapsedMs?: number | null
   selectedSlashCommandIndex: number
   selectedModel: string
   selectedProvider: string
@@ -183,6 +185,7 @@ export function ConversationSurface({
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
             thinkingLabel={composer.thinkingLabel}
+            turnElapsedMs={composer.turnElapsedMs}
             width={contentWidth}
           />
         ) : null}
@@ -213,11 +216,13 @@ function ThinkingMessage({
   selectedModel,
   spinner,
   thinkingLabel,
+  turnElapsedMs,
   width,
 }: {
   selectedModel: string
   spinner: string
   thinkingLabel: string
+  turnElapsedMs?: number | null
   width: number
 }) {
   return (
@@ -227,6 +232,7 @@ function ThinkingMessage({
         <text fg="#2ee66b"> Build</text>
         <text fg="#777777"> · </text>
         <text fg="#d0d0d0">{selectedModel}</text>
+        {typeof turnElapsedMs === "number" ? <text fg="#777777"> · {formatDuration(turnElapsedMs)}</text> : null}
         <text fg="#777777"> · {thinkingLabel}</text>
       </box>
     </box>
@@ -298,10 +304,12 @@ function YoloSplashTag() {
 }
 
 function Composer({
+  connected,
   focused,
   inputRef,
   isThinking,
   railColor,
+  turnElapsedMs,
   selectedSlashCommandIndex,
   selectedModel,
   selectedProvider,
@@ -383,6 +391,8 @@ function Composer({
             <text fg="#777777"> . </text>
             <text fg="#d0d0d0">{selectedModel}</text>
             {selectedProvider ? <text fg="#858585"> {selectedProvider}</text> : null}
+            {!connected ? <text fg="#f08a8a"> · ! disconnected</text> : null}
+            {typeof turnElapsedMs === "number" ? <text fg="#777777"> · {formatDuration(turnElapsedMs)}</text> : null}
             {isThinking && showThinkingStatus ? <text fg={railColor}> {spinner} {thinkingLabel}</text> : null}
           </box>
         </box>
@@ -738,6 +748,12 @@ function threadPaletteHeight(threads: ThreadInfo[]): number {
 
 function modelPaletteHeight(models: string[]): number {
   return Math.min(Math.max(models.length, 1), 8) + 3
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.round(ms / 1000)}s`
 }
 
 function wrapIndex(index: number, length: number): number {

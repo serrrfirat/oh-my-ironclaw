@@ -60,6 +60,7 @@ export function App({ config }: AppProps) {
   const [skillsLoading, setSkillsLoading] = useState(false)
   const [skillsError, setSkillsError] = useState<string | null>(null)
   const [skillDetail, setSkillDetail] = useState<SkillDetailView | null>(null)
+  const [nowMs, setNowMs] = useState(() => Date.now())
   const activityFrame = useActivityFrame(state.isThinking)
   const thinkingLabel = thinkingLabelForActivity(state.activity, state.status, state.isThinking)
   const showCommandPalette = activeOverlay === "commands"
@@ -408,6 +409,13 @@ export function App({ config }: AppProps) {
   useEffect(() => {
     activeThreadIdRef.current = state.activeThreadId
   }, [state.activeThreadId])
+
+  useEffect(() => {
+    if (!state.isThinking) return
+    setNowMs(Date.now())
+    const timer = setInterval(() => setNowMs(Date.now()), 250)
+    return () => clearInterval(timer)
+  }, [state.isThinking])
 
   useEffect(() => {
     let cancelled = false
@@ -857,14 +865,17 @@ export function App({ config }: AppProps) {
   const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
   const composerWidth = clamp(width - 8, 42, 82)
   const conversationWidth = Math.max(1, width - 4)
+  const turnElapsedMs = state.isThinking ? activeTurnElapsedMs(state.transcript, nowMs) : null
   const handleInputChange = () => {
     setInput(textareaRef.current?.plainText ?? "")
     if (!suppressInputHistoryResetRef.current) resetInputHistoryNavigation()
   }
   const composer: ComposerCommonProps = {
     inputRef: textareaRef,
+    connected: state.connected,
     isThinking: state.isThinking,
     railColor: activityFrame.railColor,
+    turnElapsedMs,
     selectedSlashCommandIndex: wrapIndex(selectedCommandIndex, slashCommands.length),
     selectedModel,
     selectedProvider: providerLabel(config.provider),
@@ -953,6 +964,11 @@ function clamp(value: number, min: number, max: number): number {
 function modelIndex(models: string[], model: string): number {
   const index = models.indexOf(model)
   return index >= 0 ? index : 0
+}
+
+function activeTurnElapsedMs(transcript: Array<{ role: string; meta?: { sentAtMs?: number } }>, nowMs: number): number | null {
+  const sentAtMs = [...transcript].reverse().find((item) => item.role === "user" && item.meta?.sentAtMs)?.meta?.sentAtMs
+  return sentAtMs ? Math.max(0, nowMs - sentAtMs) : null
 }
 
 function providerLabel(provider: string): string {

@@ -157,6 +157,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
       return applyThinkingUpdate(state, event)
     case "work_summary_update":
       return applyWorkSummaryUpdate(state, event)
+    case "skill_activated":
+      return applySkillActivated(state, event)
     case "status":
       return { ...state, status: event.message }
     case "run_status":
@@ -512,6 +514,58 @@ function workSummaryLabel(phase: string): string {
     default:
       return statusLabel(phase)
   }
+}
+
+function applySkillActivated(
+  state: UiState,
+  event: Extract<AppEvent, { type: "skill_activated" }>,
+): UiState {
+  const content = skillActivationText(event.skill_names, event.feedback ?? [])
+  if (!content) return state
+  const id = skillActivationId(event)
+  const title = event.skill_names.length === 1
+    ? `Skill activated: ${event.skill_names[0]}`
+    : `Skill activated: ${event.skill_names.join(", ")}`
+  const detail = (event.feedback ?? []).join("\n")
+  return {
+    ...state,
+    isThinking: state.isThinking,
+    status: "skills activated",
+    activeRunId: event.run_id ?? state.activeRunId,
+    activity: upsertActivity(state.activity, {
+      id,
+      label: title,
+      detail: detail || undefined,
+      status: "info",
+      kind: "skill_activation",
+    }),
+    transcript: upsertCapabilityTranscriptItem(state.transcript, {
+      id,
+      role: "activity",
+      threadId: event.thread_id,
+      state: "completed",
+      activity: {
+        kind: "skill_activation",
+        title,
+        status: "completed",
+        detail,
+      },
+      meta: { projectionId: event.id ?? id },
+    }),
+  }
+}
+
+function skillActivationText(skillNames: string[], feedback: string[]): string {
+  return [
+    skillNames.length ? `Skill activated: ${skillNames.join(", ")}` : "",
+    ...feedback,
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
+function skillActivationId(event: Extract<AppEvent, { type: "skill_activated" }>): string {
+  return `skill-${event.id ?? (event.skill_names.join("-") || "activation")}`
 }
 
 function progressActivityId(threadId: string | null | undefined, kind: string): string {

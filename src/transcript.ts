@@ -1,7 +1,7 @@
 import type { AppEvent, HistoryResponse, TimelineMessageInfo, ToolCallInfo } from "./gateway/types"
 
 export type TranscriptActivity = {
-  kind: "capability_activity" | "capability_display_preview" | "tool_result_reference"
+  kind: "capability_activity" | "capability_display_preview" | "tool_result_reference" | "skill_activation"
   title: string
   status: string
   detail?: string | null

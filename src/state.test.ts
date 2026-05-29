@@ -344,6 +344,46 @@ describe("UI state", () => {
     expect(state.transcript).toEqual([])
   })
 
+  test("renders skill activation projection updates as activity", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "skill_activated",
+        id: "skill-activation:run-1:1",
+        run_id: "run-1",
+        skill_names: ["code-review"],
+        feedback: ["code-review: force-activated via explicit mention"],
+        thread_id: "thread-1",
+      },
+    })
+
+    expect(state.isThinking).toBe(false)
+    expect(state.activeRunId).toBe("run-1")
+    expect(state.activity[0]).toMatchObject({
+      id: "skill-skill-activation:run-1:1",
+      label: "Skill activated: code-review",
+      detail: "code-review: force-activated via explicit mention",
+      status: "info",
+      kind: "skill_activation",
+    })
+    expect(state.transcript).toContainEqual({
+      id: "skill-skill-activation:run-1:1",
+      role: "activity",
+      threadId: "thread-1",
+      state: "completed",
+      activity: {
+        kind: "skill_activation",
+        title: "Skill activated: code-review",
+        status: "completed",
+        detail: "code-review: force-activated via explicit mention",
+      },
+      meta: { projectionId: "skill-activation:run-1:1" },
+    })
+    expect(activityText(state.transcript[0] as Extract<TranscriptItem, { role: "activity" }>)).toBe(
+      "✓ Skill activated: code-review\ncode-review: force-activated via explicit mention",
+    )
+  })
+
   test("keeps live thinking through in-progress history but drops it after a final reply", () => {
     const withThinking = reduceUiState(initialUiState, {
       type: "event",

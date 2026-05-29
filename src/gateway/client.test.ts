@@ -261,6 +261,36 @@ describe("WebChat event mapping", () => {
     })
   })
 
+  test("maps projection skill activations to activity updates", () => {
+    const event = mapWebChatEvent(
+      {
+        type: "projection_update",
+        cursor: "cursor-1",
+        state: {
+          thread_id: "thread-1",
+          items: [{
+            skill_activation: {
+              id: "skill-activation:run-1:1",
+              run_id: "run-1",
+              skill_names: ["code-review"],
+              feedback: ["code-review: force-activated via explicit mention"],
+            },
+          }],
+        },
+      },
+      "thread-1",
+    )
+
+    expect(event).toEqual({
+      type: "skill_activated",
+      id: "skill-activation:run-1:1",
+      run_id: "run-1",
+      skill_names: ["code-review"],
+      feedback: ["code-review: force-activated via explicit mention"],
+      thread_id: "thread-1",
+    })
+  })
+
   test("emits every renderable projection item in frame order", () => {
     const events = mapWebChatEvents(
       {
@@ -305,6 +335,36 @@ describe("WebChat event mapping", () => {
     expect(event).toEqual({
       type: "tool_started",
       name: "tool_running",
+      thread_id: "thread-1",
+    })
+  })
+
+  test("maps auth-required prompts to pending gates", () => {
+    const event = mapWebChatEvent(
+      {
+        type: "auth_required",
+        cursor: "cursor-1",
+        prompt: {
+          turn_run_id: "run-1",
+          auth_request_ref: "gate:auth-github",
+          headline: "Authentication required",
+          body: "GitHub needs authentication.",
+        },
+      },
+      "thread-1",
+    )
+
+    expect(event).toEqual({
+      type: "gate_required",
+      request_id: "run-1:gate:auth-github",
+      gate_name: "auth",
+      tool_name: "Authentication required",
+      description: "GitHub needs authentication.",
+      parameters: "",
+      extension_name: null,
+      run_id: "run-1",
+      gate_ref: "gate:auth-github",
+      resume_kind: { run_id: "run-1", gate_ref: "gate:auth-github" },
       thread_id: "thread-1",
     })
   })

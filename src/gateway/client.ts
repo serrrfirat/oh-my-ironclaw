@@ -410,23 +410,10 @@ export function mapWebChatEvents(frame: RebornWebChatEventFrame | null, threadId
       return compactEvents(capabilityActivityEvent(frame, threadId))
     case "capability_display_preview":
       return compactEvents(capabilityDisplayPreviewEvent(frame, threadId))
-    case "gate": {
-      const runId = frame.prompt?.turn_run_id ?? ""
-      const gateRef = frame.prompt?.gate_ref ?? ""
-      return [{
-        type: "gate_required",
-        request_id: `${runId}:${gateRef}`,
-        gate_name: "approval",
-        tool_name: frame.prompt?.headline ?? "approval",
-        description: frame.prompt?.body ?? frame.prompt?.headline ?? "Approval required",
-        parameters: "",
-        extension_name: null,
-        run_id: runId,
-        gate_ref: gateRef,
-        resume_kind: { run_id: runId, gate_ref: gateRef },
-        thread_id: threadId,
-      }]
-    }
+    case "gate":
+      return compactEvents(gateRequiredEvent(frame, threadId, "approval", frame.prompt?.gate_ref))
+    case "auth_required":
+      return compactEvents(gateRequiredEvent(frame, threadId, "auth", frame.prompt?.auth_request_ref))
     case "final_reply":
       return [{
         type: "response",
@@ -451,6 +438,31 @@ export function mapWebChatEvents(frame: RebornWebChatEventFrame | null, threadId
 
 function compactEvents(...events: Array<AppEvent | null>): AppEvent[] {
   return events.filter((event): event is AppEvent => Boolean(event))
+}
+
+function gateRequiredEvent(
+  frame: RebornWebChatEventFrame,
+  threadId: string,
+  gateName: string,
+  gateRef?: string,
+): AppEvent | null {
+  const runId = frame.prompt?.turn_run_id ?? ""
+  const ref = gateRef ?? ""
+  if (!runId || !ref) return { type: "status", message: frame.type, thread_id: threadId }
+  const headline = frame.prompt?.headline ?? (gateName === "auth" ? "Authentication required" : "Approval required")
+  return {
+    type: "gate_required",
+    request_id: `${runId}:${ref}`,
+    gate_name: gateName,
+    tool_name: headline,
+    description: frame.prompt?.body ?? headline,
+    parameters: "",
+    extension_name: null,
+    run_id: runId,
+    gate_ref: ref,
+    resume_kind: { run_id: runId, gate_ref: ref },
+    thread_id: threadId,
+  }
 }
 
 function prioritizedEvent(events: AppEvent[]): AppEvent | null {
@@ -538,7 +550,15 @@ function projectionEvents(frame: RebornWebChatEventFrame, threadId: string): App
       content: summary.body,
       thread_id: threadId,
     }))
-    return [...runStatusEvents, ...textEvents, ...thinkingEvents, ...workSummaryEvents]
+    const skillActivationEvents = skillActivationFromProjectionItem(item).map((activation): AppEvent => ({
+      type: "skill_activated",
+      id: activation.id,
+      run_id: activation.run_id,
+      skill_names: activation.skill_names,
+      feedback: activation.feedback,
+      thread_id: threadId,
+    }))
+    return [...runStatusEvents, ...textEvents, ...thinkingEvents, ...workSummaryEvents, ...skillActivationEvents]
   })
 
   return events.length > 0 ? events : [{ type: "status", message: frame.type, thread_id: threadId }]
@@ -613,6 +633,38 @@ function workSummaryFromRecord(
     phase: record.phase,
     body: record.body,
   }]
+}
+
+function skillActivationFromProjectionItem(
+  item: Record<string, unknown>,
+): Array<{ id: string; run_id?: string | null; skill_names: string[]; feedback: string[] }> {
+  if (item.type === "skill_activation") return skillActivationFromRecord(item)
+
+  const skillActivation = item.skill_activation
+  if (skillActivation && typeof skillActivation === "object") {
+    return skillActivationFromRecord(skillActivation as Record<string, unknown>)
+  }
+
+  return []
+}
+
+function skillActivationFromRecord(
+  record: Record<string, unknown>,
+): Array<{ id: string; run_id?: string | null; skill_names: string[]; feedback: string[] }> {
+  if (typeof record.id !== "string") return []
+  const skillNames = stringArray(record.skill_names)
+  const feedback = stringArray(record.feedback)
+  if (skillNames.length === 0 && feedback.length === 0) return []
+  return [{
+    id: record.id,
+    run_id: typeof record.run_id === "string" ? record.run_id : null,
+    skill_names: skillNames,
+    feedback,
+  }]
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
 }
 
 function runStatusFromProjectionItem(
