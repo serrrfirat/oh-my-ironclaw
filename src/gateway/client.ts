@@ -4,6 +4,8 @@ import type {
   AppEvent,
   GateResolveRequest,
   HistoryResponse,
+  ManualTokenSubmitRequest,
+  ManualTokenSubmitResponse,
   RebornCancelRunResponse,
   RebornCreateThreadResponse,
   RebornListThreadsResponse,
@@ -107,10 +109,18 @@ export class GatewayClient {
           client_action_id: actionId("gate"),
           resolution: payload.resolution,
           always: "always" in payload ? payload.always : undefined,
+          credential_ref: "credential_ref" in payload ? payload.credential_ref : undefined,
         }),
       },
     )
     return { message_id: gateRef, status: "resolved", thread_id: threadId, response }
+  }
+
+  async submitManualToken(payload: ManualTokenSubmitRequest): Promise<ManualTokenSubmitResponse> {
+    return this.requestJson<ManualTokenSubmitResponse>("/api/reborn/product-auth/manual-token/submit", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
   }
 
   async cancelRun(threadId: string, runId: string): Promise<RebornCancelRunResponse> {
@@ -460,6 +470,8 @@ function gateRequiredEvent(
     extension_name: null,
     run_id: runId,
     gate_ref: ref,
+    provider: gateName === "auth" ? frame.prompt?.provider ?? "github" : null,
+    account_label: gateName === "auth" ? frame.prompt?.account_label ?? "Manual token" : null,
     resume_kind: { run_id: runId, gate_ref: ref },
     thread_id: threadId,
   }
@@ -527,40 +539,46 @@ function capabilityDisplayPreviewEvent(frame: RebornWebChatEventFrame, threadId:
 
 function projectionEvents(frame: RebornWebChatEventFrame, threadId: string): AppEvent[] {
   const items = frame.state?.items ?? []
-  const events = items.flatMap((item) => {
-    const runStatusEvents = runStatusFromProjectionItem(item).map((runStatus): AppEvent => ({
+  const runStatusEvents: AppEvent[] = []
+  const thinkingEvents: AppEvent[] = []
+  const workSummaryEvents: AppEvent[] = []
+  const skillActivationEvents: AppEvent[] = []
+  const textEvents: AppEvent[] = []
+
+  for (const item of items) {
+    runStatusEvents.push(...runStatusFromProjectionItem(item).map((runStatus): AppEvent => ({
         type: "run_status",
         status: runStatus.status,
         run_id: runStatus.run_id,
         failure_category: runStatus.failure_category,
         thread_id: threadId,
-    }))
-    const textEvents = textBodyFromProjectionItem(item).map((content): AppEvent => ({ type: "response", content, thread_id: threadId }))
-    const thinkingEvents = thinkingFromProjectionItem(item).map((thinking): AppEvent => ({
+    })))
+    thinkingEvents.push(...thinkingFromProjectionItem(item).map((thinking): AppEvent => ({
       type: "thinking_update",
       id: thinking.id,
       content: thinking.body,
       thread_id: threadId,
-    }))
-    const workSummaryEvents = workSummaryFromProjectionItem(item).map((summary): AppEvent => ({
+    })))
+    workSummaryEvents.push(...workSummaryFromProjectionItem(item).map((summary): AppEvent => ({
       type: "work_summary_update",
       id: summary.id,
       run_id: summary.run_id,
       phase: summary.phase,
       content: summary.body,
       thread_id: threadId,
-    }))
-    const skillActivationEvents = skillActivationFromProjectionItem(item).map((activation): AppEvent => ({
+    })))
+    skillActivationEvents.push(...skillActivationFromProjectionItem(item).map((activation): AppEvent => ({
       type: "skill_activated",
       id: activation.id,
       run_id: activation.run_id,
       skill_names: activation.skill_names,
       feedback: activation.feedback,
       thread_id: threadId,
-    }))
-    return [...runStatusEvents, ...textEvents, ...thinkingEvents, ...workSummaryEvents, ...skillActivationEvents]
-  })
+    })))
+    textEvents.push(...textBodyFromProjectionItem(item).map((content): AppEvent => ({ type: "response", content, thread_id: threadId })))
+  }
 
+  const events = [...runStatusEvents, ...thinkingEvents, ...workSummaryEvents, ...skillActivationEvents, ...textEvents]
   return events.length > 0 ? events : [{ type: "status", message: frame.type, thread_id: threadId }]
 }
 

@@ -242,6 +242,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
           description: event.description,
           parameters: event.parameters,
           extension_name: event.extension_name,
+          provider: event.provider,
+          account_label: event.account_label,
           resume_kind: event.resume_kind,
         },
       }
@@ -457,26 +459,61 @@ function applyThinkingUpdate(
   event: Extract<AppEvent, { type: "thinking_update" }>,
 ): UiState {
   const id = `thinking-${event.id}`
+  const completedAssistantAfterLatestUser = transcriptHasCompletedAssistantAfterLatestUser(state)
+  const thinkingState = completedAssistantAfterLatestUser ? "completed" : "running"
   return {
     ...state,
-    isThinking: true,
-    status: "thinking",
+    isThinking: completedAssistantAfterLatestUser ? state.isThinking : true,
+    status: completedAssistantAfterLatestUser ? state.status : "thinking",
     activity: upsertActivity(state.activity, {
       id,
       label: "Thinking",
       detail: event.content,
-      status: "running",
+      status: completedAssistantAfterLatestUser ? "info" : "running",
       kind: "thinking",
     }),
-    transcript: upsertTranscriptItem(state.transcript, {
+    transcript: upsertThinkingTranscriptItem(state.transcript, {
       id,
       role: "thinking",
       text: event.content,
       threadId: event.thread_id,
-      state: "running",
+      state: thinkingState,
       meta: { projectionId: event.id },
     }),
   }
+}
+
+function upsertThinkingTranscriptItem(items: TranscriptItem[], item: TranscriptItem): TranscriptItem[] {
+  if (items.some((existing) => existing.id === item.id)) return upsertTranscriptItem(items, item)
+  const assistantIndex = firstAssistantAfterLatestUserIndex(items)
+  if (assistantIndex < 0) return [...items, item]
+  return [...items.slice(0, assistantIndex), item, ...items.slice(assistantIndex)]
+}
+
+function transcriptHasCompletedAssistantAfterLatestUser(state: UiState): boolean {
+  return firstCompletedAssistantAfterLatestUserIndex(state) >= 0
+}
+
+function firstCompletedAssistantAfterLatestUserIndex(state: UiState): number {
+  const latestUserIndex = findLastTranscriptIndex(state.transcript, (item) => item.role === "user")
+  return state.transcript.findIndex(
+    (item, index) =>
+      index > latestUserIndex &&
+      item.role === "assistant" &&
+      (typeof item.meta?.completedAtMs === "number" || (!state.streamingAssistantId && state.status === "idle")),
+  )
+}
+
+function firstAssistantAfterLatestUserIndex(items: TranscriptItem[]): number {
+  const latestUserIndex = findLastTranscriptIndex(items, (item) => item.role === "user")
+  return items.findIndex((item, index) => index > latestUserIndex && item.role === "assistant")
+}
+
+function findLastTranscriptIndex(items: TranscriptItem[], predicate: (item: TranscriptItem) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index] as TranscriptItem)) return index
+  }
+  return -1
 }
 
 function applyWorkSummaryUpdate(

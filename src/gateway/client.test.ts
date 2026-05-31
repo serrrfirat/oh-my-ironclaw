@@ -42,6 +42,78 @@ describe("Gateway client", () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  test("submits manual auth tokens through the product-auth route", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    let requestUrl = ""
+    let requestBody: unknown
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestUrl = String(input)
+      requestBody = JSON.parse(String(init?.body))
+      return new Response(JSON.stringify({ credential_ref: "credential:github", status: "ready" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    }) as unknown as typeof fetch
+
+    try {
+      const response = await client.submitManualToken({
+        provider: "github",
+        account_label: "GitHub token",
+        token: "ghp_secret",
+        thread_id: "thread-1",
+        run_id: "run-1",
+        gate_ref: "gate:auth-github",
+      })
+
+      expect(requestUrl).toBe("http://example.test/api/reborn/product-auth/manual-token/submit")
+      expect(requestBody).toEqual({
+        provider: "github",
+        account_label: "GitHub token",
+        token: "ghp_secret",
+        thread_id: "thread-1",
+        run_id: "run-1",
+        gate_ref: "gate:auth-github",
+      })
+      expect(response.credential_ref).toBe("credential:github")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("resolves auth gates with credential refs only", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    let requestUrl = ""
+    let requestBody: Record<string, unknown> = {}
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestUrl = String(input)
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    }) as unknown as typeof fetch
+
+    try {
+      await client.resolveGate({
+        request_id: "run-1:gate:auth-github",
+        thread_id: "thread-1",
+        run_id: "run-1",
+        gate_ref: "gate:auth-github",
+        resolution: "credential_provided",
+        credential_ref: "credential:github",
+      })
+
+      expect(requestUrl).toBe("http://example.test/api/webchat/v2/threads/thread-1/runs/run-1/gates/gate%3Aauth-github/resolve")
+      expect(requestBody.resolution).toBe("credential_provided")
+      expect(requestBody.credential_ref).toBe("credential:github")
+      expect("token" in requestBody).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
 
 describe("WebChat event mapping", () => {
@@ -291,7 +363,7 @@ describe("WebChat event mapping", () => {
     })
   })
 
-  test("emits every renderable projection item in frame order", () => {
+  test("emits live projection context before final text", () => {
     const events = mapWebChatEvents(
       {
         type: "projection_update",
@@ -309,14 +381,14 @@ describe("WebChat event mapping", () => {
 
     expect(events).toEqual([
       {
-        type: "response",
-        content: "final answer",
-        thread_id: "thread-1",
-      },
-      {
         type: "thinking_update",
         id: "thinking:run-1:1",
         content: "checking context",
+        thread_id: "thread-1",
+      },
+      {
+        type: "response",
+        content: "final answer",
         thread_id: "thread-1",
       },
     ])
@@ -347,6 +419,8 @@ describe("WebChat event mapping", () => {
         prompt: {
           turn_run_id: "run-1",
           auth_request_ref: "gate:auth-github",
+          provider: "github",
+          account_label: "GitHub token",
           headline: "Authentication required",
           body: "GitHub needs authentication.",
         },
@@ -362,6 +436,8 @@ describe("WebChat event mapping", () => {
       description: "GitHub needs authentication.",
       parameters: "",
       extension_name: null,
+      provider: "github",
+      account_label: "GitHub token",
       run_id: "run-1",
       gate_ref: "gate:auth-github",
       resume_kind: { run_id: "run-1", gate_ref: "gate:auth-github" },

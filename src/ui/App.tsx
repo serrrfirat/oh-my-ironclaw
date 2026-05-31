@@ -3,7 +3,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useReducer, useRef, useState } from "react"
 import type { ClientConfig } from "../config"
 import { GatewayClient } from "../gateway/client"
-import type { AppEvent, HistoryResponse, ThreadInfo } from "../gateway/types"
+import type { AppEvent, HistoryResponse, PendingGateInfo, ThreadInfo } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
 import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebornProfile"
 import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
@@ -39,8 +39,12 @@ export function App({ config }: AppProps) {
   const inputHistoryIndexRef = useRef<number | null>(null)
   const inputHistoryDraftRef = useRef("")
   const suppressInputHistoryResetRef = useRef(false)
+  const authTokenCredentialRef = useRef<{ gateKey: string | null; credentialRef: string | null }>({ gateKey: null, credentialRef: null })
   const [state, dispatch] = useReducer(reduceUiState, initialUiState)
   const [input, setInput] = useState("")
+  const [authTokenInput, setAuthTokenInput] = useState("")
+  const [authTokenError, setAuthTokenError] = useState<string | null>(null)
+  const [authTokenSubmitting, setAuthTokenSubmitting] = useState(false)
   const [selectedThreadIndex, setSelectedThreadIndex] = useState(0)
   const [selectedGateAction, setSelectedGateAction] = useState<GateAction>("approved")
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
@@ -301,6 +305,43 @@ export function App({ config }: AppProps) {
       void loadOlderHistory()
       return
     }
+    if (state.pendingGate && isAuthGate(state.pendingGate)) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        void cancelAuthGate()
+        return
+      }
+      if (key.name === "backspace" || key.name === "delete") {
+        key.preventDefault()
+        key.stopPropagation()
+        setAuthTokenInput((value) => value.slice(0, -1))
+        setAuthTokenError(null)
+        return
+      }
+      if (key.ctrl && key.name === "u") {
+        key.preventDefault()
+        key.stopPropagation()
+        setAuthTokenInput("")
+        setAuthTokenError(null)
+        return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault()
+        key.stopPropagation()
+        void submitAuthToken()
+        return
+      }
+      const text = printableKeyText(key)
+      if (text) {
+        key.preventDefault()
+        key.stopPropagation()
+        setAuthTokenInput((value) => value + text)
+        setAuthTokenError(null)
+        return
+      }
+      return
+    }
     if (key.ctrl && key.name === "a") {
       void resolveGate("approved")
       return
@@ -366,6 +407,10 @@ export function App({ config }: AppProps) {
   useEffect(() => {
     if (state.pendingGate) {
       setSelectedGateAction("approved")
+      setAuthTokenInput("")
+      setAuthTokenError(null)
+      setAuthTokenSubmitting(false)
+      authTokenCredentialRef.current = { gateKey: gateKey(state.pendingGate), credentialRef: null }
     }
   }, [state.pendingGate?.request_id])
 
@@ -846,7 +891,7 @@ export function App({ config }: AppProps) {
     return true
   }
 
-  async function resolveGate(resolution: "approved" | "denied") {
+  async function resolveGate(resolution: "approved" | "denied" | "cancelled") {
     if (!state.pendingGate) return
     try {
       await client.resolveGate({
@@ -860,6 +905,66 @@ export function App({ config }: AppProps) {
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
     }
+  }
+
+  async function submitAuthToken() {
+    const gate = state.pendingGate
+    if (!gate || !isAuthGate(gate) || authTokenSubmitting) return
+    const token = authTokenInput.trim()
+    if (!token) {
+      setAuthTokenError("A token is required.")
+      return
+    }
+    const threadId = gate.thread_id
+    const runId = gate.run_id
+    const gateRef = gate.gate_ref
+    if (!threadId || !runId || !gateRef) {
+      setAuthTokenError("Auth gate is missing run information.")
+      return
+    }
+    const currentGateKey = gateKey(gate)
+    setAuthTokenSubmitting(true)
+    setAuthTokenError(null)
+    try {
+      if (authTokenCredentialRef.current.gateKey !== currentGateKey) {
+        authTokenCredentialRef.current = { gateKey: currentGateKey, credentialRef: null }
+      }
+      let credentialRef = authTokenCredentialRef.current.credentialRef
+      if (!credentialRef) {
+        const submitted = await client.submitManualToken({
+          provider: gate.provider || "github",
+          account_label: gate.account_label || "Manual token",
+          token,
+          thread_id: threadId,
+          run_id: runId,
+          gate_ref: gateRef,
+        })
+        credentialRef = submitted.credential_ref ?? null
+        if (!credentialRef) throw new Error("Manual token submit returned no credential reference.")
+        authTokenCredentialRef.current = { gateKey: currentGateKey, credentialRef }
+      }
+      await client.resolveGate({
+        request_id: gate.request_id,
+        thread_id: threadId,
+        run_id: runId,
+        gate_ref: gateRef,
+        resolution: "credential_provided",
+        credential_ref: credentialRef,
+      })
+      setAuthTokenInput("")
+      authTokenCredentialRef.current = { gateKey: null, credentialRef: null }
+      dispatch({ type: "gate_cleared" })
+    } catch (error) {
+      setAuthTokenError(errorMessage(error))
+    } finally {
+      setAuthTokenSubmitting(false)
+    }
+  }
+
+  async function cancelAuthGate() {
+    setAuthTokenInput("")
+    setAuthTokenError(null)
+    await resolveGate("cancelled")
   }
 
   const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
@@ -933,12 +1038,17 @@ export function App({ config }: AppProps) {
           markdownStyle={markdownStyle}
           pendingGate={state.pendingGate ?? null}
           selectedGateAction={selectedGateAction}
+          authTokenInput={authTokenInput}
+          authTokenError={authTokenError}
+          authTokenSubmitting={authTokenSubmitting}
           showOlderHistoryHint={state.hasOlderHistory}
           transcript={state.transcript}
           expandedActivityIds={expandedActivityIds}
           onToggleActivityExpanded={toggleActivityExpanded}
           onResolve={(action) => void resolveGate(action)}
           onSelectGateAction={setSelectedGateAction}
+          onSubmitAuthToken={() => void submitAuthToken()}
+          onCancelAuthGate={() => void cancelAuthGate()}
         />
       ) : (
         <WelcomeSurface
@@ -1065,6 +1175,14 @@ function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, {
 function threadIdFromEvent(event: AppEvent): string | null {
   if (!("thread_id" in event)) return null
   return typeof event.thread_id === "string" ? event.thread_id : null
+}
+
+function isAuthGate(gate: PendingGateInfo): boolean {
+  return gate.gate_name === "auth"
+}
+
+function gateKey(gate: PendingGateInfo): string {
+  return `${gate.run_id ?? ""}\n${gate.gate_ref ?? ""}`
 }
 
 function thinkingLabelForActivity(activity: ActivityItem[], status: string, isThinking: boolean): string {

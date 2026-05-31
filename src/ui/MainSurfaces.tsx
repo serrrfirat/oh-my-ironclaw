@@ -105,12 +105,17 @@ export function ConversationSurface({
   markdownStyle,
   pendingGate,
   selectedGateAction,
+  authTokenInput,
+  authTokenError,
+  authTokenSubmitting,
   showOlderHistoryHint,
   transcript,
   expandedActivityIds,
   onToggleActivityExpanded,
   onResolve,
   onSelectGateAction,
+  onSubmitAuthToken,
+  onCancelAuthGate,
 }: {
   composerWidth: number
   composer: ComposerCommonProps
@@ -120,12 +125,17 @@ export function ConversationSurface({
   markdownStyle: SyntaxStyle
   pendingGate: PendingGateInfo | null
   selectedGateAction: GateAction
+  authTokenInput: string
+  authTokenError?: string | null
+  authTokenSubmitting: boolean
   showOlderHistoryHint: boolean
   transcript: TranscriptItem[]
   expandedActivityIds: Set<string>
   onToggleActivityExpanded: (id: string) => void
   onResolve: (action: GateAction) => void
   onSelectGateAction: (action: GateAction) => void
+  onSubmitAuthToken: () => void
+  onCancelAuthGate: () => void
 }) {
   const slashPopupHeight = composer.showSlashCommands ? slashCommandPopupHeight(composer.slashCommands) : 0
   const threadPopupHeight = composer.showThreadPalette ? threadPaletteHeight(composer.threads) : 0
@@ -191,13 +201,25 @@ export function ConversationSurface({
         ) : null}
       </scrollbox>
       {pendingGate ? (
-        <GatePanel
-          gate={pendingGate}
-          selectedAction={selectedGateAction}
-          width={composerWidth}
-          onSelect={onSelectGateAction}
-          onResolve={onResolve}
-        />
+        isAuthGate(pendingGate) ? (
+          <AuthGatePanel
+            error={authTokenError}
+            gate={pendingGate}
+            submitting={authTokenSubmitting}
+            token={authTokenInput}
+            width={composerWidth}
+            onCancel={onCancelAuthGate}
+            onSubmit={onSubmitAuthToken}
+          />
+        ) : (
+          <GatePanel
+            gate={pendingGate}
+            selectedAction={selectedGateAction}
+            width={composerWidth}
+            onSelect={onSelectGateAction}
+            onResolve={onResolve}
+          />
+        )
       ) : (
         <box style={{ width: composerWidth, height: 1 }} />
       )}
@@ -210,6 +232,10 @@ export function ConversationSurface({
       {lastError ? <StatusLine connected={false} status="error" message={lastError} width={composerWidth} /> : null}
     </box>
   )
+}
+
+function isAuthGate(gate: PendingGateInfo): boolean {
+  return gate.gate_name === "auth"
 }
 
 function ThinkingMessage({
@@ -673,6 +699,88 @@ function GatePanel({
         />
         <text fg="#777777">  left/right select, enter activate</text>
       </box>
+    </box>
+  )
+}
+
+function AuthGatePanel({
+  error,
+  gate,
+  submitting,
+  token,
+  width,
+  onCancel,
+  onSubmit,
+}: {
+  error?: string | null
+  gate: PendingGateInfo
+  submitting: boolean
+  token: string
+  width: number
+  onCancel: () => void
+  onSubmit: () => void
+}) {
+  const masked = token ? "*".repeat(Math.min(token.length, Math.max(1, width - 12))) : "Paste access token"
+  return (
+    <box
+      focused
+      style={{ width, height: 10, backgroundColor: "#101820", flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
+    >
+      <box style={{ height: 1, flexDirection: "row" }}>
+        <text fg="#8fc8f2">! </text>
+        <text fg="#f2f2f2">{truncate(gate.tool_name || "Authentication required", width - 8)}</text>
+      </box>
+      <text fg="#b8c7d8">{truncate(gate.description, width - 6)}</text>
+      <text fg="#73879a">{truncate(`${gate.provider ?? "github"} · ${gate.account_label ?? "Manual token"}`, width - 6)}</text>
+      <box style={{ height: 1 }} />
+      <box style={{ height: 3, border: true, borderColor: "#2b6f96", backgroundColor: "#0b1118", paddingLeft: 1, paddingRight: 1 }}>
+        <text fg={token ? "#f2f2f2" : "#6f7f8d"}>{truncate(masked, width - 10)}</text>
+      </box>
+      <box style={{ height: 1, flexDirection: "row" }}>
+        <text fg={error ? "#f08a8a" : "#777777"}>
+          {truncate(error || (submitting ? "checking token..." : "type token, enter submit, esc cancel"), width - 6)}
+        </text>
+      </box>
+      <box style={{ height: 2, flexDirection: "row", marginTop: 1 }}>
+        <AuthGateButton label={submitting ? "Checking" : "Use token"} primary disabled={submitting} onClick={onSubmit} />
+        <box style={{ width: 2 }} />
+        <AuthGateButton label="Cancel" disabled={submitting} onClick={onCancel} />
+      </box>
+    </box>
+  )
+}
+
+function AuthGateButton({
+  disabled,
+  label,
+  primary,
+  onClick,
+}: {
+  disabled?: boolean
+  label: string
+  primary?: boolean
+  onClick: () => void
+}) {
+  const borderColor = disabled ? "#333333" : primary ? "#2b6f96" : "#3d3d3d"
+  const backgroundColor = disabled ? "#171717" : primary ? "#123044" : "#242424"
+  const textColor = disabled ? "#777777" : primary ? "#d9f0ff" : "#d0d0d0"
+  return (
+    <box
+      focusable={!disabled}
+      onMouseUp={() => {
+        if (!disabled) onClick()
+      }}
+      style={{
+        border: true,
+        borderColor,
+        backgroundColor,
+        width: 14,
+        height: 3,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <text fg={textColor}>{label}</text>
     </box>
   )
 }

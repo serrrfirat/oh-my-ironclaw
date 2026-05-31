@@ -319,6 +319,84 @@ describe("UI state", () => {
     })
   })
 
+  test("places late projection thinking before the assistant answer without reactivating thinking", () => {
+    const answered = reduceUiState(
+      reduceUiState(initialUiState, {
+        type: "user_sent",
+        content: "compare v1 and reborn",
+        threadId: "thread-1",
+      }),
+      {
+        type: "event",
+        event: {
+          type: "response",
+          content: "Reborn is better for tool-heavy tasks.",
+          thread_id: "thread-1",
+        },
+      },
+    )
+    const state = reduceUiState(answered, {
+      type: "event",
+      event: {
+        type: "thinking_update",
+        id: "thinking:run-1:1",
+        content: "**Considering answer approach**",
+        thread_id: "thread-1",
+      },
+    })
+
+    expect(state.isThinking).toBe(false)
+    expect(state.activity[0]).toMatchObject({
+      id: "thinking-thinking:run-1:1",
+      status: "info",
+    })
+    expect(state.transcript.map((item) => item.role)).toEqual(["user", "thinking", "assistant"])
+    expect(state.transcript[1]).toMatchObject({
+      id: "thinking-thinking:run-1:1",
+      role: "thinking",
+      state: "completed",
+      text: "**Considering answer approach**",
+    })
+  })
+
+  test("keeps projection thinking live while assistant text is still streaming", () => {
+    const streaming = reduceUiState(
+      reduceUiState(initialUiState, {
+        type: "user_sent",
+        content: "compare v1 and reborn",
+        threadId: "thread-1",
+      }),
+      {
+        type: "event",
+        event: {
+          type: "stream_chunk",
+          content: "Reborn is",
+          thread_id: "thread-1",
+        },
+      },
+    )
+    const state = reduceUiState(streaming, {
+      type: "event",
+      event: {
+        type: "thinking_update",
+        id: "thinking:run-1:1",
+        content: "**Considering answer approach**",
+        thread_id: "thread-1",
+      },
+    })
+
+    expect(state.isThinking).toBe(true)
+    expect(state.activity[0]).toMatchObject({
+      id: "thinking-thinking:run-1:1",
+      status: "running",
+    })
+    expect(state.transcript.map((item) => item.role)).toEqual(["user", "thinking", "assistant"])
+    expect(state.transcript[1]).toMatchObject({
+      role: "thinking",
+      state: "running",
+    })
+  })
+
   test("tracks work summary projection updates as activity without transcript reasoning", () => {
     const state = reduceUiState(initialUiState, {
       type: "event",

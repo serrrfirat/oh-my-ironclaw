@@ -125,7 +125,15 @@ export type RebornWebChatEventFrame = {
     truncated?: boolean
     updated_at?: string
   }
-  prompt?: { turn_run_id?: string; gate_ref?: string; auth_request_ref?: string; headline?: string; body?: string }
+  prompt?: {
+    turn_run_id?: string
+    gate_ref?: string
+    auth_request_ref?: string
+    provider?: string
+    account_label?: string
+    headline?: string
+    body?: string
+  }
   run_state?: {
     run_id?: string | null
     status?: string | null
@@ -219,6 +227,8 @@ export type PendingGateInfo = {
   description: string
   parameters: string
   extension_name?: string | null
+  provider?: string | null
+  account_label?: string | null
   resume_kind: unknown
 }
 
@@ -245,8 +255,23 @@ export type HistoryResponse = {
 export type GateResolveRequest =
   | { request_id: string; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null; resolution: "approved"; always?: boolean }
   | { request_id: string; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null; resolution: "denied" }
-  | { request_id: string; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null; resolution: "credential_provided"; token: string }
+  | { request_id: string; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null; resolution: "credential_provided"; credential_ref: string }
   | { request_id: string; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null; resolution: "cancelled" }
+
+export type ManualTokenSubmitRequest = {
+  provider: string
+  account_label: string
+  token: string
+  thread_id?: string | null
+  run_id: string
+  gate_ref: string
+}
+
+export type ManualTokenSubmitResponse = {
+  credential_ref?: string | null
+  status?: string | null
+  continuation?: unknown
+}
 
 export type ToolDecisionDto = {
   tool_name: string
@@ -302,7 +327,7 @@ export type AppEvent =
   | { type: "stream_chunk"; content: string; thread_id?: string | null }
   | { type: "status"; message: string; thread_id?: string | null }
   | { type: "approval_needed"; request_id: string; tool_name: string; description: string; parameters: string; thread_id?: string | null; allow_always: boolean }
-  | { type: "gate_required"; request_id: string; gate_name: string; tool_name: string; description: string; parameters: string; extension_name?: string | null; resume_kind: unknown; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null }
+  | { type: "gate_required"; request_id: string; gate_name: string; tool_name: string; description: string; parameters: string; extension_name?: string | null; provider?: string | null; account_label?: string | null; resume_kind: unknown; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null }
   | { type: "gate_resolved"; request_id: string; gate_name: string; tool_name: string; resolution: string; message: string; thread_id?: string | null }
   | { type: "onboarding_state"; extension_name: string; state: "setup_required" | "auth_required" | "pairing_required" | "ready" | "failed"; request_id?: string | null; message?: string | null; instructions?: string | null; auth_url?: string | null; setup_url?: string | null; onboarding?: unknown; thread_id?: string | null }
   | { type: "reasoning_update"; narrative: string; decisions: ToolDecisionDto[]; thread_id?: string | null }
