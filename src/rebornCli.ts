@@ -39,9 +39,9 @@ function rebornCliInvocation(config: ClientConfig, args: string[]): { argv: stri
     return { argv, command: shellCommand(argv) }
   }
 
-  const argv = ["cargo", "run", "-p", "ironclaw"]
+  const argv = ["cargo", "run", "-p", "ironclaw_reborn_cli"]
   if (config.rebornFeatures) argv.push("--features", config.rebornFeatures)
-  argv.push("--bin", "ironclaw", "--", ...args)
+  argv.push("--bin", "ironclaw-reborn", "--", ...args)
   return {
     argv,
     command: `(cd ${shellWord(config.rebornSource)} && ${shellCommand(argv)})`,
