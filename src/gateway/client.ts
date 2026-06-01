@@ -1,4 +1,5 @@
 import type { ClientConfig } from "../config"
+import { type ModelCommandResponse, parseModelListResponse } from "../modelCommands"
 import { parseSse } from "./sse"
 import type {
   AppEvent,
@@ -93,6 +94,18 @@ export class GatewayClient {
       thread_id: response.thread_id,
       run_id: response.outcome === "deferred_busy" ? response.active_run_id : response.run_id,
     }
+  }
+
+  async activeModel(): Promise<ModelCommandResponse | null> {
+    const probe = await this.createThread()
+    const threadId = probe.thread.thread_id
+    await this.send("/model", threadId)
+    for (let attempt = 0; attempt < MODEL_PROBE_ATTEMPTS; attempt++) {
+      const parsed = activeModelFromHistory(await this.history(threadId))
+      if (parsed) return parsed
+      if (attempt < MODEL_PROBE_ATTEMPTS - 1) await sleep(MODEL_PROBE_DELAY_MS)
+    }
+    return null
   }
 
   async resolveGate(payload: GateResolveRequest): Promise<SendMessageResponse> {
@@ -236,6 +249,26 @@ function mapThread(thread: RebornThreadRecord): ThreadInfo {
     thread_type: "webchat_v2",
     channel: "webchat_v2",
   }
+}
+
+const MODEL_PROBE_ATTEMPTS = 8
+const MODEL_PROBE_DELAY_MS = 750
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function activeModelFromHistory(history: HistoryResponse): ModelCommandResponse | null {
+  const texts = history.messages
+    ? history.messages.flatMap((message) =>
+        (message.kind === "assistant" || message.kind === "summary") && message.content ? [message.content] : [],
+      )
+    : history.turns.flatMap((turn) => (turn.response ? [turn.response] : []))
+  for (const text of texts) {
+    const parsed = parseModelListResponse(text)
+    if (parsed) return parsed
+  }
+  return null
 }
 
 function mapMessageToTurn(message: RebornMessageRecord, index: number): TurnInfo[] {

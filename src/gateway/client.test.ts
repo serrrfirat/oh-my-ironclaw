@@ -82,6 +82,49 @@ describe("Gateway client", () => {
     }
   })
 
+  test("activeModel probes the server with /model and returns the active model", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    const calls: { method: string; url: string; body?: Record<string, unknown> }[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? "GET"
+      calls.push({ method, url, body: init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined })
+      const json = (value: unknown) =>
+        new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } })
+      if (method === "POST" && url.endsWith("/api/webchat/v2/threads")) {
+        return json({ thread: { thread_id: "probe-1" } })
+      }
+      if (method === "POST" && url.includes("/threads/probe-1/messages")) {
+        return json({ accepted_message_ref: "msg-1", status: "accepted", thread_id: "probe-1", outcome: "accepted", run_id: "run-1" })
+      }
+      if (method === "GET" && url.includes("/threads/probe-1/timeline")) {
+        return json({
+          thread: { thread_id: "probe-1" },
+          messages: [{
+            message_id: "a1",
+            thread_id: "probe-1",
+            sequence: 2,
+            kind: "assistant",
+            status: "finalized",
+            content: "Active model: Qwen/Qwen3.6-35B-A3B-FP8\nAvailable models:\n- Qwen/Qwen3.6-35B-A3B-FP8 (active)\n- gpt-5.5",
+          }],
+        })
+      }
+      return json({})
+    }) as unknown as typeof fetch
+
+    try {
+      const result = await client.activeModel()
+      expect(result?.activeModel).toBe("Qwen/Qwen3.6-35B-A3B-FP8")
+      expect(result?.models).toContain("gpt-5.5")
+      const sent = calls.find((call) => call.url.includes("/messages"))
+      expect(sent?.body?.content).toBe("/model")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test("resolves auth gates with credential refs only", async () => {
     const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
     const originalFetch = globalThis.fetch

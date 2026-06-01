@@ -470,8 +470,19 @@ export function App({ config }: AppProps) {
         await client.health()
         dispatch({ type: "connected", connected: true, status: "connected" })
         await startNewThreadOnConnect()
+        if (!cancelled) void syncActiveModel()
       } catch (error) {
         dispatch({ type: "error", message: errorMessage(error) })
+      }
+    }
+
+    async function syncActiveModel() {
+      try {
+        const parsed = await client.activeModel()
+        if (cancelled || !parsed) return
+        applyActiveModel(parsed.activeModel, parsed.models)
+      } catch {
+        // Leave the configured model label in place if the probe fails.
       }
     }
 
@@ -872,12 +883,16 @@ export function App({ config }: AppProps) {
     setSelectedModelIndex(modelIndex(models, model))
   }
 
+  function applyActiveModel(activeModel: string, models: string[]) {
+    setSelectedModel(activeModel)
+    setAvailableModels(models)
+    setSelectedModelIndex(modelIndex(models, activeModel))
+  }
+
   function applyModelCommandResponse(content: string): boolean {
     const parsedList = parseModelListResponse(content)
     if (parsedList) {
-      setSelectedModel(parsedList.activeModel)
-      setAvailableModels(parsedList.models)
-      setSelectedModelIndex(modelIndex(parsedList.models, parsedList.activeModel))
+      applyActiveModel(parsedList.activeModel, parsedList.models)
       setActiveOverlay(parsedList.models.length > 0 ? "models" : null)
       return true
     }
