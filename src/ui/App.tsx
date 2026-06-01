@@ -500,6 +500,27 @@ export function App({ config }: AppProps) {
   }, [client])
 
   useEffect(() => {
+    if (state.connected) return
+    let cancelled = false
+
+    async function checkConnection() {
+      try {
+        await client.health()
+        if (!cancelled) dispatch({ type: "connected", connected: true, status: "connected" })
+      } catch {
+        // Boot and SSE loops surface detailed errors; this watchdog only repairs stale disconnected state.
+      }
+    }
+
+    void checkConnection()
+    const timer = setInterval(() => void checkConnection(), 3000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [client, state.connected])
+
+  useEffect(() => {
     const threadId = state.activeThreadId
     if (!threadId) return
     let cancelled = false

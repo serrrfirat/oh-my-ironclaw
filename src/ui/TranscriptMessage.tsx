@@ -1,5 +1,6 @@
 import { SyntaxStyle } from "@opentui/core"
 import { transcriptActivityLines, type TranscriptItem } from "../transcript"
+import { diffPreviewLineColor, isUnifiedDiffKind } from "./diffPreview"
 
 const ACTIVITY_DETAIL_LINE_LIMIT = 48
 
@@ -69,6 +70,7 @@ export function TranscriptMessage({
     const activityColor = failed ? "#ff6b6b" : running ? "#a8a8a8" : "#d0d0d0"
     const title = activityTitle(headline)
     const icon = running ? spinner : failed ? "!" : "✓"
+    const unifiedDiff = isUnifiedDiffKind(item.activity.outputKind)
     const detailLines = expanded ? activityDetailLines(detail) : []
     const summary = collapsedActivitySummary(detail)
     const hint = expanded ? "click to collapse" : "click to expand"
@@ -91,6 +93,7 @@ export function TranscriptMessage({
               key={`${item.id}-detail-${index}`}
               failed={failed}
               line={line}
+              unifiedDiff={unifiedDiff}
               width={width}
             />
           ))}
@@ -106,7 +109,7 @@ export function TranscriptMessage({
   )
 }
 
-function ActivityDetailLine({ failed, line, width }: { failed: boolean; line: string; width: number }) {
+function ActivityDetailLine({ failed, line, unifiedDiff, width }: { failed: boolean; line: string; unifiedDiff?: boolean; width: number }) {
   const max = Math.max(1, width - 5)
   if (line.startsWith("input: ")) {
     return (
@@ -124,6 +127,13 @@ function ActivityDetailLine({ failed, line, width }: { failed: boolean; line: st
   }
   if (line === "truncated") {
     return <text fg="#777777">{truncate("... truncated", max)}</text>
+  }
+  if (unifiedDiff) {
+    return (
+      <text fg={diffPreviewLineColor(line, failed)}>
+        {truncate(line || " ", max)}
+      </text>
+    )
   }
   return (
     <text fg={failed ? "#f08a8a" : "#d8cfaa"}>

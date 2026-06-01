@@ -1158,6 +1158,32 @@ describe("UI state", () => {
     expect(activityText(state.transcript[1])).not.toContain("Failed list_dir")
   })
 
+  test("preserves unified diff preview metadata", () => {
+    const diff = "diff --git a/src/file.ts b/src/file.ts\n@@ -1,1 +1,1 @@\n-old\n+new"
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        invocation_id: "write-1",
+        capability_id: "write_file",
+        status: "completed",
+        title: "write_file",
+        input_summary: "path: src/file.ts",
+        output_summary: "updated src/file.ts",
+        output_preview: diff,
+        output_kind: "unified_diff",
+        output_bytes: diff.length,
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+
+    const activity = state.transcript.find((item) => item.role === "activity")
+    expect(activity?.role === "activity" ? activity.activity.outputKind : null).toBe("unified_diff")
+    expect(activityText(activity)).toContain("@@ -1,1 +1,1 @@")
+    expect(activityText(activity)).toContain("+new")
+  })
+
   test("stores auth challenge metadata on pending gates", () => {
     const state = reduceUiState(initialUiState, {
       type: "event",
