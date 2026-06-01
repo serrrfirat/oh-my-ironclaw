@@ -82,7 +82,7 @@ describe("Gateway client", () => {
     }
   })
 
-  test("activeModel probes the server with /model and returns the active model", async () => {
+  test("activeModel sends /model and parses the active model from the SSE stream", async () => {
     const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
     const originalFetch = globalThis.fetch
     const calls: { method: string; url: string; body?: Record<string, unknown> }[] = []
@@ -98,18 +98,21 @@ describe("Gateway client", () => {
       if (method === "POST" && url.includes("/threads/probe-1/messages")) {
         return json({ accepted_message_ref: "msg-1", status: "accepted", thread_id: "probe-1", outcome: "accepted", run_id: "run-1" })
       }
-      if (method === "GET" && url.includes("/threads/probe-1/timeline")) {
-        return json({
-          thread: { thread_id: "probe-1" },
-          messages: [{
-            message_id: "a1",
+      if (url.includes("/threads/probe-1/events")) {
+        const frame = {
+          type: "projection_update",
+          cursor: "cursor-1",
+          state: {
             thread_id: "probe-1",
-            sequence: 2,
-            kind: "assistant",
-            status: "finalized",
-            content: "Active model: Qwen/Qwen3.6-35B-A3B-FP8\nAvailable models:\n- Qwen/Qwen3.6-35B-A3B-FP8 (active)\n- gpt-5.5",
-          }],
-        })
+            items: [{
+              text: {
+                id: "reply-1",
+                body: "Active model: Qwen/Qwen3.6-35B-A3B-FP8\nAvailable models:\n- Qwen/Qwen3.6-35B-A3B-FP8 (active)\n- gpt-5.5",
+              },
+            }],
+          },
+        }
+        return new Response(`event: message\ndata: ${JSON.stringify(frame)}\n\n`)
       }
       return json({})
     }) as unknown as typeof fetch

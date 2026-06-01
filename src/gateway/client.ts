@@ -100,12 +100,20 @@ export class GatewayClient {
     const probe = await this.createThread()
     const threadId = probe.thread.thread_id
     await this.send("/model", threadId)
-    for (let attempt = 0; attempt < MODEL_PROBE_ATTEMPTS; attempt++) {
-      const parsed = activeModelFromHistory(await this.history(threadId))
-      if (parsed) return parsed
-      if (attempt < MODEL_PROBE_ATTEMPTS - 1) await sleep(MODEL_PROBE_DELAY_MS)
+    const events = this.events(threadId)
+    const timeout = sleep(MODEL_PROBE_TIMEOUT_MS).then(() => "timeout" as const)
+    try {
+      while (true) {
+        const next = await Promise.race([events.next(), timeout])
+        if (next === "timeout" || next.done) return null
+        if (next.value.type === "response") {
+          const parsed = parseModelListResponse(next.value.content)
+          if (parsed) return parsed
+        }
+      }
+    } finally {
+      await events.return?.(undefined)
     }
-    return null
   }
 
   async resolveGate(payload: GateResolveRequest): Promise<SendMessageResponse> {
@@ -251,24 +259,10 @@ function mapThread(thread: RebornThreadRecord): ThreadInfo {
   }
 }
 
-const MODEL_PROBE_ATTEMPTS = 8
-const MODEL_PROBE_DELAY_MS = 750
+const MODEL_PROBE_TIMEOUT_MS = 15000
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function activeModelFromHistory(history: HistoryResponse): ModelCommandResponse | null {
-  const texts = history.messages
-    ? history.messages.flatMap((message) =>
-        (message.kind === "assistant" || message.kind === "summary") && message.content ? [message.content] : [],
-      )
-    : history.turns.flatMap((turn) => (turn.response ? [turn.response] : []))
-  for (const text of texts) {
-    const parsed = parseModelListResponse(text)
-    if (parsed) return parsed
-  }
-  return null
 }
 
 function mapMessageToTurn(message: RebornMessageRecord, index: number): TurnInfo[] {
