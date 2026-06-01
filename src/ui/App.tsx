@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process"
 import { SyntaxStyle, type KeyEvent, type TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useReducer, useRef, useState } from "react"
@@ -312,6 +313,16 @@ export function App({ config }: AppProps) {
         void cancelAuthGate()
         return
       }
+      if (isOauthGate(state.pendingGate) || hasAuthorizationUrl(state.pendingGate)) {
+        const text = printableKeyText(key).toLowerCase()
+        if (text === "o") {
+          key.preventDefault()
+          key.stopPropagation()
+          void openAuthUrl(state.pendingGate)
+          return
+        }
+      }
+      if (!isManualTokenGate(state.pendingGate)) return
       if (key.name === "backspace" || key.name === "delete") {
         key.preventDefault()
         key.stopPropagation()
@@ -466,12 +477,19 @@ export function App({ config }: AppProps) {
     let cancelled = false
 
     async function boot() {
-      try {
-        await client.health()
-        dispatch({ type: "connected", connected: true, status: "connected" })
-        await startNewThreadOnConnect()
-      } catch (error) {
-        dispatch({ type: "error", message: errorMessage(error) })
+      while (!cancelled) {
+        try {
+          await client.health()
+          if (cancelled) return
+          dispatch({ type: "connected", connected: true, status: "connected" })
+          await startNewThreadOnConnect()
+          return
+        } catch (error) {
+          if (cancelled) return
+          dispatch({ type: "connected", connected: false, status: "reconnecting" })
+          dispatch({ type: "error", message: errorMessage(error) })
+          await sleep(1500)
+        }
       }
     }
 
@@ -909,7 +927,7 @@ export function App({ config }: AppProps) {
 
   async function submitAuthToken() {
     const gate = state.pendingGate
-    if (!gate || !isAuthGate(gate) || authTokenSubmitting) return
+    if (!gate || !isAuthGate(gate) || !isManualTokenGate(gate) || authTokenSubmitting) return
     const token = authTokenInput.trim()
     if (!token) {
       setAuthTokenError("A token is required.")
@@ -958,6 +976,15 @@ export function App({ config }: AppProps) {
       setAuthTokenError(errorMessage(error))
     } finally {
       setAuthTokenSubmitting(false)
+    }
+  }
+
+  async function openAuthUrl(gate: PendingGateInfo) {
+    setAuthTokenError(null)
+    try {
+      await openExternalUrl(gate.authorization_url)
+    } catch (error) {
+      setAuthTokenError(errorMessage(error))
     }
   }
 
@@ -1049,6 +1076,7 @@ export function App({ config }: AppProps) {
           onSelectGateAction={setSelectedGateAction}
           onSubmitAuthToken={() => void submitAuthToken()}
           onCancelAuthGate={() => void cancelAuthGate()}
+          onOpenAuthUrl={(gate) => void openAuthUrl(gate)}
         />
       ) : (
         <WelcomeSurface
@@ -1179,6 +1207,44 @@ function threadIdFromEvent(event: AppEvent): string | null {
 
 function isAuthGate(gate: PendingGateInfo): boolean {
   return gate.gate_name === "auth"
+}
+
+function authChallengeKind(gate: PendingGateInfo): string {
+  return gate.challenge_kind || "manual_token"
+}
+
+function isManualTokenGate(gate: PendingGateInfo): boolean {
+  return authChallengeKind(gate) === "manual_token"
+}
+
+function isOauthGate(gate: PendingGateInfo): boolean {
+  return authChallengeKind(gate) === "oauth_url"
+}
+
+function hasAuthorizationUrl(gate: PendingGateInfo): boolean {
+  return Boolean(gate.authorization_url)
+}
+
+async function openExternalUrl(rawUrl?: string | null): Promise<void> {
+  if (!rawUrl) throw new Error("Authorization URL is missing.")
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    throw new Error("Authorization URL is invalid.")
+  }
+  if (url.protocol !== "https:") throw new Error("Authorization URL must use HTTPS.")
+
+  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open"
+  const args = process.platform === "win32" ? ["/c", "start", "", url.toString()] : [url.toString()]
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true })
+    child.once("error", reject)
+    child.once("spawn", () => {
+      child.unref()
+      resolve()
+    })
+  })
 }
 
 function gateKey(gate: PendingGateInfo): string {

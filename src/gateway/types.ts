@@ -129,8 +129,11 @@ export type RebornWebChatEventFrame = {
     turn_run_id?: string
     gate_ref?: string
     auth_request_ref?: string
+    challenge_kind?: "oauth_url" | "manual_token" | "other" | string
     provider?: string
     account_label?: string
+    authorization_url?: string | null
+    expires_at?: string | null
     headline?: string
     body?: string
   }
@@ -229,6 +232,9 @@ export type PendingGateInfo = {
   extension_name?: string | null
   provider?: string | null
   account_label?: string | null
+  challenge_kind?: string | null
+  authorization_url?: string | null
+  expires_at?: string | null
   resume_kind: unknown
 }
 
@@ -265,6 +271,21 @@ export type ManualTokenSubmitRequest = {
   thread_id?: string | null
   run_id: string
   gate_ref: string
+}
+
+export type ManualTokenSetupResponse = {
+  interaction_id: string
+  provider?: string | null
+  label?: string | null
+  expires_at?: string | null
+  invocation_id: string
+}
+
+export type ManualTokenSecretSubmitRequest = {
+  interaction_id: string
+  token: string
+  thread_id?: string | null
+  invocation_id: string
 }
 
 export type ManualTokenSubmitResponse = {
@@ -327,7 +348,7 @@ export type AppEvent =
   | { type: "stream_chunk"; content: string; thread_id?: string | null }
   | { type: "status"; message: string; thread_id?: string | null }
   | { type: "approval_needed"; request_id: string; tool_name: string; description: string; parameters: string; thread_id?: string | null; allow_always: boolean }
-  | { type: "gate_required"; request_id: string; gate_name: string; tool_name: string; description: string; parameters: string; extension_name?: string | null; provider?: string | null; account_label?: string | null; resume_kind: unknown; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null }
+  | { type: "gate_required"; request_id: string; gate_name: string; tool_name: string; description: string; parameters: string; extension_name?: string | null; provider?: string | null; account_label?: string | null; challenge_kind?: string | null; authorization_url?: string | null; expires_at?: string | null; resume_kind: unknown; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null }
   | { type: "gate_resolved"; request_id: string; gate_name: string; tool_name: string; resolution: string; message: string; thread_id?: string | null }
   | { type: "onboarding_state"; extension_name: string; state: "setup_required" | "auth_required" | "pairing_required" | "ready" | "failed"; request_id?: string | null; message?: string | null; instructions?: string | null; auth_url?: string | null; setup_url?: string | null; onboarding?: unknown; thread_id?: string | null }
   | { type: "reasoning_update"; narrative: string; decisions: ToolDecisionDto[]; thread_id?: string | null }

@@ -4,6 +4,8 @@ import type {
   AppEvent,
   GateResolveRequest,
   HistoryResponse,
+  ManualTokenSecretSubmitRequest,
+  ManualTokenSetupResponse,
   ManualTokenSubmitRequest,
   ManualTokenSubmitResponse,
   RebornCancelRunResponse,
@@ -117,9 +119,25 @@ export class GatewayClient {
   }
 
   async submitManualToken(payload: ManualTokenSubmitRequest): Promise<ManualTokenSubmitResponse> {
-    return this.requestJson<ManualTokenSubmitResponse>("/api/reborn/product-auth/manual-token/submit", {
+    const setup = await this.requestJson<ManualTokenSetupResponse>("/api/reborn/product-auth/manual-token/setup", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        provider: payload.provider,
+        account_label: payload.account_label,
+        thread_id: payload.thread_id,
+        run_id: payload.run_id,
+        gate_ref: payload.gate_ref,
+      }),
+    })
+    const secretSubmit: ManualTokenSecretSubmitRequest = {
+      interaction_id: setup.interaction_id,
+      token: payload.token,
+      thread_id: payload.thread_id,
+      invocation_id: setup.invocation_id,
+    }
+    return this.requestJson<ManualTokenSubmitResponse>("/api/reborn/product-auth/manual-token/secret-submit", {
+      method: "POST",
+      body: JSON.stringify(secretSubmit),
     })
   }
 
@@ -470,8 +488,11 @@ function gateRequiredEvent(
     extension_name: null,
     run_id: runId,
     gate_ref: ref,
-    provider: gateName === "auth" ? frame.prompt?.provider ?? "github" : null,
-    account_label: gateName === "auth" ? frame.prompt?.account_label ?? "Manual token" : null,
+    provider: gateName === "auth" ? frame.prompt?.provider ?? null : null,
+    account_label: gateName === "auth" ? frame.prompt?.account_label ?? null : null,
+    challenge_kind: gateName === "auth" ? frame.prompt?.challenge_kind ?? "manual_token" : null,
+    authorization_url: gateName === "auth" ? frame.prompt?.authorization_url ?? null : null,
+    expires_at: gateName === "auth" ? frame.prompt?.expires_at ?? null : null,
     resume_kind: { run_id: runId, gate_ref: ref },
     thread_id: threadId,
   }

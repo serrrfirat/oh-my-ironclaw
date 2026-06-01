@@ -244,6 +244,9 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
           extension_name: event.extension_name,
           provider: event.provider,
           account_label: event.account_label,
+          challenge_kind: event.challenge_kind,
+          authorization_url: event.authorization_url,
+          expires_at: event.expires_at,
           resume_kind: event.resume_kind,
         },
       }

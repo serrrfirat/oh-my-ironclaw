@@ -1157,4 +1157,36 @@ describe("UI state", () => {
     expect(activityText(state.transcript[1])).toContain("list_dir")
     expect(activityText(state.transcript[1])).not.toContain("Failed list_dir")
   })
+
+  test("stores auth challenge metadata on pending gates", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "gate_required",
+        request_id: "run-1:gate:auth-google",
+        thread_id: "thread-1",
+        run_id: "run-1",
+        gate_ref: "gate:auth-google",
+        gate_name: "auth",
+        tool_name: "Authentication required",
+        description: "Google needs authentication.",
+        parameters: "",
+        extension_name: null,
+        provider: "google",
+        account_label: "GSuite OAuth",
+        challenge_kind: "oauth_url",
+        authorization_url: "https://accounts.google.com/o/oauth2/v2/auth",
+        expires_at: "2026-05-31T20:00:00Z",
+        resume_kind: { run_id: "run-1", gate_ref: "gate:auth-google" },
+      },
+    })
+
+    expect(state.pendingGate).toMatchObject({
+      challenge_kind: "oauth_url",
+      authorization_url: "https://accounts.google.com/o/oauth2/v2/auth",
+      expires_at: "2026-05-31T20:00:00Z",
+      provider: "google",
+      account_label: "GSuite OAuth",
+    })
+  })
 })

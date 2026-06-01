@@ -43,14 +43,20 @@ describe("Gateway client", () => {
     }
   })
 
-  test("submits manual auth tokens through the product-auth route", async () => {
+  test("submits manual auth tokens through the product-auth secret-submit contract", async () => {
     const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
     const originalFetch = globalThis.fetch
-    let requestUrl = ""
-    let requestBody: unknown
+    const requests: Array<{ url: string; body: unknown }> = []
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      requestUrl = String(input)
-      requestBody = JSON.parse(String(init?.body))
+      const url = String(input)
+      const body = JSON.parse(String(init?.body))
+      requests.push({ url, body })
+      if (url.endsWith("/manual-token/setup")) {
+        return new Response(JSON.stringify({ interaction_id: "interaction-1", invocation_id: "invocation-1", status: "pending" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
       return new Response(JSON.stringify({ credential_ref: "credential:github", status: "ready" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -67,14 +73,22 @@ describe("Gateway client", () => {
         gate_ref: "gate:auth-github",
       })
 
-      expect(requestUrl).toBe("http://example.test/api/reborn/product-auth/manual-token/submit")
-      expect(requestBody).toEqual({
+      expect(requests.map((request) => request.url)).toEqual([
+        "http://example.test/api/reborn/product-auth/manual-token/setup",
+        "http://example.test/api/reborn/product-auth/manual-token/secret-submit",
+      ])
+      expect(requests[0]?.body).toEqual({
         provider: "github",
         account_label: "GitHub token",
-        token: "ghp_secret",
         thread_id: "thread-1",
         run_id: "run-1",
         gate_ref: "gate:auth-github",
+      })
+      expect(requests[1]?.body).toEqual({
+        interaction_id: "interaction-1",
+        token: "ghp_secret",
+        thread_id: "thread-1",
+        invocation_id: "invocation-1",
       })
       expect(response.credential_ref).toBe("credential:github")
     } finally {
@@ -421,6 +435,9 @@ describe("WebChat event mapping", () => {
           auth_request_ref: "gate:auth-github",
           provider: "github",
           account_label: "GitHub token",
+          challenge_kind: "oauth_url",
+          authorization_url: "https://github.com/login/oauth/authorize",
+          expires_at: "2026-05-31T20:00:00Z",
           headline: "Authentication required",
           body: "GitHub needs authentication.",
         },
@@ -438,10 +455,38 @@ describe("WebChat event mapping", () => {
       extension_name: null,
       provider: "github",
       account_label: "GitHub token",
+      challenge_kind: "oauth_url",
+      authorization_url: "https://github.com/login/oauth/authorize",
+      expires_at: "2026-05-31T20:00:00Z",
       run_id: "run-1",
       gate_ref: "gate:auth-github",
       resume_kind: { run_id: "run-1", gate_ref: "gate:auth-github" },
       thread_id: "thread-1",
+    })
+  })
+
+  test("maps legacy auth-required prompts to manual-token gates", () => {
+    const event = mapWebChatEvent(
+      {
+        type: "auth_required",
+        prompt: {
+          turn_run_id: "run-1",
+          auth_request_ref: "gate:auth-github",
+          headline: "Authentication required",
+          body: "GitHub needs authentication.",
+        },
+      },
+      "thread-1",
+    )
+
+    expect(event).toMatchObject({
+      type: "gate_required",
+      gate_name: "auth",
+      challenge_kind: "manual_token",
+      provider: null,
+      account_label: null,
+      authorization_url: null,
+      expires_at: null,
     })
   })
 

@@ -116,6 +116,7 @@ export function ConversationSurface({
   onSelectGateAction,
   onSubmitAuthToken,
   onCancelAuthGate,
+  onOpenAuthUrl,
 }: {
   composerWidth: number
   composer: ComposerCommonProps
@@ -136,6 +137,7 @@ export function ConversationSurface({
   onSelectGateAction: (action: GateAction) => void
   onSubmitAuthToken: () => void
   onCancelAuthGate: () => void
+  onOpenAuthUrl: (gate: PendingGateInfo) => void
 }) {
   const slashPopupHeight = composer.showSlashCommands ? slashCommandPopupHeight(composer.slashCommands) : 0
   const threadPopupHeight = composer.showThreadPalette ? threadPaletteHeight(composer.threads) : 0
@@ -209,6 +211,7 @@ export function ConversationSurface({
             token={authTokenInput}
             width={composerWidth}
             onCancel={onCancelAuthGate}
+            onOpenUrl={() => onOpenAuthUrl(pendingGate)}
             onSubmit={onSubmitAuthToken}
           />
         ) : (
@@ -710,6 +713,7 @@ function AuthGatePanel({
   token,
   width,
   onCancel,
+  onOpenUrl,
   onSubmit,
 }: {
   error?: string | null
@@ -718,20 +722,26 @@ function AuthGatePanel({
   token: string
   width: number
   onCancel: () => void
+  onOpenUrl: () => void
   onSubmit: () => void
 }) {
+  const challengeKind = authChallengeKind(gate)
+  if (challengeKind === "oauth_url") {
+    return <OAuthGatePanel error={error} gate={gate} width={width} onCancel={onCancel} onOpenUrl={onOpenUrl} />
+  }
+  if (challengeKind !== "manual_token") {
+    return <GenericAuthGatePanel error={error} gate={gate} width={width} onCancel={onCancel} onOpenUrl={onOpenUrl} />
+  }
+
   const masked = token ? "*".repeat(Math.min(token.length, Math.max(1, width - 12))) : "Paste access token"
   return (
     <box
       focused
       style={{ width, height: 10, backgroundColor: "#101820", flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
     >
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg="#8fc8f2">! </text>
-        <text fg="#f2f2f2">{truncate(gate.tool_name || "Authentication required", width - 8)}</text>
-      </box>
+      <AuthGateHeader gate={gate} width={width} />
       <text fg="#b8c7d8">{truncate(gate.description, width - 6)}</text>
-      <text fg="#73879a">{truncate(`${gate.provider ?? "github"} · ${gate.account_label ?? "Manual token"}`, width - 6)}</text>
+      <AuthProviderLine gate={gate} width={width} />
       <box style={{ height: 1 }} />
       <box style={{ height: 3, border: true, borderColor: "#2b6f96", backgroundColor: "#0b1118", paddingLeft: 1, paddingRight: 1 }}>
         <text fg={token ? "#f2f2f2" : "#6f7f8d"}>{truncate(masked, width - 10)}</text>
@@ -748,6 +758,101 @@ function AuthGatePanel({
       </box>
     </box>
   )
+}
+
+function OAuthGatePanel({
+  error,
+  gate,
+  width,
+  onCancel,
+  onOpenUrl,
+}: {
+  error?: string | null
+  gate: PendingGateInfo
+  width: number
+  onCancel: () => void
+  onOpenUrl: () => void
+}) {
+  return (
+    <box
+      focused
+      style={{ width, height: 10, backgroundColor: "#101820", flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
+    >
+      <AuthGateHeader gate={gate} width={width} />
+      <text fg="#b8c7d8">{truncate(gate.description, width - 6)}</text>
+      <AuthProviderLine gate={gate} width={width} />
+      <AuthExpiryLine expiresAt={gate.expires_at} width={width} />
+      <text fg="#73879a">{truncate(gate.authorization_url || "No authorization URL provided", width - 6)}</text>
+      <box style={{ height: 1, flexDirection: "row" }}>
+        <text fg={error ? "#f08a8a" : "#777777"}>{truncate(error || "o open browser, esc cancel", width - 6)}</text>
+      </box>
+      <box style={{ height: 2, flexDirection: "row", marginTop: 1 }}>
+        <AuthGateButton label="Open" primary disabled={!gate.authorization_url} onClick={onOpenUrl} />
+        <box style={{ width: 2 }} />
+        <AuthGateButton label="Cancel" onClick={onCancel} />
+      </box>
+    </box>
+  )
+}
+
+function GenericAuthGatePanel({
+  error,
+  gate,
+  width,
+  onCancel,
+  onOpenUrl,
+}: {
+  error?: string | null
+  gate: PendingGateInfo
+  width: number
+  onCancel: () => void
+  onOpenUrl: () => void
+}) {
+  const hasUrl = Boolean(gate.authorization_url)
+  return (
+    <box
+      focused
+      style={{ width, height: 10, backgroundColor: "#101820", flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
+    >
+      <AuthGateHeader gate={gate} width={width} />
+      <text fg="#b8c7d8">{truncate(gate.description || "Authentication required.", width - 6)}</text>
+      <AuthProviderLine gate={gate} width={width} />
+      <AuthExpiryLine expiresAt={gate.expires_at} width={width} />
+      <text fg="#73879a">{truncate(hasUrl ? gate.authorization_url || "" : "Continue in the connected auth flow.", width - 6)}</text>
+      <box style={{ height: 1, flexDirection: "row" }}>
+        <text fg={error ? "#f08a8a" : "#777777"}>{truncate(error || (hasUrl ? "o open browser, esc cancel" : "esc cancel"), width - 6)}</text>
+      </box>
+      <box style={{ height: 2, flexDirection: "row", marginTop: 1 }}>
+        {hasUrl ? <AuthGateButton label="Open" primary onClick={onOpenUrl} /> : null}
+        {hasUrl ? <box style={{ width: 2 }} /> : null}
+        <AuthGateButton label="Cancel" onClick={onCancel} />
+      </box>
+    </box>
+  )
+}
+
+function AuthGateHeader({ gate, width }: { gate: PendingGateInfo; width: number }) {
+  return (
+    <box style={{ height: 1, flexDirection: "row" }}>
+      <text fg="#8fc8f2">! </text>
+      <text fg="#f2f2f2">{truncate(gate.tool_name || "Authentication required", width - 8)}</text>
+    </box>
+  )
+}
+
+function AuthProviderLine({ gate, width }: { gate: PendingGateInfo; width: number }) {
+  const provider = gate.provider ?? "auth"
+  const label = gate.account_label ?? "Authentication"
+  return <text fg="#73879a">{truncate(`${provider} · ${label}`, width - 6)}</text>
+}
+
+function AuthExpiryLine({ expiresAt, width }: { expiresAt?: string | null; width: number }) {
+  const text = expiresAt ? `Link may expire: ${expiresAt}` : "Link may expire."
+  return <text fg="#6f7f8d">{truncate(text, width - 6)}</text>
+}
+
+function authChallengeKind(gate: PendingGateInfo): string {
+  return gate.challenge_kind || "manual_token"
 }
 
 function AuthGateButton({
