@@ -2,10 +2,20 @@ import type { LlmConfigSnapshot, LlmProviderView } from "../gateway/types"
 
 const PROVIDER_VISIBLE_LIMIT = 14
 
+export type LlmProviderFormView = {
+  title: string
+  fieldLabel: string
+  fieldIndex: number
+  fieldCount: number
+  input: string
+  currentValue?: string | null
+}
+
 export function LlmProvidersSurface({
   actionMessage,
   availableModels,
   error,
+  form,
   height,
   loading,
   selectedIndex,
@@ -17,6 +27,7 @@ export function LlmProvidersSurface({
   actionMessage?: string | null
   availableModels?: string[]
   error?: string | null
+  form?: LlmProviderFormView | null
   height: number
   loading: boolean
   selectedIndex: number
@@ -40,17 +51,17 @@ export function LlmProvidersSurface({
         <box style={{ flexDirection: "column" }}>
           <ProviderList providers={providers} selectedIndex={selectedIndex} width={contentWidth} />
           <box style={{ height: 1 }} />
-          <ProviderDetail provider={selected} availableModels={availableModels ?? []} setupInput={setupInput} setupInputLabel={setupInputLabel} width={contentWidth} />
+          <ProviderDetail provider={selected} availableModels={availableModels ?? []} form={form} setupInput={setupInput} setupInputLabel={setupInputLabel} width={contentWidth} />
         </box>
       ) : (
         <box style={{ flexDirection: "row", width: contentWidth }}>
           <ProviderList providers={providers} selectedIndex={selectedIndex} width={listWidth} />
           <box style={{ width: 2 }} />
-          <ProviderDetail provider={selected} availableModels={availableModels ?? []} setupInput={setupInput} setupInputLabel={setupInputLabel} width={Math.max(1, contentWidth - listWidth - 2)} />
+          <ProviderDetail provider={selected} availableModels={availableModels ?? []} form={form} setupInput={setupInput} setupInputLabel={setupInputLabel} width={Math.max(1, contentWidth - listWidth - 2)} />
         </box>
       )}
       <box style={{ flexGrow: 1 }} />
-      <text fg="#777777">{truncate("up/down select · enter active · s key · l login · t test · m models · x delete · r refresh · esc back", contentWidth)}</text>
+      <text fg="#777777">{truncate("up/down select · n new · e edit · enter active · s key · l login · t test · m models · x delete · r refresh · esc back", contentWidth)}</text>
     </box>
   )
 }
@@ -91,12 +102,14 @@ function ProviderRow({ provider, selected, width }: { provider: LlmProviderView;
 
 function ProviderDetail({
   availableModels,
+  form,
   provider,
   setupInput,
   setupInputLabel,
   width,
 }: {
   availableModels: string[]
+  form?: LlmProviderFormView | null
   provider: LlmProviderView | null
   setupInput?: string
   setupInputLabel?: string | null
@@ -129,6 +142,7 @@ function ProviderDetail({
           <text fg="#f2f2f2">{truncate(setupInput ? "*".repeat(setupInput.length) : "type API key, enter submit", width - 6)}</text>
         </box>
       ) : null}
+      {form ? <ProviderFormPreview form={form} width={width - 4} /> : null}
       {availableModels.length ? (
         <box style={{ flexDirection: "column", marginTop: 1 }}>
           <text fg="#f0b45f">available models</text>
@@ -138,6 +152,18 @@ function ProviderDetail({
           {availableModels.length > 5 ? <text fg="#777777">{`${availableModels.length - 5} more`}</text> : null}
         </box>
       ) : null}
+    </box>
+  )
+}
+
+function ProviderFormPreview({ form, width }: { form: LlmProviderFormView; width: number }) {
+  const current = form.currentValue ? `current: ${form.currentValue}` : "blank keeps default when available"
+  return (
+    <box style={{ height: 5, flexDirection: "column", backgroundColor: "#0b1118", paddingLeft: 1, paddingRight: 1, marginTop: 1 }}>
+      <text fg="#f0b45f">{truncate(`${form.title} ${form.fieldIndex + 1}/${form.fieldCount}`, width - 2)}</text>
+      <text fg="#8a8a8a">{truncate(form.fieldLabel, width - 2)}</text>
+      <text fg="#777777">{truncate(current, width - 2)}</text>
+      <text fg="#f2f2f2">{truncate(form.fieldLabel === "api key" && form.input ? "*".repeat(form.input.length) : form.input || "type value, enter next", width - 2)}</text>
     </box>
   )
 }
@@ -179,7 +205,7 @@ function actionHint(provider: LlmProviderView): string {
   if (provider.id === "nearai" || provider.adapter === "nearai") return "l starts login, s stores API key"
   if (provider.id === "openai_codex" || provider.adapter === "openai_codex") return "l starts device login"
   if (provider.active) return "active provider, t tests connection"
-  return provider.builtin ? "enter sets active, s replaces API key" : "enter sets active, x deletes custom provider"
+  return provider.builtin ? "e edits override, enter sets active" : "e edits, x deletes custom provider"
 }
 
 function padEnd(value: string, width: number) {

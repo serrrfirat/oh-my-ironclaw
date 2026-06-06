@@ -26,7 +26,7 @@ import { filterThreads, sortThreadsByRecent, threadPreviewFromHistory, type Thre
 import { AutomationsSurface } from "./AutomationsSurface"
 import { ChannelsSurface } from "./ChannelsSurface"
 import { ExtensionsSurface, extensionRows, type ExtensionRow } from "./ExtensionsSurface"
-import { LlmProvidersSurface } from "./LlmProvidersSurface"
+import { LlmProvidersSurface, type LlmProviderFormView } from "./LlmProvidersSurface"
 import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
 import { SettingsSurface, SETTINGS_SECTION_COUNT, settingsSectionAt } from "./SettingsSurface"
 import { SkillsSurface, type SkillDetailView } from "./SkillsSurface"
@@ -43,6 +43,17 @@ type AppProps = {
 }
 
 type ActiveOverlay = "automations" | "channels" | "commands" | "extensions" | "threads" | "models" | "providers" | "settings" | "skills" | null
+type LlmProviderFormMode = "create" | "edit"
+type LlmProviderFormField = "name" | "id" | "adapter" | "baseUrl" | "model" | "apiKey"
+type LlmProviderFormState = {
+  mode: LlmProviderFormMode
+  providerId?: string
+  fields: LlmProviderFormField[]
+  index: number
+  input: string
+  values: Partial<Record<LlmProviderFormField, string>>
+  defaults: Partial<Record<LlmProviderFormField, string>>
+}
 const INPUT_HISTORY_LIMIT = 100
 
 export function App({ config }: AppProps) {
@@ -105,6 +116,7 @@ export function App({ config }: AppProps) {
   const [llmProviderModels, setLlmProviderModels] = useState<string[]>([])
   const [llmProviderSetupInput, setLlmProviderSetupInput] = useState("")
   const [llmProviderSetupInputKey, setLlmProviderSetupInputKey] = useState<string | null>(null)
+  const [llmProviderForm, setLlmProviderForm] = useState<LlmProviderFormState | null>(null)
   const [selectedLlmProviderIndex, setSelectedLlmProviderIndex] = useState(0)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const activityFrame = useActivityFrame(state.isThinking)
@@ -348,8 +360,38 @@ export function App({ config }: AppProps) {
         if (llmProviderSetupInputKey) {
           setLlmProviderSetupInputKey(null)
           setLlmProviderSetupInput("")
+        } else if (llmProviderForm) {
+          setLlmProviderForm(null)
         } else {
           setActiveOverlay(null)
+        }
+        return
+      }
+      if (llmProviderForm) {
+        if (key.name === "backspace" || key.name === "delete") {
+          key.preventDefault()
+          key.stopPropagation()
+          setLlmProviderForm((form) => form ? { ...form, input: form.input.slice(0, -1) } : form)
+          return
+        }
+        if (key.ctrl && key.name === "u") {
+          key.preventDefault()
+          key.stopPropagation()
+          setLlmProviderForm((form) => form ? { ...form, input: "" } : form)
+          return
+        }
+        if (isPlainEnter(key)) {
+          key.preventDefault()
+          key.stopPropagation()
+          void submitLlmProviderFormStep()
+          return
+        }
+        const inputText = printableKeyText(key)
+        if (inputText) {
+          key.preventDefault()
+          key.stopPropagation()
+          setLlmProviderForm((form) => form ? { ...form, input: form.input + inputText } : form)
+          return
         }
         return
       }
@@ -387,6 +429,7 @@ export function App({ config }: AppProps) {
         setSelectedLlmProviderIndex((index) => wrapIndex(index - 1, llmProviders().length))
         setLlmProviderModels([])
         setLlmProviderSetupInputKey(null)
+        setLlmProviderForm(null)
         return
       }
       if (key.name === "down" || key.name === "tab" || key.name === "j") {
@@ -395,6 +438,7 @@ export function App({ config }: AppProps) {
         setSelectedLlmProviderIndex((index) => wrapIndex(index + 1, llmProviders().length))
         setLlmProviderModels([])
         setLlmProviderSetupInputKey(null)
+        setLlmProviderForm(null)
         return
       }
       const text = printableKeyText(key).toLowerCase()
@@ -420,6 +464,18 @@ export function App({ config }: AppProps) {
         key.preventDefault()
         key.stopPropagation()
         openSelectedLlmProviderSetup()
+        return
+      }
+      if (text === "n") {
+        key.preventDefault()
+        key.stopPropagation()
+        openNewLlmProviderForm()
+        return
+      }
+      if (text === "e") {
+        key.preventDefault()
+        key.stopPropagation()
+        openEditLlmProviderForm()
         return
       }
       if (text === "x") {
@@ -971,6 +1027,7 @@ export function App({ config }: AppProps) {
     setLlmProviderModels([])
     setLlmProviderSetupInput("")
     setLlmProviderSetupInputKey(null)
+    setLlmProviderForm(null)
     await loadLlmConfig()
   }
 
@@ -1060,6 +1117,119 @@ export function App({ config }: AppProps) {
     setLlmProviderActionMessage(null)
     setLlmProviderSetupInput("")
     setLlmProviderSetupInputKey("api_key")
+  }
+
+  function openNewLlmProviderForm() {
+    const defaults: Partial<Record<LlmProviderFormField, string>> = {
+      adapter: "open_ai_completions",
+    }
+    setLlmConfigError(null)
+    setLlmProviderActionMessage(null)
+    setLlmProviderSetupInputKey(null)
+    setLlmProviderSetupInput("")
+    setLlmProviderForm({
+      mode: "create",
+      fields: ["name", "id", "adapter", "baseUrl", "model", "apiKey"],
+      index: 0,
+      input: "",
+      values: {},
+      defaults,
+    })
+  }
+
+  function openEditLlmProviderForm() {
+    const provider = selectedLlmProvider()
+    if (!provider) return
+    const defaults: Partial<Record<LlmProviderFormField, string>> = {
+      name: provider.description || provider.id,
+      id: provider.id,
+      adapter: provider.adapter,
+      baseUrl: provider.base_url || "",
+      model: provider.active_model || provider.default_model || selectedModel,
+    }
+    setLlmConfigError(null)
+    setLlmProviderActionMessage(null)
+    setLlmProviderSetupInputKey(null)
+    setLlmProviderSetupInput("")
+    setLlmProviderForm({
+      mode: "edit",
+      providerId: provider.id,
+      fields: provider.builtin ? ["baseUrl", "model", "apiKey"] : ["name", "adapter", "baseUrl", "model", "apiKey"],
+      index: 0,
+      input: "",
+      values: {},
+      defaults,
+    })
+  }
+
+  async function submitLlmProviderFormStep() {
+    const form = llmProviderForm
+    if (!form) return
+    const field = form.fields[form.index]
+    const values = { ...form.values, [field]: form.input.trim() }
+    const nextIndex = form.index + 1
+    if (nextIndex < form.fields.length) {
+      setLlmProviderForm({ ...form, values, index: nextIndex, input: "" })
+      return
+    }
+    await saveLlmProviderForm({ ...form, values })
+  }
+
+  async function saveLlmProviderForm(form: LlmProviderFormState) {
+    const provider = form.providerId ? llmProviders().find((item) => item.id === form.providerId) ?? null : null
+    const value = (field: LlmProviderFormField) => form.values[field] || form.defaults[field] || ""
+    const id = form.mode === "create" ? value("id") : provider?.id || value("id")
+    const name = value("name") || id
+    const adapter = provider?.builtin ? provider.adapter : value("adapter") || "open_ai_completions"
+    const baseUrl = value("baseUrl")
+    const model = value("model")
+    const apiKey = form.values.apiKey?.trim()
+    if (!id || !/^[a-z0-9_-]+$/.test(id)) {
+      setLlmConfigError("Provider id must use lowercase letters, numbers, underscores, or hyphens.")
+      return
+    }
+    if (!adapter) {
+      setLlmConfigError("Provider adapter is required.")
+      return
+    }
+    setLlmProvidersLoading(true)
+    setLlmConfigError(null)
+    setLlmProviderActionMessage(null)
+    try {
+      const snapshot = await client.upsertLlmProvider({
+        id,
+        name,
+        adapter,
+        base_url: baseUrl,
+        default_model: model || undefined,
+        api_key: apiKey || undefined,
+        set_active: provider?.active,
+        model: provider?.active && model ? model : undefined,
+      })
+      setLlmConfig(snapshot)
+      if (snapshot.active?.model) setSelectedModel(snapshot.active.model)
+      setLlmProviderForm(null)
+      setSelectedLlmProviderIndex((index) => wrapIndex(index, snapshot.providers?.length ?? 0))
+      setLlmProviderActionMessage(form.mode === "create" ? "Provider created." : "Provider saved.")
+    } catch (error) {
+      setLlmConfigError(errorMessage(error))
+    } finally {
+      setLlmProvidersLoading(false)
+    }
+  }
+
+  function llmProviderFormView(): LlmProviderFormView | null {
+    const form = llmProviderForm
+    if (!form) return null
+    const field = form.fields[form.index]
+    return {
+      title: form.mode === "create" ? "new provider" : "edit provider",
+      fieldLabel: llmProviderFormFieldLabel(field),
+      fieldIndex: form.index,
+      fieldCount: form.fields.length,
+      input: form.input,
+      currentValue: form.defaults[field] ?? null,
+    }
   }
 
   async function submitSelectedLlmProviderSetup() {
@@ -1776,6 +1946,7 @@ export function App({ config }: AppProps) {
           actionMessage={llmProviderActionMessage}
           availableModels={llmProviderModels}
           error={llmConfigError}
+          form={llmProviderFormView()}
           height={height}
           loading={llmProvidersLoading}
           selectedIndex={wrapIndex(selectedLlmProviderIndex, llmProviders().length)}
@@ -1899,6 +2070,17 @@ function originForBaseUrl(baseUrl: string): string {
     return new URL(baseUrl).origin
   } catch {
     return baseUrl
+  }
+}
+
+function llmProviderFormFieldLabel(field: LlmProviderFormField): string {
+  switch (field) {
+    case "apiKey":
+      return "api key"
+    case "baseUrl":
+      return "base URL"
+    default:
+      return field
   }
 }
 
