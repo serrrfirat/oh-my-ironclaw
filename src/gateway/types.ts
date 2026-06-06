@@ -464,6 +464,8 @@ export type NearAiLoginStart = {
   auth_url?: string | null
 }
 
+export type NearAiAuthProvider = "github" | "google"
+
 export type CodexLoginStart = {
   user_code?: string | null
   verification_uri?: string | null

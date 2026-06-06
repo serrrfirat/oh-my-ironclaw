@@ -61,7 +61,7 @@ export function LlmProvidersSurface({
         </box>
       )}
       <box style={{ flexGrow: 1 }} />
-      <text fg="#777777">{truncate("up/down select · n new · e edit · enter active · s key · l login · t test · m models · x delete · r refresh · esc back", contentWidth)}</text>
+      <text fg="#777777">{truncate("up/down select · n new · e edit · enter active · s key · l github · g google · t test · m models · x delete · r refresh · esc back", contentWidth)}</text>
     </box>
   )
 }
@@ -202,7 +202,7 @@ function providerConfigured(provider: LlmProviderView): boolean {
 
 function actionHint(provider: LlmProviderView): string {
   if (!providerConfigured(provider)) return "s adds provider credentials"
-  if (provider.id === "nearai" || provider.adapter === "nearai") return "l starts login, s stores API key"
+  if (provider.id === "nearai" || provider.adapter === "nearai") return "l starts GitHub login, g starts Google login, s stores API key"
   if (provider.id === "openai_codex" || provider.adapter === "openai_codex") return "l starts device login"
   if (provider.active) return "active provider, t tests connection"
   return provider.builtin ? "e edits override, enter sets active" : "e edits, x deletes custom provider"

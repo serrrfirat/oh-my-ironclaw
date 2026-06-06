@@ -22,6 +22,7 @@ import type {
   ManualTokenSetupResponse,
   ManualTokenSubmitRequest,
   ManualTokenSubmitResponse,
+  NearAiAuthProvider,
   NearAiLoginStart,
   RebornCancelRunResponse,
   RebornCreateThreadResponse,
@@ -262,7 +263,7 @@ export class GatewayClient {
     })
   }
 
-  async startNearAiLogin(provider: LlmProviderView, origin: string): Promise<NearAiLoginStart> {
+  async startNearAiLogin(provider: NearAiAuthProvider, origin: string): Promise<NearAiLoginStart> {
     return this.requestJson<NearAiLoginStart>("/api/webchat/v2/llm/nearai/login", {
       method: "POST",
       body: JSON.stringify({ provider, origin }),

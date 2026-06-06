@@ -178,7 +178,7 @@ describe("Gateway client", () => {
         api_key: "sk-qwen",
       })
       await client.deleteLlmProvider("qwen")
-      await client.startNearAiLogin(provider, "http://localhost:3000")
+      await client.startNearAiLogin("google", "http://localhost:3000")
       await client.startCodexLogin()
       const channels = await client.connectableChannels()
 
@@ -208,7 +208,7 @@ describe("Gateway client", () => {
         api_key: "sk-qwen",
       })
       expect(requests[3]?.body).toBeNull()
-      expect(requests[4]?.body).toEqual({ provider, origin: "http://localhost:3000" })
+      expect(requests[4]?.body).toEqual({ provider: "google", origin: "http://localhost:3000" })
       expect(requests[5]?.body).toBeNull()
       expect(requests[6]?.body).toBeNull()
       expect(channels.channels[0]?.channel).toBe("slack")

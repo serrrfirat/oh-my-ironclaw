@@ -14,6 +14,7 @@ import type {
   HistoryResponse,
   LlmConfigSnapshot,
   LlmProviderView,
+  NearAiAuthProvider,
   PendingGateInfo,
   ThreadInfo,
 } from "../gateway/types"
@@ -457,7 +458,13 @@ export function App({ config }: AppProps) {
       if (text === "l") {
         key.preventDefault()
         key.stopPropagation()
-        void startSelectedLlmProviderLogin()
+        void startSelectedLlmProviderLogin("github")
+        return
+      }
+      if (text === "g") {
+        key.preventDefault()
+        key.stopPropagation()
+        void startSelectedLlmProviderLogin("google")
         return
       }
       if (text === "s") {
@@ -1289,7 +1296,7 @@ export function App({ config }: AppProps) {
     }
   }
 
-  async function startSelectedLlmProviderLogin() {
+  async function startSelectedLlmProviderLogin(authProvider: NearAiAuthProvider = "github") {
     const provider = selectedLlmProvider()
     if (!provider) return
     setLlmProvidersLoading(true)
@@ -1297,8 +1304,9 @@ export function App({ config }: AppProps) {
     setLlmProviderActionMessage(null)
     try {
       if (provider.id === "nearai" || provider.adapter === "nearai") {
-        const response = await client.startNearAiLogin(provider, originForBaseUrl(config.baseUrl))
-        setLlmProviderActionMessage(response.auth_url ? `Open: ${response.auth_url}` : "Login started.")
+        const response = await client.startNearAiLogin(authProvider, originForBaseUrl(config.baseUrl))
+        if (response.auth_url) await openExternalUrl(response.auth_url)
+        setLlmProviderActionMessage(response.auth_url ? `${authProvider} login opened.` : `${authProvider} login started.`)
         return
       }
       if (provider.id === "openai_codex" || provider.adapter === "openai_codex") {
