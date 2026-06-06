@@ -6,6 +6,7 @@ export type SlashCommandAction =
   | "skills"
   | "extensions"
   | "automations"
+  | "channels"
   | "new-thread"
   | "cancel-run"
   | "load-older"
@@ -73,7 +74,7 @@ const LOCAL_CLI_COMMANDS: SlashCommand[] = [
     localArgs: ["profile", "list"],
   },
   {
-    name: "/channels",
+    name: "/channels-list",
     description: "Run ironclaw-reborn channels list",
     source: "local",
     action: "local-command",
@@ -128,6 +129,7 @@ const LOCAL_CLI_COMMANDS: SlashCommand[] = [
 const TUI_CONTROL_COMMANDS: SlashCommand[] = [
   { name: "/new", description: "Start a new thread", source: "tui", action: "new-thread" },
   { name: "/automations", description: "Open schedule automation dashboard", source: "tui", action: "automations" },
+  { name: "/channels", description: "Open connectable channel dashboard", source: "tui", action: "channels" },
   { name: "/settings", description: "Open settings dashboard", source: "tui", action: "settings" },
   { name: "/threads", description: "Open thread picker", source: "tui", action: "threads" },
   { name: "/history", description: "Load older timeline messages", source: "tui", action: "load-older" },

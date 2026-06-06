@@ -27,6 +27,16 @@ describe("slash commands", () => {
     }
   })
 
+  test("exposes channels overlay command in every mode", () => {
+    for (const mode of ["remote", "local"] as const) {
+      expect(slashCommandsForMode(mode)).toContainEqual(expect.objectContaining({
+        name: "/channels",
+        source: "tui",
+        action: "channels",
+      }))
+    }
+  })
+
   test("exposes TUI new thread command in every mode", () => {
     for (const mode of ["remote", "local"] as const) {
       expect(slashCommandsForMode(mode)).toContainEqual(expect.objectContaining({
@@ -78,6 +88,11 @@ describe("slash commands", () => {
 
   test("maps local extension search input to local CLI args", () => {
     expect(localCliCommandForInput("/extension-search", "local")).toEqual(["extension", "search"])
+  })
+
+  test("keeps local channels CLI as an explicit alternate command", () => {
+    expect(localCliCommandForInput("/channels-list", "local")).toEqual(["channels", "list"])
+    expect(localCliCommandForInput("/channels", "local")).toBeNull()
   })
 
   test("does not intercept skills in remote mode", () => {

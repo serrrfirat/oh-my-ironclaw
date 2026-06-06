@@ -1,10 +1,10 @@
 import type { ClientConfig } from "../config"
 import type { LlmConfigSnapshot } from "../gateway/types"
 
-export type SettingsSection = "Profile" | "Connection" | "Providers" | "Extensions" | "Skills" | "Automations" | "Tools" | "Approvals"
+export type SettingsSection = "Profile" | "Connection" | "Providers" | "Extensions" | "Channels" | "Skills" | "Automations" | "Tools" | "Approvals"
 type SettingsMenuItem = { label: SettingsSection; meta: string }
 
-const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Providers", "Extensions", "Skills", "Automations", "Tools", "Approvals"]
+const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Providers", "Extensions", "Channels", "Skills", "Automations", "Tools", "Approvals"]
 
 export const SETTINGS_SECTION_COUNT = SETTINGS_SECTIONS.length
 
@@ -24,6 +24,7 @@ export function SettingsSurface({
   extensionCount = 0,
   extensionSetupCount = 0,
   automationCount = 0,
+  channelCount = 0,
   skillCount = 0,
   skillsAvailable = false,
   status,
@@ -40,6 +41,7 @@ export function SettingsSurface({
   extensionCount?: number
   extensionSetupCount?: number
   automationCount?: number
+  channelCount?: number
   skillCount?: number
   skillsAvailable?: boolean
   status: string
@@ -55,6 +57,7 @@ export function SettingsSurface({
     label: section,
     meta: settingsMenuMeta(section, {
       automationCount,
+      channelCount,
       config,
       extensionCount,
       extensionSetupCount,
@@ -85,6 +88,7 @@ export function SettingsSurface({
           llmConfig={llmConfig}
           llmConfigError={llmConfigError}
           automationCount={automationCount}
+          channelCount={channelCount}
           extensionCount={extensionCount}
           extensionSetupCount={extensionSetupCount}
           skillCount={skillCount}
@@ -119,6 +123,7 @@ export function SettingsSurface({
           llmConfig={llmConfig}
           llmConfigError={llmConfigError}
           automationCount={automationCount}
+          channelCount={channelCount}
           extensionCount={extensionCount}
           extensionSetupCount={extensionSetupCount}
           skillCount={skillCount}
@@ -199,6 +204,7 @@ function SettingsPreview({
   llmConfig,
   llmConfigError,
   automationCount,
+  channelCount,
   extensionCount,
   extensionSetupCount,
   skillCount,
@@ -216,6 +222,7 @@ function SettingsPreview({
   llmConfig?: LlmConfigSnapshot | null
   llmConfigError?: string | null
   automationCount: number
+  channelCount: number
   extensionCount: number
   extensionSetupCount: number
   skillCount: number
@@ -233,6 +240,7 @@ function SettingsPreview({
     llmConfig,
     llmConfigError,
     automationCount,
+    channelCount,
     extensionCount,
     extensionSetupCount,
     skillCount,
@@ -260,6 +268,7 @@ function settingsMenuMeta(
   section: SettingsSection,
   context: {
     automationCount: number
+    channelCount: number
     config: ClientConfig
     extensionCount: number
     extensionSetupCount: number
@@ -271,7 +280,7 @@ function settingsMenuMeta(
     serverState: string
   },
 ) {
-  const { automationCount, config, extensionCount, extensionSetupCount, profileName, selectedModel, selectedProvider, serverState, skillCount, skillsAvailable } = context
+  const { automationCount, channelCount, config, extensionCount, extensionSetupCount, profileName, selectedModel, selectedProvider, serverState, skillCount, skillsAvailable } = context
   switch (section) {
     case "Connection":
       return serverState
@@ -279,6 +288,8 @@ function settingsMenuMeta(
       return selectedProvider ? `${selectedModel} · ${selectedProvider}` : selectedModel
     case "Extensions":
       return extensionSetupCount ? `${extensionSetupCount} need setup` : `${extensionCount} installed`
+    case "Channels":
+      return `${channelCount} connectable`
     case "Skills":
       return skillsAvailable ? `${skillCount} local` : "backend pending"
     case "Automations":
@@ -301,6 +312,7 @@ function settingsFieldsForSection(
     llmConfig?: LlmConfigSnapshot | null
     llmConfigError?: string | null
     automationCount: number
+    channelCount: number
     extensionCount: number
     extensionSetupCount: number
     skillCount: number
@@ -311,7 +323,7 @@ function settingsFieldsForSection(
     status: string
   },
 ) {
-  const { authState, automationCount, config, connected, extensionCount, extensionSetupCount, llmConfig, llmConfigError, selectedModel, selectedProvider, skillCount, skillsAvailable, sourcePath, status } = context
+  const { authState, automationCount, channelCount, config, connected, extensionCount, extensionSetupCount, llmConfig, llmConfigError, selectedModel, selectedProvider, skillCount, skillsAvailable, sourcePath, status } = context
   switch (section) {
     case "Connection":
       return [
@@ -343,6 +355,13 @@ function settingsFieldsForSection(
         { label: "need setup", value: String(extensionSetupCount) },
         { label: "registry", value: "WebChat v2 extension registry" },
         { label: "setup", value: "install · activate · secret/field input" },
+      ]
+    case "Channels":
+      return [
+        { label: "connectable", value: String(channelCount) },
+        { label: "source", value: "WebChat v2 connectable channels" },
+        { label: "setup", value: "backend returns pairing/action metadata" },
+        { label: "submit", value: "pairing submit route pending" },
       ]
     case "Skills":
       return [
@@ -401,6 +420,8 @@ function settingsActionHint(section: SettingsSection): string {
       return "enter opens provider setup"
     case "Extensions":
       return "enter opens extension setup"
+    case "Channels":
+      return "enter opens channel connection metadata"
     case "Skills":
       return "enter opens skills browser when available"
     case "Automations":

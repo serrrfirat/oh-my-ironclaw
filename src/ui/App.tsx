@@ -7,6 +7,7 @@ import { GatewayClient } from "../gateway/client"
 import type {
   AppEvent,
   AutomationInfo,
+  ConnectableChannelInfo,
   ExtensionInfo,
   ExtensionRegistryEntry,
   ExtensionSetupResponse,
@@ -23,6 +24,7 @@ import { filterSkills, parseSkillListOutput, skillDetailPath, type SkillListItem
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
 import { filterThreads, sortThreadsByRecent, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
 import { AutomationsSurface } from "./AutomationsSurface"
+import { ChannelsSurface } from "./ChannelsSurface"
 import { ExtensionsSurface, extensionRows, type ExtensionRow } from "./ExtensionsSurface"
 import { LlmProvidersSurface } from "./LlmProvidersSurface"
 import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
@@ -40,7 +42,7 @@ type AppProps = {
   config: ClientConfig
 }
 
-type ActiveOverlay = "automations" | "commands" | "extensions" | "threads" | "models" | "providers" | "settings" | "skills" | null
+type ActiveOverlay = "automations" | "channels" | "commands" | "extensions" | "threads" | "models" | "providers" | "settings" | "skills" | null
 const INPUT_HISTORY_LIMIT = 100
 
 export function App({ config }: AppProps) {
@@ -83,6 +85,10 @@ export function App({ config }: AppProps) {
   const [automationsLoading, setAutomationsLoading] = useState(false)
   const [automationsError, setAutomationsError] = useState<string | null>(null)
   const [selectedAutomationIndex, setSelectedAutomationIndex] = useState(0)
+  const [channels, setChannels] = useState<ConnectableChannelInfo[]>([])
+  const [channelsLoading, setChannelsLoading] = useState(false)
+  const [channelsError, setChannelsError] = useState<string | null>(null)
+  const [selectedChannelIndex, setSelectedChannelIndex] = useState(0)
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([])
   const [extensionRegistry, setExtensionRegistry] = useState<ExtensionRegistryEntry[]>([])
   const [extensionsLoading, setExtensionsLoading] = useState(false)
@@ -105,6 +111,7 @@ export function App({ config }: AppProps) {
   const thinkingLabel = thinkingLabelForActivity(state.activity, state.status, state.isThinking)
   const showCommandPalette = activeOverlay === "commands"
   const showAutomations = activeOverlay === "automations"
+  const showChannels = activeOverlay === "channels"
   const showExtensions = activeOverlay === "extensions"
   const showThreadPalette = activeOverlay === "threads"
   const showModelPalette = activeOverlay === "models"
@@ -157,6 +164,33 @@ export function App({ config }: AppProps) {
         key.preventDefault()
         key.stopPropagation()
         void loadAutomations()
+        return
+      }
+      return
+    }
+    if (showChannels) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        setActiveOverlay(null)
+        return
+      }
+      if (key.name === "up" || key.name === "k") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedChannelIndex((index) => wrapIndex(index - 1, channels.length))
+        return
+      }
+      if (key.name === "down" || key.name === "tab" || key.name === "j") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedChannelIndex((index) => wrapIndex(index + 1, channels.length))
+        return
+      }
+      if (printableKeyText(key).toLowerCase() === "r") {
+        key.preventDefault()
+        key.stopPropagation()
+        void loadChannels()
         return
       }
       return
@@ -376,10 +410,22 @@ export function App({ config }: AppProps) {
         void testSelectedLlmProvider()
         return
       }
+      if (text === "l") {
+        key.preventDefault()
+        key.stopPropagation()
+        void startSelectedLlmProviderLogin()
+        return
+      }
       if (text === "s") {
         key.preventDefault()
         key.stopPropagation()
         openSelectedLlmProviderSetup()
+        return
+      }
+      if (text === "x") {
+        key.preventDefault()
+        key.stopPropagation()
+        void deleteSelectedLlmProvider()
         return
       }
       if (text === "m") {
@@ -868,6 +914,26 @@ export function App({ config }: AppProps) {
     }
   }
 
+  async function openChannelsOverlay() {
+    setActiveOverlay("channels")
+    await loadChannels()
+  }
+
+  async function loadChannels() {
+    setChannelsLoading(true)
+    setChannelsError(null)
+    try {
+      const response = await client.connectableChannels()
+      setChannels(response.channels ?? [])
+      setSelectedChannelIndex((index) => wrapIndex(index, response.channels?.length ?? 0))
+    } catch (error) {
+      setChannels([])
+      setChannelsError(errorMessage(error))
+    } finally {
+      setChannelsLoading(false)
+    }
+  }
+
   async function openExtensionsOverlay() {
     setActiveOverlay("extensions")
     await loadExtensions()
@@ -896,7 +962,7 @@ export function App({ config }: AppProps) {
 
   async function openSettingsOverlay() {
     setActiveOverlay("settings")
-    await Promise.allSettled([loadLlmConfig(), loadExtensions(), loadAutomations()])
+    await Promise.allSettled([loadLlmConfig(), loadExtensions(), loadAutomations(), loadChannels()])
   }
 
   async function openLlmProvidersOverlay() {
@@ -941,6 +1007,9 @@ export function App({ config }: AppProps) {
         return
       case "Extensions":
         await openExtensionsOverlay()
+        return
+      case "Channels":
+        await openChannelsOverlay()
         return
       case "Skills":
         if (config.mode === "local") {
@@ -1021,6 +1090,54 @@ export function App({ config }: AppProps) {
       setLlmProviderSetupInput("")
       setLlmProviderSetupInputKey(null)
       setLlmProviderActionMessage("Provider credentials saved.")
+    } catch (error) {
+      setLlmConfigError(errorMessage(error))
+    } finally {
+      setLlmProvidersLoading(false)
+    }
+  }
+
+  async function deleteSelectedLlmProvider() {
+    const provider = selectedLlmProvider()
+    if (!provider) return
+    if (provider.builtin) {
+      setLlmConfigError("Built-in providers cannot be deleted.")
+      return
+    }
+    setLlmProvidersLoading(true)
+    setLlmConfigError(null)
+    setLlmProviderActionMessage(null)
+    try {
+      const snapshot = await client.deleteLlmProvider(provider.id)
+      setLlmConfig(snapshot)
+      setSelectedLlmProviderIndex((index) => wrapIndex(index, snapshot.providers?.length ?? 0))
+      setLlmProviderActionMessage(`${provider.description || provider.id} deleted.`)
+    } catch (error) {
+      setLlmConfigError(errorMessage(error))
+    } finally {
+      setLlmProvidersLoading(false)
+    }
+  }
+
+  async function startSelectedLlmProviderLogin() {
+    const provider = selectedLlmProvider()
+    if (!provider) return
+    setLlmProvidersLoading(true)
+    setLlmConfigError(null)
+    setLlmProviderActionMessage(null)
+    try {
+      if (provider.id === "nearai" || provider.adapter === "nearai") {
+        const response = await client.startNearAiLogin(provider, originForBaseUrl(config.baseUrl))
+        setLlmProviderActionMessage(response.auth_url ? `Open: ${response.auth_url}` : "Login started.")
+        return
+      }
+      if (provider.id === "openai_codex" || provider.adapter === "openai_codex") {
+        const response = await client.startCodexLogin()
+        const userCode = response.user_code ? ` code ${response.user_code}` : ""
+        setLlmProviderActionMessage(response.verification_uri ? `Open: ${response.verification_uri}${userCode}` : `Device login started.${userCode}`)
+        return
+      }
+      setLlmConfigError("This provider has no login route; use API key setup.")
     } catch (error) {
       setLlmConfigError(errorMessage(error))
     } finally {
@@ -1300,6 +1417,10 @@ export function App({ config }: AppProps) {
       case "automations":
         clearComposer("automations")
         await openAutomationsOverlay()
+        return
+      case "channels":
+        clearComposer("channels")
+        await openChannelsOverlay()
         return
       case "new-thread":
         clearComposer()
@@ -1614,6 +1735,15 @@ export function App({ config }: AppProps) {
           selectedIndex={wrapIndex(selectedAutomationIndex, automations.length)}
           width={width}
         />
+      ) : showChannels ? (
+        <ChannelsSurface
+          channels={channels}
+          error={channelsError}
+          height={height}
+          loading={channelsLoading}
+          selectedIndex={wrapIndex(selectedChannelIndex, channels.length)}
+          width={width}
+        />
       ) : showExtensions ? (
         <ExtensionsSurface
           actionMessage={extensionActionMessage}
@@ -1659,6 +1789,7 @@ export function App({ config }: AppProps) {
           config={config}
           connected={state.connected}
           automationCount={automations.length}
+          channelCount={channels.length}
           extensionCount={extensions.length}
           extensionSetupCount={extensions.filter((extension) => extension.needs_setup).length}
           height={height}
@@ -1760,6 +1891,14 @@ function providerLabel(provider: string): string {
       return "Ollama"
     default:
       return provider
+  }
+}
+
+function originForBaseUrl(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).origin
+  } catch {
+    return baseUrl
   }
 }
 

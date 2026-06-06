@@ -3,6 +3,8 @@ import { parseSse } from "./sse"
 import type {
   AppEvent,
   AutomationListResponse,
+  CodexLoginStart,
+  ConnectableChannelListResponse,
   ExtensionActionResponse,
   ExtensionListResponse,
   ExtensionRegistryResponse,
@@ -20,6 +22,7 @@ import type {
   ManualTokenSetupResponse,
   ManualTokenSubmitRequest,
   ManualTokenSubmitResponse,
+  NearAiLoginStart,
   RebornCancelRunResponse,
   RebornCreateThreadResponse,
   RebornListThreadsResponse,
@@ -168,6 +171,10 @@ export class GatewayClient {
     return this.requestJson<AutomationListResponse>(`/api/webchat/v2/automations?${params}`, { method: "GET" })
   }
 
+  async connectableChannels(): Promise<ConnectableChannelListResponse> {
+    return this.requestJson<ConnectableChannelListResponse>("/api/webchat/v2/channels/connectable", { method: "GET" })
+  }
+
   async extensions(): Promise<ExtensionListResponse> {
     return this.requestJson<ExtensionListResponse>("/api/webchat/v2/extensions", { method: "GET" })
   }
@@ -235,6 +242,12 @@ export class GatewayClient {
     })
   }
 
+  async deleteLlmProvider(providerId: string): Promise<LlmConfigSnapshot> {
+    return this.requestJson<LlmConfigSnapshot>(`/api/webchat/v2/llm/providers/${encodeURIComponent(providerId)}/delete`, {
+      method: "POST",
+    })
+  }
+
   async testLlmProvider(provider: LlmProviderView, model?: string | null): Promise<LlmProviderTestResult> {
     return this.requestJson<LlmProviderTestResult>("/api/webchat/v2/llm/test-connection", {
       method: "POST",
@@ -247,6 +260,17 @@ export class GatewayClient {
       method: "POST",
       body: JSON.stringify(llmProviderActionPayload(provider, model)),
     })
+  }
+
+  async startNearAiLogin(provider: LlmProviderView, origin: string): Promise<NearAiLoginStart> {
+    return this.requestJson<NearAiLoginStart>("/api/webchat/v2/llm/nearai/login", {
+      method: "POST",
+      body: JSON.stringify({ provider, origin }),
+    })
+  }
+
+  async startCodexLogin(): Promise<CodexLoginStart> {
+    return this.requestJson<CodexLoginStart>("/api/webchat/v2/llm/codex/login", { method: "POST" })
   }
 
   async *events(threadId?: string | null, lastEventId?: string): AsyncGenerator<AppEvent> {

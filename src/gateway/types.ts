@@ -91,6 +91,29 @@ export type RebornCancelRunResponse = {
   already_terminal?: boolean
 }
 
+export type ChannelConnectStrategy = "inbound_proof_code" | "web_generated_code" | "qr_code" | "oauth" | string
+
+export type ChannelConnectAction = {
+  title: string
+  instructions: string
+  code_placeholder: string
+  submit_label: string
+  success_message: string
+  error_message: string
+}
+
+export type ConnectableChannelInfo = {
+  channel: string
+  display_name: string
+  strategy: ChannelConnectStrategy
+  action: ChannelConnectAction
+  command_aliases?: string[]
+}
+
+export type ConnectableChannelListResponse = {
+  channels: ConnectableChannelInfo[]
+}
+
 export type RebornWebChatEventFrame = {
   cursor?: unknown
   type: string
@@ -435,6 +458,15 @@ export type LlmProviderTestResult = {
 export type LlmProviderModelsResult = {
   models?: string[]
   error?: string | null
+}
+
+export type NearAiLoginStart = {
+  auth_url?: string | null
+}
+
+export type CodexLoginStart = {
+  user_code?: string | null
+  verification_uri?: string | null
 }
 
 export type LlmActiveSelection = {

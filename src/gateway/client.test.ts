@@ -134,8 +134,18 @@ describe("Gateway client", () => {
     const originalFetch = globalThis.fetch
     const requests: Array<{ url: string; body: unknown }> = []
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      requests.push({ url: String(input), body: JSON.parse(String(init?.body)) })
-      return new Response(JSON.stringify(urlFor(input).endsWith("/llm/providers") ? { providers: [], active: null } : { ok: true, models: ["qwen"] }), {
+      requests.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null })
+      const url = urlFor(input)
+      const body = url.endsWith("/channels/connectable")
+        ? { channels: [{ channel: "slack", display_name: "Slack", strategy: "inbound_proof_code", action: { title: "Slack", instructions: "Enter code", code_placeholder: "code", submit_label: "Connect", success_message: "ok", error_message: "bad" }, command_aliases: ["slack"] }] }
+        : url.endsWith("/llm/providers") || url.endsWith("/delete")
+          ? { providers: [], active: null }
+          : url.endsWith("/nearai/login")
+            ? { auth_url: "https://near.ai/login" }
+            : url.endsWith("/codex/login")
+              ? { user_code: "ABCD", verification_uri: "https://login.example" }
+              : { ok: true, models: ["qwen"] }
+      return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       })
@@ -167,11 +177,19 @@ describe("Gateway client", () => {
         default_model: "qwen-plus",
         api_key: "sk-qwen",
       })
+      await client.deleteLlmProvider("qwen")
+      await client.startNearAiLogin(provider, "http://localhost:3000")
+      await client.startCodexLogin()
+      const channels = await client.connectableChannels()
 
       expect(requests.map((request) => request.url)).toEqual([
         "http://example.test/api/webchat/v2/llm/test-connection",
         "http://example.test/api/webchat/v2/llm/list-models",
         "http://example.test/api/webchat/v2/llm/providers",
+        "http://example.test/api/webchat/v2/llm/providers/qwen/delete",
+        "http://example.test/api/webchat/v2/llm/nearai/login",
+        "http://example.test/api/webchat/v2/llm/codex/login",
+        "http://example.test/api/webchat/v2/channels/connectable",
       ])
       expect(requests[0]?.body).toEqual({
         provider_id: "qwen",
@@ -189,6 +207,11 @@ describe("Gateway client", () => {
         default_model: "qwen-plus",
         api_key: "sk-qwen",
       })
+      expect(requests[3]?.body).toBeNull()
+      expect(requests[4]?.body).toEqual({ provider, origin: "http://localhost:3000" })
+      expect(requests[5]?.body).toBeNull()
+      expect(requests[6]?.body).toBeNull()
+      expect(channels.channels[0]?.channel).toBe("slack")
     } finally {
       globalThis.fetch = originalFetch
     }
