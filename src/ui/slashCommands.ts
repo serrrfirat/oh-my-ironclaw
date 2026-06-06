@@ -48,8 +48,15 @@ const LOCAL_SKILLS_COMMAND: SlashCommand = {
   action: "skills",
 }
 
-const LOCAL_EXTENSION_COMMAND: SlashCommand = {
+const EXTENSION_OVERLAY_COMMAND: SlashCommand = {
   name: "/extension",
+  description: "Show product workflow extension lifecycle",
+  source: "tui",
+  action: "extensions",
+}
+
+const LOCAL_EXTENSION_SEARCH_COMMAND: SlashCommand = {
+  name: "/extension-search",
   description: "Search Reborn local extensions",
   source: "local",
   action: "local-command",
@@ -132,8 +139,9 @@ export function slashCommandsForMode(mode: ClientMode): SlashCommand[] {
   return [
     ...REMOTE_PRODUCT_COMMANDS,
     mode === "local" ? LOCAL_SKILLS_COMMAND : REMOTE_SKILLS_COMMAND,
-    mode === "local" ? LOCAL_EXTENSION_COMMAND : REMOTE_EXTENSION_COMMAND,
+    mode === "local" ? EXTENSION_OVERLAY_COMMAND : REMOTE_EXTENSION_COMMAND,
     ...(mode === "local" ? LOCAL_CLI_COMMANDS : []),
+    ...(mode === "local" ? [LOCAL_EXTENSION_SEARCH_COMMAND] : []),
     ...TUI_CONTROL_COMMANDS,
   ]
 }
@@ -141,7 +149,7 @@ export function slashCommandsForMode(mode: ClientMode): SlashCommand[] {
 export function localCliCommandForInput(input: string, mode: ClientMode): string[] | null {
   if (mode !== "local") return null
   const trimmed = input.trim()
-  if (LOCAL_EXTENSION_COMMAND.name === trimmed) return LOCAL_EXTENSION_COMMAND.localArgs ?? null
+  if (LOCAL_EXTENSION_SEARCH_COMMAND.name === trimmed) return LOCAL_EXTENSION_SEARCH_COMMAND.localArgs ?? null
   const command = LOCAL_CLI_COMMANDS.find((candidate) => candidate.name === trimmed)
   return command?.localArgs ?? null
 }

@@ -48,23 +48,36 @@ describe("slash commands", () => {
     expect(commands.filter((command) => command.name === "/skills")).toHaveLength(1)
   })
 
-  test("uses local Reborn extension search command in local mode", () => {
+  test("uses extension overlay command in local mode", () => {
     const commands = slashCommandsForMode("local")
 
     expect(commands).toContainEqual(expect.objectContaining({
       name: "/extension",
-      source: "local",
-      localArgs: ["extension", "search"],
+      source: "tui",
+      action: "extensions",
     }))
     expect(commands.filter((command) => command.name === "/extension")).toHaveLength(1)
+  })
+
+  test("keeps local Reborn extension search as explicit command in local mode", () => {
+    expect(slashCommandsForMode("local")).toContainEqual(expect.objectContaining({
+      name: "/extension-search",
+      source: "local",
+      action: "local-command",
+      localArgs: ["extension", "search"],
+    }))
   })
 
   test("does not map local mode skills input to a transcript CLI command", () => {
     expect(localCliCommandForInput("/skills", "local")).toBeNull()
   })
 
-  test("maps local mode extension input to local CLI args", () => {
-    expect(localCliCommandForInput("/extension", "local")).toEqual(["extension", "search"])
+  test("does not map extension overlay input to local CLI args", () => {
+    expect(localCliCommandForInput("/extension", "local")).toBeNull()
+  })
+
+  test("maps local extension search input to local CLI args", () => {
+    expect(localCliCommandForInput("/extension-search", "local")).toEqual(["extension", "search"])
   })
 
   test("does not intercept skills in remote mode", () => {
