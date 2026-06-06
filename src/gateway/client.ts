@@ -24,6 +24,8 @@ import type {
   ManualTokenSubmitResponse,
   NearAiAuthProvider,
   NearAiLoginStart,
+  NearAiWalletLoginRequest,
+  NearAiWalletLoginResult,
   RebornCancelRunResponse,
   RebornCreateThreadResponse,
   RebornListThreadsResponse,
@@ -267,6 +269,13 @@ export class GatewayClient {
     return this.requestJson<NearAiLoginStart>("/api/webchat/v2/llm/nearai/login", {
       method: "POST",
       body: JSON.stringify({ provider, origin }),
+    })
+  }
+
+  async completeNearAiWalletLogin(payload: NearAiWalletLoginRequest): Promise<NearAiWalletLoginResult> {
+    return this.requestJson<NearAiWalletLoginResult>("/api/webchat/v2/llm/nearai/wallet", {
+      method: "POST",
+      body: JSON.stringify(payload),
     })
   }
 

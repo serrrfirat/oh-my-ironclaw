@@ -15,6 +15,7 @@ import type {
   LlmConfigSnapshot,
   LlmProviderView,
   NearAiAuthProvider,
+  NearAiWalletLoginRequest,
   PendingGateInfo,
   ThreadInfo,
 } from "../gateway/types"
@@ -117,6 +118,8 @@ export function App({ config }: AppProps) {
   const [llmProviderModels, setLlmProviderModels] = useState<string[]>([])
   const [llmProviderSetupInput, setLlmProviderSetupInput] = useState("")
   const [llmProviderSetupInputKey, setLlmProviderSetupInputKey] = useState<string | null>(null)
+  const [nearAiWalletInput, setNearAiWalletInput] = useState("")
+  const [nearAiWalletInputActive, setNearAiWalletInputActive] = useState(false)
   const [llmProviderForm, setLlmProviderForm] = useState<LlmProviderFormState | null>(null)
   const [selectedLlmProviderIndex, setSelectedLlmProviderIndex] = useState(0)
   const [nowMs, setNowMs] = useState(() => Date.now())
@@ -358,13 +361,44 @@ export function App({ config }: AppProps) {
       if (key.name === "escape") {
         key.preventDefault()
         key.stopPropagation()
-        if (llmProviderSetupInputKey) {
+        if (nearAiWalletInputActive) {
+          setNearAiWalletInputActive(false)
+          setNearAiWalletInput("")
+        } else if (llmProviderSetupInputKey) {
           setLlmProviderSetupInputKey(null)
           setLlmProviderSetupInput("")
         } else if (llmProviderForm) {
           setLlmProviderForm(null)
         } else {
           setActiveOverlay(null)
+        }
+        return
+      }
+      if (nearAiWalletInputActive) {
+        if (key.name === "backspace" || key.name === "delete") {
+          key.preventDefault()
+          key.stopPropagation()
+          setNearAiWalletInput((value) => value.slice(0, -1))
+          return
+        }
+        if (key.ctrl && key.name === "u") {
+          key.preventDefault()
+          key.stopPropagation()
+          setNearAiWalletInput("")
+          return
+        }
+        if (isPlainEnter(key)) {
+          key.preventDefault()
+          key.stopPropagation()
+          void submitNearAiWalletLogin()
+          return
+        }
+        const inputText = printableKeyText(key)
+        if (inputText) {
+          key.preventDefault()
+          key.stopPropagation()
+          setNearAiWalletInput((value) => value + inputText)
+          return
         }
         return
       }
@@ -431,6 +465,8 @@ export function App({ config }: AppProps) {
         setLlmProviderModels([])
         setLlmProviderSetupInputKey(null)
         setLlmProviderForm(null)
+        setNearAiWalletInputActive(false)
+        setNearAiWalletInput("")
         return
       }
       if (key.name === "down" || key.name === "tab" || key.name === "j") {
@@ -440,6 +476,8 @@ export function App({ config }: AppProps) {
         setLlmProviderModels([])
         setLlmProviderSetupInputKey(null)
         setLlmProviderForm(null)
+        setNearAiWalletInputActive(false)
+        setNearAiWalletInput("")
         return
       }
       const text = printableKeyText(key).toLowerCase()
@@ -465,6 +503,12 @@ export function App({ config }: AppProps) {
         key.preventDefault()
         key.stopPropagation()
         void startSelectedLlmProviderLogin("google")
+        return
+      }
+      if (text === "w") {
+        key.preventDefault()
+        key.stopPropagation()
+        openNearAiWalletLogin()
         return
       }
       if (text === "s") {
@@ -1122,8 +1166,26 @@ export function App({ config }: AppProps) {
     }
     setLlmConfigError(null)
     setLlmProviderActionMessage(null)
+    setNearAiWalletInputActive(false)
+    setNearAiWalletInput("")
     setLlmProviderSetupInput("")
     setLlmProviderSetupInputKey("api_key")
+  }
+
+  function openNearAiWalletLogin() {
+    const provider = selectedLlmProvider()
+    if (!provider) return
+    if (provider.id !== "nearai" && provider.adapter !== "nearai") {
+      setLlmConfigError("Wallet login is only available for NEAR AI.")
+      return
+    }
+    setLlmConfigError(null)
+    setLlmProviderActionMessage("Paste NEAR AI wallet login JSON, then press enter.")
+    setLlmProviderSetupInputKey(null)
+    setLlmProviderSetupInput("")
+    setLlmProviderForm(null)
+    setNearAiWalletInput("")
+    setNearAiWalletInputActive(true)
   }
 
   function openNewLlmProviderForm() {
@@ -1134,6 +1196,8 @@ export function App({ config }: AppProps) {
     setLlmProviderActionMessage(null)
     setLlmProviderSetupInputKey(null)
     setLlmProviderSetupInput("")
+    setNearAiWalletInputActive(false)
+    setNearAiWalletInput("")
     setLlmProviderForm({
       mode: "create",
       fields: ["name", "id", "adapter", "baseUrl", "model", "apiKey"],
@@ -1158,6 +1222,8 @@ export function App({ config }: AppProps) {
     setLlmProviderActionMessage(null)
     setLlmProviderSetupInputKey(null)
     setLlmProviderSetupInput("")
+    setNearAiWalletInputActive(false)
+    setNearAiWalletInput("")
     setLlmProviderForm({
       mode: "edit",
       providerId: provider.id,
@@ -1267,6 +1333,35 @@ export function App({ config }: AppProps) {
       setLlmProviderSetupInput("")
       setLlmProviderSetupInputKey(null)
       setLlmProviderActionMessage("Provider credentials saved.")
+    } catch (error) {
+      setLlmConfigError(errorMessage(error))
+    } finally {
+      setLlmProvidersLoading(false)
+    }
+  }
+
+  async function submitNearAiWalletLogin() {
+    const value = nearAiWalletInput.trim()
+    if (!value) {
+      setLlmConfigError("Wallet login JSON is required.")
+      return
+    }
+    let payload: NearAiWalletLoginRequest
+    try {
+      payload = parseNearAiWalletPayload(value)
+    } catch (error) {
+      setLlmConfigError(errorMessage(error))
+      return
+    }
+    setLlmProvidersLoading(true)
+    setLlmConfigError(null)
+    setLlmProviderActionMessage(null)
+    try {
+      const result = await client.completeNearAiWalletLogin(payload)
+      setNearAiWalletInput("")
+      setNearAiWalletInputActive(false)
+      await loadLlmConfig()
+      setLlmProviderActionMessage(result.active === false ? "Wallet login submitted." : "Wallet login active.")
     } catch (error) {
       setLlmConfigError(errorMessage(error))
     } finally {
@@ -1957,6 +2052,8 @@ export function App({ config }: AppProps) {
           form={llmProviderFormView()}
           height={height}
           loading={llmProvidersLoading}
+          nearAiWalletInput={nearAiWalletInput}
+          nearAiWalletInputActive={nearAiWalletInputActive}
           selectedIndex={wrapIndex(selectedLlmProviderIndex, llmProviders().length)}
           setupInput={llmProviderSetupInput}
           setupInputLabel={llmProviderSetupInputKey ? "API key" : null}
@@ -2078,6 +2175,37 @@ function originForBaseUrl(baseUrl: string): string {
     return new URL(baseUrl).origin
   } catch {
     return baseUrl
+  }
+}
+
+function parseNearAiWalletPayload(value: string): NearAiWalletLoginRequest {
+  const parsed = JSON.parse(value) as Partial<NearAiWalletLoginRequest>
+  if (!parsed || typeof parsed !== "object") throw new Error("Wallet login payload must be a JSON object.")
+  const required = ["account_id", "public_key", "signature", "message", "recipient"] as const
+  for (const field of required) {
+    if (typeof parsed[field] !== "string" || !parsed[field]?.trim()) {
+      throw new Error(`Wallet login payload is missing ${field}.`)
+    }
+  }
+  if (!Array.isArray(parsed.nonce) || !parsed.nonce.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
+    throw new Error("Wallet login nonce must be an array of byte values.")
+  }
+  const accountId = parsed.account_id
+  const publicKey = parsed.public_key
+  const signature = parsed.signature
+  const message = parsed.message
+  const recipient = parsed.recipient
+  if (!accountId || !publicKey || !signature || !message || !recipient) {
+    throw new Error("Wallet login payload is missing required fields.")
+  }
+  return {
+    account_id: accountId,
+    public_key: publicKey,
+    signature,
+    message,
+    recipient,
+    nonce: parsed.nonce,
+    callback_url: typeof parsed.callback_url === "string" ? parsed.callback_url : undefined,
   }
 }
 

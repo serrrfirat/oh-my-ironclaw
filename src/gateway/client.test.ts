@@ -142,9 +142,11 @@ describe("Gateway client", () => {
           ? { providers: [], active: null }
           : url.endsWith("/nearai/login")
             ? { auth_url: "https://near.ai/login" }
-            : url.endsWith("/codex/login")
-              ? { user_code: "ABCD", verification_uri: "https://login.example" }
-              : { ok: true, models: ["qwen"] }
+            : url.endsWith("/nearai/wallet")
+              ? { active: true }
+              : url.endsWith("/codex/login")
+                ? { user_code: "ABCD", verification_uri: "https://login.example" }
+                : { ok: true, models: ["qwen"] }
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -179,6 +181,15 @@ describe("Gateway client", () => {
       })
       await client.deleteLlmProvider("qwen")
       await client.startNearAiLogin("google", "http://localhost:3000")
+      await client.completeNearAiWalletLogin({
+        account_id: "firat.near",
+        public_key: "ed25519:public",
+        signature: "base64sig",
+        message: "Log in to NEAR AI",
+        recipient: "near.ai",
+        nonce: [1, 2, 3],
+        callback_url: "http://localhost:3000",
+      })
       await client.startCodexLogin()
       const channels = await client.connectableChannels()
 
@@ -188,6 +199,7 @@ describe("Gateway client", () => {
         "http://example.test/api/webchat/v2/llm/providers",
         "http://example.test/api/webchat/v2/llm/providers/qwen/delete",
         "http://example.test/api/webchat/v2/llm/nearai/login",
+        "http://example.test/api/webchat/v2/llm/nearai/wallet",
         "http://example.test/api/webchat/v2/llm/codex/login",
         "http://example.test/api/webchat/v2/channels/connectable",
       ])
@@ -209,8 +221,17 @@ describe("Gateway client", () => {
       })
       expect(requests[3]?.body).toBeNull()
       expect(requests[4]?.body).toEqual({ provider: "google", origin: "http://localhost:3000" })
-      expect(requests[5]?.body).toBeNull()
+      expect(requests[5]?.body).toEqual({
+        account_id: "firat.near",
+        public_key: "ed25519:public",
+        signature: "base64sig",
+        message: "Log in to NEAR AI",
+        recipient: "near.ai",
+        nonce: [1, 2, 3],
+        callback_url: "http://localhost:3000",
+      })
       expect(requests[6]?.body).toBeNull()
+      expect(requests[7]?.body).toBeNull()
       expect(channels.channels[0]?.channel).toBe("slack")
     } finally {
       globalThis.fetch = originalFetch

@@ -466,6 +466,20 @@ export type NearAiLoginStart = {
 
 export type NearAiAuthProvider = "github" | "google"
 
+export type NearAiWalletLoginRequest = {
+  account_id: string
+  public_key: string
+  signature: string
+  message: string
+  recipient: string
+  nonce: number[]
+  callback_url?: string | null
+}
+
+export type NearAiWalletLoginResult = {
+  active?: boolean
+}
+
 export type CodexLoginStart = {
   user_code?: string | null
   verification_uri?: string | null

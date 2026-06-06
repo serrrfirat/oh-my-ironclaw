@@ -18,6 +18,8 @@ export function LlmProvidersSurface({
   form,
   height,
   loading,
+  nearAiWalletInput,
+  nearAiWalletInputActive,
   selectedIndex,
   setupInput,
   setupInputLabel,
@@ -30,6 +32,8 @@ export function LlmProvidersSurface({
   form?: LlmProviderFormView | null
   height: number
   loading: boolean
+  nearAiWalletInput?: string
+  nearAiWalletInputActive?: boolean
   selectedIndex: number
   setupInput?: string
   setupInputLabel?: string | null
@@ -51,17 +55,17 @@ export function LlmProvidersSurface({
         <box style={{ flexDirection: "column" }}>
           <ProviderList providers={providers} selectedIndex={selectedIndex} width={contentWidth} />
           <box style={{ height: 1 }} />
-          <ProviderDetail provider={selected} availableModels={availableModels ?? []} form={form} setupInput={setupInput} setupInputLabel={setupInputLabel} width={contentWidth} />
+          <ProviderDetail provider={selected} availableModels={availableModels ?? []} form={form} nearAiWalletInput={nearAiWalletInput} nearAiWalletInputActive={nearAiWalletInputActive} setupInput={setupInput} setupInputLabel={setupInputLabel} width={contentWidth} />
         </box>
       ) : (
         <box style={{ flexDirection: "row", width: contentWidth }}>
           <ProviderList providers={providers} selectedIndex={selectedIndex} width={listWidth} />
           <box style={{ width: 2 }} />
-          <ProviderDetail provider={selected} availableModels={availableModels ?? []} form={form} setupInput={setupInput} setupInputLabel={setupInputLabel} width={Math.max(1, contentWidth - listWidth - 2)} />
+          <ProviderDetail provider={selected} availableModels={availableModels ?? []} form={form} nearAiWalletInput={nearAiWalletInput} nearAiWalletInputActive={nearAiWalletInputActive} setupInput={setupInput} setupInputLabel={setupInputLabel} width={Math.max(1, contentWidth - listWidth - 2)} />
         </box>
       )}
       <box style={{ flexGrow: 1 }} />
-      <text fg="#777777">{truncate("up/down select · n new · e edit · enter active · s key · l github · g google · t test · m models · x delete · r refresh · esc back", contentWidth)}</text>
+      <text fg="#777777">{truncate("up/down select · n new · e edit · enter active · s key · l github · g google · w wallet · t test · m models · x delete · r refresh · esc back", contentWidth)}</text>
     </box>
   )
 }
@@ -103,6 +107,8 @@ function ProviderRow({ provider, selected, width }: { provider: LlmProviderView;
 function ProviderDetail({
   availableModels,
   form,
+  nearAiWalletInput,
+  nearAiWalletInputActive,
   provider,
   setupInput,
   setupInputLabel,
@@ -110,6 +116,8 @@ function ProviderDetail({
 }: {
   availableModels: string[]
   form?: LlmProviderFormView | null
+  nearAiWalletInput?: string
+  nearAiWalletInputActive?: boolean
   provider: LlmProviderView | null
   setupInput?: string
   setupInputLabel?: string | null
@@ -143,6 +151,7 @@ function ProviderDetail({
         </box>
       ) : null}
       {form ? <ProviderFormPreview form={form} width={width - 4} /> : null}
+      {nearAiWalletInputActive ? <WalletLoginPreview input={nearAiWalletInput ?? ""} width={width - 4} /> : null}
       {availableModels.length ? (
         <box style={{ flexDirection: "column", marginTop: 1 }}>
           <text fg="#f0b45f">available models</text>
@@ -164,6 +173,16 @@ function ProviderFormPreview({ form, width }: { form: LlmProviderFormView; width
       <text fg="#8a8a8a">{truncate(form.fieldLabel, width - 2)}</text>
       <text fg="#777777">{truncate(current, width - 2)}</text>
       <text fg="#f2f2f2">{truncate(form.fieldLabel === "api key" && form.input ? "*".repeat(form.input.length) : form.input || "type value, enter next", width - 2)}</text>
+    </box>
+  )
+}
+
+function WalletLoginPreview({ input, width }: { input: string; width: number }) {
+  return (
+    <box style={{ height: 4, flexDirection: "column", backgroundColor: "#0b1118", paddingLeft: 1, paddingRight: 1, marginTop: 1 }}>
+      <text fg="#f0b45f">{truncate("near ai wallet login", width - 2)}</text>
+      <text fg="#8a8a8a">{truncate("paste signed JSON payload, enter submit", width - 2)}</text>
+      <text fg="#f2f2f2">{truncate(input || "{}", width - 2)}</text>
     </box>
   )
 }
@@ -202,7 +221,7 @@ function providerConfigured(provider: LlmProviderView): boolean {
 
 function actionHint(provider: LlmProviderView): string {
   if (!providerConfigured(provider)) return "s adds provider credentials"
-  if (provider.id === "nearai" || provider.adapter === "nearai") return "l starts GitHub login, g starts Google login, s stores API key"
+  if (provider.id === "nearai" || provider.adapter === "nearai") return "l GitHub, g Google, w wallet JSON, s stores API key"
   if (provider.id === "openai_codex" || provider.adapter === "openai_codex") return "l starts device login"
   if (provider.active) return "active provider, t tests connection"
   return provider.builtin ? "e edits override, enter sets active" : "e edits, x deletes custom provider"
