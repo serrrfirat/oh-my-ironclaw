@@ -439,7 +439,7 @@ describe("UI state", () => {
     expect(state.activeRunId).toBe("run-1")
     expect(state.activity[0]).toMatchObject({
       id: "skill-skill-activation:run-1:1",
-      label: "Skill activated: code-review",
+      label: "skill activated code-review",
       detail: "code-review: force-activated via explicit mention",
       status: "info",
       kind: "skill_activation",
@@ -451,14 +451,14 @@ describe("UI state", () => {
       state: "completed",
       activity: {
         kind: "skill_activation",
-        title: "Skill activated: code-review",
+        title: "skill activated code-review",
         status: "completed",
         detail: "code-review: force-activated via explicit mention",
       },
       meta: { projectionId: "skill-activation:run-1:1" },
     })
     expect(activityText(state.transcript[0] as Extract<TranscriptItem, { role: "activity" }>)).toBe(
-      "✓ Skill activated: code-review\ncode-review: force-activated via explicit mention",
+      "✓ skill activated code-review\ncode-review: force-activated via explicit mention",
     )
   })
 

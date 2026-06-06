@@ -37,6 +37,7 @@ export function activityGroupSummary(items: Array<Extract<TranscriptItem, { role
     explored: 0,
     searched: 0,
     ran: 0,
+    skills: 0,
     used: 0,
   }
 
@@ -54,6 +55,9 @@ export function activityGroupSummary(items: Array<Extract<TranscriptItem, { role
       case "ran":
         counts.ran += 1
         break
+      case "skills":
+        counts.skills += 1
+        break
       case "used":
         counts.used += 1
         break
@@ -65,18 +69,20 @@ export function activityGroupSummary(items: Array<Extract<TranscriptItem, { role
     counts.explored ? `explored ${counts.explored} ${plural("file", counts.explored)}` : null,
     counts.searched ? `${counts.searched} ${plural("search", counts.searched, "searches")}` : null,
     counts.ran ? `ran ${counts.ran} ${plural("command", counts.ran)}` : null,
+    counts.skills ? `activated ${counts.skills} ${plural("skill", counts.skills)}` : null,
     counts.used ? `used ${counts.used} ${plural("tool", counts.used)}` : null,
   ].filter(Boolean)
 
   return parts.join(", ") || `Used ${items.length} ${plural("tool", items.length)}`
 }
 
-function activityKind(title: string): "edited" | "explored" | "searched" | "ran" | "used" {
+function activityKind(title: string): "edited" | "explored" | "searched" | "ran" | "skills" | "used" {
   const normalized = title
     .toLowerCase()
     .replace(/^(using|failed|killed)\s+/, "")
     .replace(/[^a-z0-9_ -]/g, "")
 
+  if (/\bskill activated\b|\bactivated skill\b/.test(normalized)) return "skills"
   if (/\b(write_file|edit|apply_patch|patch)\b/.test(normalized)) return "edited"
   if (/\b(grep|glob|search|find)\b/.test(normalized)) return "searched"
   if (/\b(shell|exec|command|bash|zsh)\b/.test(normalized)) return "ran"

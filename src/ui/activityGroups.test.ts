@@ -28,7 +28,8 @@ describe("activity groups", () => {
       activity("tool-4", "grep"),
       activity("tool-5", "shell"),
       activity("tool-6", "Failed shell"),
-    ])).toBe("Edited 1 file, explored 1 file, 2 searches, ran 2 commands")
+      activity("tool-7", "skill activated github, commit"),
+    ])).toBe("Edited 1 file, explored 1 file, 2 searches, ran 2 commands, activated 1 skill")
   })
 })
 

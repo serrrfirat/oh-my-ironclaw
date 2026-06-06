@@ -575,8 +575,8 @@ function applySkillActivated(
   if (!content) return state
   const id = skillActivationId(event)
   const title = event.skill_names.length === 1
-    ? `Skill activated: ${event.skill_names[0]}`
-    : `Skill activated: ${event.skill_names.join(", ")}`
+    ? `skill activated ${event.skill_names[0]}`
+    : `skill activated ${event.skill_names.join(", ")}`
   const detail = (event.feedback ?? []).join("\n")
   return {
     ...state,
