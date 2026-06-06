@@ -291,11 +291,11 @@ function settingsMenuMeta(
     case "Channels":
       return `${channelCount} connectable`
     case "Skills":
-      return skillsAvailable ? `${skillCount} local` : "backend pending"
+      return skillsAvailable ? `${skillCount} local` : "no v2 endpoint"
     case "Automations":
       return `${automationCount} schedules`
     case "Tools":
-      return config.mode === "local" ? "local + remote" : "remote"
+      return config.mode === "local" ? "local commands" : "activity only"
     case "Approvals":
       return "ask"
     default:
@@ -360,29 +360,29 @@ function settingsFieldsForSection(
       return [
         { label: "connectable", value: String(channelCount) },
         { label: "source", value: "WebChat v2 connectable channels" },
-        { label: "setup", value: "backend returns pairing/action metadata" },
-        { label: "submit", value: "pairing submit route pending" },
+        { label: "setup", value: "pairing/action metadata" },
+        { label: "submit", value: "handled by extension setup routes" },
       ]
     case "Skills":
       return [
         { label: "configured", value: skillsAvailable ? String(skillCount) : "unknown" },
-        { label: "source", value: skillsAvailable ? sourcePath : "WebChat v2 skills endpoint pending" },
+        { label: "source", value: skillsAvailable ? sourcePath : "no WebChat v2 skills endpoint" },
         { label: "browse", value: skillsAvailable ? "local skills list" : "not available in remote mode" },
-        { label: "setup", value: "waiting on v2 skills install/remove endpoint" },
+        { label: "setup", value: "blocked until v2 install/remove route exists" },
       ]
     case "Automations":
       return [
         { label: "schedules", value: String(automationCount) },
         { label: "source", value: "WebChat v2 automations" },
         { label: "view", value: "schedule dashboard" },
-        { label: "mutations", value: "backend route pending in TUI" },
+        { label: "mutations", value: "no v2 create/update route" },
       ]
     case "Tools":
       return [
-        { label: "remote", value: "product workflow commands" },
+        { label: "remote", value: "tool calls render in chat" },
         { label: "local", value: config.mode === "local" ? "CLI commands enabled" : "disabled" },
+        { label: "settings", value: "no WebChat v2 tools endpoint" },
         { label: "source", value: sourcePath },
-        { label: "approval", value: "ask" },
       ]
     case "Approvals":
       return [
