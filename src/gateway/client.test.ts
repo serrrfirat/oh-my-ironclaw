@@ -128,7 +128,76 @@ describe("Gateway client", () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  test("uses WebChat v2 LLM provider action payloads", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    const requests: Array<{ url: string; body: unknown }> = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), body: JSON.parse(String(init?.body)) })
+      return new Response(JSON.stringify(urlFor(input).endsWith("/llm/providers") ? { providers: [], active: null } : { ok: true, models: ["qwen"] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    }) as unknown as typeof fetch
+
+    try {
+      const provider = {
+        id: "qwen",
+        description: "Qwen",
+        adapter: "open_ai_completions",
+        default_model: "qwen-plus",
+        base_url: "https://dashscope.example/v1",
+        builtin: false,
+        active: false,
+        active_model: null,
+        api_key_required: true,
+        accepts_api_key: true,
+        api_key_set: true,
+        can_list_models: true,
+      }
+
+      await client.testLlmProvider(provider)
+      await client.listLlmProviderModels(provider)
+      await client.upsertLlmProvider({
+        id: "qwen",
+        name: "Qwen",
+        adapter: "open_ai_completions",
+        base_url: "https://dashscope.example/v1",
+        default_model: "qwen-plus",
+        api_key: "sk-qwen",
+      })
+
+      expect(requests.map((request) => request.url)).toEqual([
+        "http://example.test/api/webchat/v2/llm/test-connection",
+        "http://example.test/api/webchat/v2/llm/list-models",
+        "http://example.test/api/webchat/v2/llm/providers",
+      ])
+      expect(requests[0]?.body).toEqual({
+        provider_id: "qwen",
+        provider_type: "custom",
+        adapter: "open_ai_completions",
+        base_url: "https://dashscope.example/v1",
+        model: "qwen-plus",
+      })
+      expect(requests[1]?.body).toEqual(requests[0]?.body)
+      expect(requests[2]?.body).toEqual({
+        id: "qwen",
+        name: "Qwen",
+        adapter: "open_ai_completions",
+        base_url: "https://dashscope.example/v1",
+        default_model: "qwen-plus",
+        api_key: "sk-qwen",
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
+
+function urlFor(input: RequestInfo | URL): string {
+  return String(input)
+}
 
 describe("WebChat event mapping", () => {
   test("maps timeline tool result references to tool summaries", async () => {

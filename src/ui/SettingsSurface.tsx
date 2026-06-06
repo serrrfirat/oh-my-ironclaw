@@ -1,12 +1,16 @@
 import type { ClientConfig } from "../config"
 import type { LlmConfigSnapshot } from "../gateway/types"
 
-type SettingsSection = "Profile" | "Connection" | "Models" | "Secrets" | "Tools" | "Approvals"
+export type SettingsSection = "Profile" | "Connection" | "Providers" | "Extensions" | "Skills" | "Automations" | "Tools" | "Approvals"
 type SettingsMenuItem = { label: SettingsSection; meta: string }
 
-const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Models", "Secrets", "Tools", "Approvals"]
+const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Providers", "Extensions", "Skills", "Automations", "Tools", "Approvals"]
 
 export const SETTINGS_SECTION_COUNT = SETTINGS_SECTIONS.length
+
+export function settingsSectionAt(index: number): SettingsSection {
+  return SETTINGS_SECTIONS[wrapIndex(index, SETTINGS_SECTIONS.length)] ?? SETTINGS_SECTIONS[0]
+}
 
 export function SettingsSurface({
   config,
@@ -17,6 +21,11 @@ export function SettingsSurface({
   selectedProvider,
   llmConfig,
   llmConfigError,
+  extensionCount = 0,
+  extensionSetupCount = 0,
+  automationCount = 0,
+  skillCount = 0,
+  skillsAvailable = false,
   status,
   width,
 }: {
@@ -28,6 +37,11 @@ export function SettingsSurface({
   selectedProvider: string
   llmConfig?: LlmConfigSnapshot | null
   llmConfigError?: string | null
+  extensionCount?: number
+  extensionSetupCount?: number
+  automationCount?: number
+  skillCount?: number
+  skillsAvailable?: boolean
   status: string
   width: number
 }) {
@@ -36,15 +50,18 @@ export function SettingsSurface({
   const profileName = config.mode === "local" ? "local-dev" : "remote"
   const serverState = connected ? "online" : "offline"
   const authState = config.token ? "present" : "missing"
-  const secretCount = config.token ? "1 set · 2 unknown" : "1 missing · 2 unknown"
   const sourcePath = config.rebornSource ?? "not configured"
   const menu: SettingsMenuItem[] = SETTINGS_SECTIONS.map((section) => ({
     label: section,
     meta: settingsMenuMeta(section, {
+      automationCount,
       config,
-      secretCount,
+      extensionCount,
+      extensionSetupCount,
       selectedModel,
       selectedProvider,
+      skillCount,
+      skillsAvailable,
       serverState,
       profileName,
     }),
@@ -67,6 +84,11 @@ export function SettingsSurface({
           item={selectedItem}
           llmConfig={llmConfig}
           llmConfigError={llmConfigError}
+          automationCount={automationCount}
+          extensionCount={extensionCount}
+          extensionSetupCount={extensionSetupCount}
+          skillCount={skillCount}
+          skillsAvailable={skillsAvailable}
           selectedModel={selectedModel}
           selectedProvider={selectedProvider}
           sourcePath={sourcePath}
@@ -96,6 +118,11 @@ export function SettingsSurface({
           item={selectedItem}
           llmConfig={llmConfig}
           llmConfigError={llmConfigError}
+          automationCount={automationCount}
+          extensionCount={extensionCount}
+          extensionSetupCount={extensionSetupCount}
+          skillCount={skillCount}
+          skillsAvailable={skillsAvailable}
           selectedModel={selectedModel}
           selectedProvider={selectedProvider}
           sourcePath={sourcePath}
@@ -171,6 +198,11 @@ function SettingsPreview({
   item,
   llmConfig,
   llmConfigError,
+  automationCount,
+  extensionCount,
+  extensionSetupCount,
+  skillCount,
+  skillsAvailable,
   selectedModel,
   selectedProvider,
   sourcePath,
@@ -183,6 +215,11 @@ function SettingsPreview({
   item: SettingsMenuItem
   llmConfig?: LlmConfigSnapshot | null
   llmConfigError?: string | null
+  automationCount: number
+  extensionCount: number
+  extensionSetupCount: number
+  skillCount: number
+  skillsAvailable: boolean
   selectedModel: string
   selectedProvider: string
   sourcePath: string
@@ -195,6 +232,11 @@ function SettingsPreview({
     connected,
     llmConfig,
     llmConfigError,
+    automationCount,
+    extensionCount,
+    extensionSetupCount,
+    skillCount,
+    skillsAvailable,
     selectedModel,
     selectedProvider,
     sourcePath,
@@ -209,7 +251,7 @@ function SettingsPreview({
         <SettingsField key={field.label} label={field.label} value={field.value} width={width - 4} />
       ))}
       <box style={{ height: 1 }} />
-      <text fg="#777777">{truncate("enter opens this section once settings are wired", Math.max(1, width - 4))}</text>
+      <text fg="#777777">{truncate(settingsActionHint(item.label), Math.max(1, width - 4))}</text>
     </box>
   )
 }
@@ -217,22 +259,30 @@ function SettingsPreview({
 function settingsMenuMeta(
   section: SettingsSection,
   context: {
+    automationCount: number
     config: ClientConfig
+    extensionCount: number
+    extensionSetupCount: number
     profileName: string
-    secretCount: string
+    skillCount: number
+    skillsAvailable: boolean
     selectedModel: string
     selectedProvider: string
     serverState: string
   },
 ) {
-  const { config, profileName, secretCount, selectedModel, selectedProvider, serverState } = context
+  const { automationCount, config, extensionCount, extensionSetupCount, profileName, selectedModel, selectedProvider, serverState, skillCount, skillsAvailable } = context
   switch (section) {
     case "Connection":
       return serverState
-    case "Models":
+    case "Providers":
       return selectedProvider ? `${selectedModel} · ${selectedProvider}` : selectedModel
-    case "Secrets":
-      return secretCount
+    case "Extensions":
+      return extensionSetupCount ? `${extensionSetupCount} need setup` : `${extensionCount} installed`
+    case "Skills":
+      return skillsAvailable ? `${skillCount} local` : "backend pending"
+    case "Automations":
+      return `${automationCount} schedules`
     case "Tools":
       return config.mode === "local" ? "local + remote" : "remote"
     case "Approvals":
@@ -250,13 +300,18 @@ function settingsFieldsForSection(
     connected: boolean
     llmConfig?: LlmConfigSnapshot | null
     llmConfigError?: string | null
+    automationCount: number
+    extensionCount: number
+    extensionSetupCount: number
+    skillCount: number
+    skillsAvailable: boolean
     selectedModel: string
     selectedProvider: string
     sourcePath: string
     status: string
   },
 ) {
-  const { authState, config, connected, llmConfig, llmConfigError, selectedModel, selectedProvider, sourcePath, status } = context
+  const { authState, automationCount, config, connected, extensionCount, extensionSetupCount, llmConfig, llmConfigError, selectedModel, selectedProvider, skillCount, skillsAvailable, sourcePath, status } = context
   switch (section) {
     case "Connection":
       return [
@@ -265,7 +320,7 @@ function settingsFieldsForSection(
         { label: "status", value: status },
         { label: "mode", value: config.mode },
       ]
-    case "Models":
+    case "Providers":
       if (llmConfigError) {
         return [
           { label: "error", value: llmConfigError },
@@ -282,12 +337,26 @@ function settingsFieldsForSection(
         { label: "models", value: providerModelSummary(llmConfig) },
         { label: "source", value: "WebChat v2 LLM providers" },
       ]
-    case "Secrets":
+    case "Extensions":
       return [
-        { label: "webui token", value: authState },
-        { label: "user id", value: "unknown" },
-        { label: "storage", value: "env preview only" },
-        { label: "reveal", value: "not wired" },
+        { label: "installed", value: String(extensionCount) },
+        { label: "need setup", value: String(extensionSetupCount) },
+        { label: "registry", value: "WebChat v2 extension registry" },
+        { label: "setup", value: "install · activate · secret/field input" },
+      ]
+    case "Skills":
+      return [
+        { label: "configured", value: skillsAvailable ? String(skillCount) : "unknown" },
+        { label: "source", value: skillsAvailable ? sourcePath : "WebChat v2 skills endpoint pending" },
+        { label: "browse", value: skillsAvailable ? "local skills list" : "not available in remote mode" },
+        { label: "setup", value: "waiting on v2 skills install/remove endpoint" },
+      ]
+    case "Automations":
+      return [
+        { label: "schedules", value: String(automationCount) },
+        { label: "source", value: "WebChat v2 automations" },
+        { label: "view", value: "schedule dashboard" },
+        { label: "mutations", value: "backend route pending in TUI" },
       ]
     case "Tools":
       return [
@@ -324,6 +393,23 @@ function SettingsField({ label, value, width }: { label: string; value: string; 
       <text fg="#d0d0d0">{truncate(value, valueWidth)}</text>
     </box>
   )
+}
+
+function settingsActionHint(section: SettingsSection): string {
+  switch (section) {
+    case "Providers":
+      return "enter opens provider setup"
+    case "Extensions":
+      return "enter opens extension setup"
+    case "Skills":
+      return "enter opens skills browser when available"
+    case "Automations":
+      return "enter opens automations"
+    case "Connection":
+      return "connection is read-only"
+    default:
+      return "read-only summary"
+  }
 }
 
 function providerKeySummary(llmConfig?: LlmConfigSnapshot | null): string {

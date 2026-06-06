@@ -405,6 +405,38 @@ export type LlmProviderView = {
   can_list_models: boolean
 }
 
+export type LlmProviderActionPayload = {
+  provider_id: string
+  provider_type?: "builtin" | "custom" | string
+  adapter?: string
+  base_url?: string | null
+  model?: string | null
+}
+
+export type LlmProviderUpsertPayload = {
+  id: string
+  name?: string
+  adapter: string
+  base_url?: string | null
+  default_model?: string | null
+  api_key?: string
+  set_active?: boolean
+  model?: string | null
+}
+
+export type LlmProviderTestResult = {
+  success?: boolean
+  ok?: boolean
+  message?: string | null
+  error?: string | null
+  latency_ms?: number | null
+}
+
+export type LlmProviderModelsResult = {
+  models?: string[]
+  error?: string | null
+}
+
 export type LlmActiveSelection = {
   provider_id: string
   model?: string | null

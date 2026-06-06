@@ -11,6 +11,11 @@ import type {
   HistoryResponse,
   LifecyclePackageRef,
   LlmConfigSnapshot,
+  LlmProviderActionPayload,
+  LlmProviderModelsResult,
+  LlmProviderTestResult,
+  LlmProviderUpsertPayload,
+  LlmProviderView,
   ManualTokenSecretSubmitRequest,
   ManualTokenSetupResponse,
   ManualTokenSubmitRequest,
@@ -223,6 +228,27 @@ export class GatewayClient {
     })
   }
 
+  async upsertLlmProvider(payload: LlmProviderUpsertPayload): Promise<LlmConfigSnapshot> {
+    return this.requestJson<LlmConfigSnapshot>("/api/webchat/v2/llm/providers", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async testLlmProvider(provider: LlmProviderView, model?: string | null): Promise<LlmProviderTestResult> {
+    return this.requestJson<LlmProviderTestResult>("/api/webchat/v2/llm/test-connection", {
+      method: "POST",
+      body: JSON.stringify(llmProviderActionPayload(provider, model)),
+    })
+  }
+
+  async listLlmProviderModels(provider: LlmProviderView, model?: string | null): Promise<LlmProviderModelsResult> {
+    return this.requestJson<LlmProviderModelsResult>("/api/webchat/v2/llm/list-models", {
+      method: "POST",
+      body: JSON.stringify(llmProviderActionPayload(provider, model)),
+    })
+  }
+
   async *events(threadId?: string | null, lastEventId?: string): AsyncGenerator<AppEvent> {
     if (!threadId) return
     const params = new URLSearchParams({ token: this.config.token })
@@ -293,6 +319,16 @@ export class GatewayClient {
     }
 
     return response
+  }
+}
+
+function llmProviderActionPayload(provider: LlmProviderView, model?: string | null): LlmProviderActionPayload {
+  return {
+    provider_id: provider.id,
+    provider_type: provider.builtin ? "builtin" : "custom",
+    adapter: provider.adapter,
+    base_url: provider.base_url ?? null,
+    model: model || provider.active_model || provider.default_model || null,
   }
 }
 

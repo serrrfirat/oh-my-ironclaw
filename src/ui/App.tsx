@@ -12,6 +12,7 @@ import type {
   ExtensionSetupResponse,
   HistoryResponse,
   LlmConfigSnapshot,
+  LlmProviderView,
   PendingGateInfo,
   ThreadInfo,
 } from "../gateway/types"
@@ -23,8 +24,9 @@ import { initialUiState, reduceUiState, type ActivityItem } from "../state"
 import { filterThreads, sortThreadsByRecent, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
 import { AutomationsSurface } from "./AutomationsSurface"
 import { ExtensionsSurface, extensionRows, type ExtensionRow } from "./ExtensionsSurface"
+import { LlmProvidersSurface } from "./LlmProvidersSurface"
 import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
-import { SettingsSurface, SETTINGS_SECTION_COUNT } from "./SettingsSurface"
+import { SettingsSurface, SETTINGS_SECTION_COUNT, settingsSectionAt } from "./SettingsSurface"
 import { SkillsSurface, type SkillDetailView } from "./SkillsSurface"
 import {
   filteredSlashCommands,
@@ -38,7 +40,7 @@ type AppProps = {
   config: ClientConfig
 }
 
-type ActiveOverlay = "automations" | "commands" | "extensions" | "threads" | "models" | "settings" | "skills" | null
+type ActiveOverlay = "automations" | "commands" | "extensions" | "threads" | "models" | "providers" | "settings" | "skills" | null
 const INPUT_HISTORY_LIMIT = 100
 
 export function App({ config }: AppProps) {
@@ -92,6 +94,12 @@ export function App({ config }: AppProps) {
   const [extensionSetupInputKey, setExtensionSetupInputKey] = useState<string | null>(null)
   const [llmConfig, setLlmConfig] = useState<LlmConfigSnapshot | null>(null)
   const [llmConfigError, setLlmConfigError] = useState<string | null>(null)
+  const [llmProvidersLoading, setLlmProvidersLoading] = useState(false)
+  const [llmProviderActionMessage, setLlmProviderActionMessage] = useState<string | null>(null)
+  const [llmProviderModels, setLlmProviderModels] = useState<string[]>([])
+  const [llmProviderSetupInput, setLlmProviderSetupInput] = useState("")
+  const [llmProviderSetupInputKey, setLlmProviderSetupInputKey] = useState<string | null>(null)
+  const [selectedLlmProviderIndex, setSelectedLlmProviderIndex] = useState(0)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const activityFrame = useActivityFrame(state.isThinking)
   const thinkingLabel = thinkingLabelForActivity(state.activity, state.status, state.isThinking)
@@ -100,6 +108,7 @@ export function App({ config }: AppProps) {
   const showExtensions = activeOverlay === "extensions"
   const showThreadPalette = activeOverlay === "threads"
   const showModelPalette = activeOverlay === "models"
+  const showLlmProviders = activeOverlay === "providers"
   const showSettings = activeOverlay === "settings"
   const showSkills = activeOverlay === "skills"
   const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
@@ -298,6 +307,95 @@ export function App({ config }: AppProps) {
       }
       return
     }
+    if (showLlmProviders) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        if (llmProviderSetupInputKey) {
+          setLlmProviderSetupInputKey(null)
+          setLlmProviderSetupInput("")
+        } else {
+          setActiveOverlay(null)
+        }
+        return
+      }
+      if (llmProviderSetupInputKey) {
+        if (key.name === "backspace" || key.name === "delete") {
+          key.preventDefault()
+          key.stopPropagation()
+          setLlmProviderSetupInput((value) => value.slice(0, -1))
+          return
+        }
+        if (key.ctrl && key.name === "u") {
+          key.preventDefault()
+          key.stopPropagation()
+          setLlmProviderSetupInput("")
+          return
+        }
+        if (isPlainEnter(key)) {
+          key.preventDefault()
+          key.stopPropagation()
+          void submitSelectedLlmProviderSetup()
+          return
+        }
+        const inputText = printableKeyText(key)
+        if (inputText) {
+          key.preventDefault()
+          key.stopPropagation()
+          setLlmProviderSetupInput((value) => value + inputText)
+          return
+        }
+        return
+      }
+      if (key.name === "up" || key.name === "k") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedLlmProviderIndex((index) => wrapIndex(index - 1, llmProviders().length))
+        setLlmProviderModels([])
+        setLlmProviderSetupInputKey(null)
+        return
+      }
+      if (key.name === "down" || key.name === "tab" || key.name === "j") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedLlmProviderIndex((index) => wrapIndex(index + 1, llmProviders().length))
+        setLlmProviderModels([])
+        setLlmProviderSetupInputKey(null)
+        return
+      }
+      const text = printableKeyText(key).toLowerCase()
+      if (text === "r") {
+        key.preventDefault()
+        key.stopPropagation()
+        void loadLlmConfig()
+        return
+      }
+      if (text === "t") {
+        key.preventDefault()
+        key.stopPropagation()
+        void testSelectedLlmProvider()
+        return
+      }
+      if (text === "s") {
+        key.preventDefault()
+        key.stopPropagation()
+        openSelectedLlmProviderSetup()
+        return
+      }
+      if (text === "m") {
+        key.preventDefault()
+        key.stopPropagation()
+        void listSelectedLlmProviderModels()
+        return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault()
+        key.stopPropagation()
+        void setSelectedLlmProviderActive()
+        return
+      }
+      return
+    }
     if (showSettings) {
       if (key.name === "escape") {
         key.preventDefault()
@@ -320,6 +418,7 @@ export function App({ config }: AppProps) {
       if (isPlainEnter(key)) {
         key.preventDefault()
         key.stopPropagation()
+        void openSelectedSettingsSection()
         return
       }
       return
@@ -797,19 +896,171 @@ export function App({ config }: AppProps) {
 
   async function openSettingsOverlay() {
     setActiveOverlay("settings")
+    await Promise.allSettled([loadLlmConfig(), loadExtensions(), loadAutomations()])
+  }
+
+  async function openLlmProvidersOverlay() {
+    setActiveOverlay("providers")
+    setLlmProviderActionMessage(null)
+    setLlmProviderModels([])
+    setLlmProviderSetupInput("")
+    setLlmProviderSetupInputKey(null)
     await loadLlmConfig()
   }
 
   async function loadLlmConfig() {
+    setLlmProvidersLoading(true)
     setLlmConfigError(null)
     try {
       const snapshot = await client.llmConfig()
       setLlmConfig(snapshot)
       const active = snapshot.active
       if (active?.model) setSelectedModel(active.model)
+      setSelectedLlmProviderIndex((index) => wrapIndex(index, snapshot.providers?.length ?? 0))
     } catch (error) {
       setLlmConfig(null)
       setLlmConfigError(errorMessage(error))
+    } finally {
+      setLlmProvidersLoading(false)
+    }
+  }
+
+  function llmProviders(): LlmProviderView[] {
+    return [...(llmConfig?.providers ?? [])].sort((a, b) => Number(b.active) - Number(a.active) || (a.description || a.id).localeCompare(b.description || b.id))
+  }
+
+  function selectedLlmProvider(): LlmProviderView | null {
+    const providers = llmProviders()
+    return providers[wrapIndex(selectedLlmProviderIndex, providers.length)] ?? null
+  }
+
+  async function openSelectedSettingsSection() {
+    switch (settingsSectionAt(selectedSettingsIndex)) {
+      case "Providers":
+        await openLlmProvidersOverlay()
+        return
+      case "Extensions":
+        await openExtensionsOverlay()
+        return
+      case "Skills":
+        if (config.mode === "local") {
+          await openSkillsPalette()
+          return
+        }
+        dispatch({ type: "error", message: "WebUI v2 skills setup endpoint is not available yet." })
+        return
+      case "Automations":
+        await openAutomationsOverlay()
+        return
+      default:
+        return
+    }
+  }
+
+  async function setSelectedLlmProviderActive() {
+    const provider = selectedLlmProvider()
+    if (!provider) return
+    const model = provider.active_model || provider.default_model || selectedModel
+    if (provider.api_key_required && !provider.api_key_set) {
+      setLlmConfigError("Provider credentials are required before activation.")
+      return
+    }
+    setLlmProvidersLoading(true)
+    setLlmConfigError(null)
+    setLlmProviderActionMessage(null)
+    try {
+      const snapshot = await client.setActiveLlm(provider.id, model)
+      setLlmConfig(snapshot)
+      setSelectedModel(snapshot.active?.model || model)
+      setLlmProviderActionMessage(`${provider.description || provider.id} is active.`)
+    } catch (error) {
+      setLlmConfigError(errorMessage(error))
+    } finally {
+      setLlmProvidersLoading(false)
+    }
+  }
+
+  function openSelectedLlmProviderSetup() {
+    const provider = selectedLlmProvider()
+    if (!provider) return
+    if (!provider.accepts_api_key && !provider.api_key_required) {
+      setLlmConfigError("This provider does not accept an API key.")
+      return
+    }
+    setLlmConfigError(null)
+    setLlmProviderActionMessage(null)
+    setLlmProviderSetupInput("")
+    setLlmProviderSetupInputKey("api_key")
+  }
+
+  async function submitSelectedLlmProviderSetup() {
+    const provider = selectedLlmProvider()
+    if (!provider || llmProviderSetupInputKey !== "api_key") return
+    const apiKey = llmProviderSetupInput.trim()
+    if (!apiKey) {
+      setLlmConfigError("API key is required.")
+      return
+    }
+    setLlmProvidersLoading(true)
+    setLlmConfigError(null)
+    setLlmProviderActionMessage(null)
+    try {
+      const model = provider.active_model || provider.default_model || selectedModel
+      const snapshot = await client.upsertLlmProvider({
+        id: provider.id,
+        name: provider.description || provider.id,
+        adapter: provider.adapter,
+        base_url: provider.base_url || "",
+        default_model: provider.default_model || model,
+        api_key: apiKey,
+        set_active: provider.active,
+        model,
+      })
+      setLlmConfig(snapshot)
+      if (snapshot.active?.model) setSelectedModel(snapshot.active.model)
+      setLlmProviderSetupInput("")
+      setLlmProviderSetupInputKey(null)
+      setLlmProviderActionMessage("Provider credentials saved.")
+    } catch (error) {
+      setLlmConfigError(errorMessage(error))
+    } finally {
+      setLlmProvidersLoading(false)
+    }
+  }
+
+  async function testSelectedLlmProvider() {
+    const provider = selectedLlmProvider()
+    if (!provider) return
+    setLlmProvidersLoading(true)
+    setLlmConfigError(null)
+    setLlmProviderActionMessage(null)
+    try {
+      const result = await client.testLlmProvider(provider)
+      const ok = result.success ?? result.ok ?? !result.error
+      setLlmProviderActionMessage(ok ? (result.message || "Connection test passed.") : (result.error || result.message || "Connection test failed."))
+    } catch (error) {
+      setLlmConfigError(errorMessage(error))
+    } finally {
+      setLlmProvidersLoading(false)
+    }
+  }
+
+  async function listSelectedLlmProviderModels() {
+    const provider = selectedLlmProvider()
+    if (!provider) return
+    setLlmProvidersLoading(true)
+    setLlmConfigError(null)
+    setLlmProviderActionMessage(null)
+    try {
+      const result = await client.listLlmProviderModels(provider)
+      const models = result.models ?? []
+      setLlmProviderModels(models)
+      setLlmProviderActionMessage(models.length ? `${models.length} models found.` : (result.error || "No models returned."))
+    } catch (error) {
+      setLlmProviderModels([])
+      setLlmConfigError(errorMessage(error))
+    } finally {
+      setLlmProvidersLoading(false)
     }
   }
 
@@ -1390,16 +1641,34 @@ export function App({ config }: AppProps) {
           totalCount={skillList.configured}
           width={width}
         />
+      ) : showLlmProviders ? (
+        <LlmProvidersSurface
+          actionMessage={llmProviderActionMessage}
+          availableModels={llmProviderModels}
+          error={llmConfigError}
+          height={height}
+          loading={llmProvidersLoading}
+          selectedIndex={wrapIndex(selectedLlmProviderIndex, llmProviders().length)}
+          setupInput={llmProviderSetupInput}
+          setupInputLabel={llmProviderSetupInputKey ? "API key" : null}
+          snapshot={llmConfig}
+          width={width}
+        />
       ) : showSettings ? (
         <SettingsSurface
           config={config}
           connected={state.connected}
+          automationCount={automations.length}
+          extensionCount={extensions.length}
+          extensionSetupCount={extensions.filter((extension) => extension.needs_setup).length}
           height={height}
+          llmConfig={llmConfig}
+          llmConfigError={llmConfigError}
           selectedIndex={selectedSettingsIndex}
           selectedModel={selectedModel}
           selectedProvider={providerLabel(config.provider)}
-          llmConfig={llmConfig}
-          llmConfigError={llmConfigError}
+          skillCount={skillList.configured}
+          skillsAvailable={config.mode === "local"}
           status={state.status}
           width={width}
         />
