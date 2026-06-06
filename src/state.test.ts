@@ -1221,6 +1221,106 @@ describe("UI state", () => {
     })
   })
 
+  test("preserves live auth gates across stale in-progress history refreshes", () => {
+    const gated = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "gate_required",
+        request_id: "run-1:gate:auth-google",
+        thread_id: "thread-1",
+        run_id: "run-1",
+        gate_ref: "gate:auth-google",
+        gate_name: "auth",
+        tool_name: "Authentication required",
+        description: "Google needs authentication.",
+        parameters: "",
+        extension_name: null,
+        provider: "google",
+        account_label: "GSuite OAuth",
+        challenge_kind: "oauth_url",
+        authorization_url: "https://accounts.google.com/o/oauth2/v2/auth",
+        expires_at: "2026-05-31T20:00:00Z",
+        resume_kind: { run_id: "run-1", gate_ref: "gate:auth-google" },
+      },
+    })
+    const refreshed = reduceUiState(gated, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_input: "use google",
+            state: "running",
+            started_at: "",
+            tool_calls: [],
+          },
+        ],
+        has_more: false,
+        pending_gate: null,
+        in_progress: {
+          turn_number: 1,
+          user_input: "use google",
+          state: "running",
+          started_at: "",
+        },
+      },
+    })
+
+    expect(refreshed.pendingGate).toMatchObject({
+      request_id: "run-1:gate:auth-google",
+      gate_name: "auth",
+      gate_ref: "gate:auth-google",
+    })
+    expect(refreshed.isThinking).toBe(false)
+    expect(refreshed.activeRunId).toBe("run-1")
+  })
+
+  test("clears live gates after history shows the run is no longer in progress", () => {
+    const gated = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "gate_required",
+        request_id: "run-1:gate:auth-google",
+        thread_id: "thread-1",
+        run_id: "run-1",
+        gate_ref: "gate:auth-google",
+        gate_name: "auth",
+        tool_name: "Authentication required",
+        description: "Google needs authentication.",
+        parameters: "",
+        extension_name: null,
+        provider: "google",
+        account_label: "GSuite OAuth",
+        challenge_kind: "oauth_url",
+        authorization_url: "https://accounts.google.com/o/oauth2/v2/auth",
+        expires_at: "2026-05-31T20:00:00Z",
+        resume_kind: { run_id: "run-1", gate_ref: "gate:auth-google" },
+      },
+    })
+    const refreshed = reduceUiState(gated, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_input: "use google",
+            state: "completed",
+            started_at: "",
+            tool_calls: [],
+          },
+        ],
+        has_more: false,
+        pending_gate: null,
+        in_progress: null,
+      },
+    })
+
+    expect(refreshed.pendingGate).toBeNull()
+    expect(refreshed.isThinking).toBe(false)
+  })
+
   test("correlates projection gates with the active run id", () => {
     const running = reduceUiState(initialUiState, {
       type: "event",
@@ -1252,5 +1352,6 @@ describe("UI state", () => {
       gate_ref: "gate:approval-1",
     })
     expect(state.activeRunId).toBe("run-1")
+    expect(running.isThinking).toBe(false)
   })
 })

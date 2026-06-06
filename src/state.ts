@@ -83,20 +83,22 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
       }
     case "threads":
       return { ...state, threads: action.threads, activeThreadId: action.activeThreadId ?? state.activeThreadId }
-    case "history":
+    case "history": {
+      const pendingGate = pendingGateFromHistory(state, action.history)
       return {
         ...state,
         activeThreadId: action.history.thread_id,
         transcript: mergeHistoryTranscript(state.transcript, action.history),
         historyCursor: action.history.next_cursor ?? null,
         hasOlderHistory: Boolean(action.history.next_cursor),
-        pendingGate: action.history.pending_gate ?? null,
-        activeRunId: action.history.pending_gate?.run_id ?? (action.history.in_progress ? state.activeRunId : null),
+        pendingGate,
+        activeRunId: pendingGate?.run_id ?? (action.history.in_progress ? state.activeRunId : null),
         status: action.history.in_progress ? action.history.in_progress.state : "idle",
-        isThinking: action.history.pending_gate
+        isThinking: pendingGate
           ? false
           : Boolean(action.history.in_progress) || (state.isThinking && !hasAssistantAfterLatestUser(action.history)),
       }
+    }
     case "older_history":
       return {
         ...state,
@@ -168,8 +170,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
       return {
         ...state,
         status: event.status,
-        activeRunId: isActiveRunStatus(event.status) ? event.run_id ?? state.activeRunId : null,
-        isThinking: isActiveRunStatus(event.status),
+        activeRunId: isTrackedRunStatus(event.status) ? event.run_id ?? state.activeRunId : null,
+        isThinking: isThinkingRunStatus(event.status),
       }
     case "stream_chunk":
       return appendAssistantChunk(state, event.content, event.thread_id)
@@ -299,6 +301,14 @@ function assistantTimingMeta(
     if (sentAtMs) meta.durationMs = Math.max(0, completedAtMs - sentAtMs)
   }
   return meta
+}
+
+function pendingGateFromHistory(state: UiState, history: HistoryResponse): PendingGateInfo | null {
+  if (history.pending_gate) return history.pending_gate
+  const existingGate = state.pendingGate
+  if (!existingGate || !history.in_progress) return null
+  if (existingGate.thread_id !== history.thread_id) return null
+  return existingGate
 }
 
 function latestUserSentAtMs(transcript: TranscriptItem[]): number | undefined {
@@ -679,8 +689,12 @@ function isFailedRunStatus(status: string): boolean {
   return ["failed", "recovery_required", "cancelled", "killed"].includes(statusKey(status))
 }
 
-function isActiveRunStatus(status: string): boolean {
-  return ["accepted", "queued", "running", "waiting_for_approval"].includes(statusKey(status))
+function isTrackedRunStatus(status: string): boolean {
+  return ["accepted", "queued", "running", "waiting_for_approval", "waiting_for_auth"].includes(statusKey(status))
+}
+
+function isThinkingRunStatus(status: string): boolean {
+  return ["accepted", "queued", "running"].includes(statusKey(status))
 }
 
 function runFailureMessage(status: string, category?: string | null): string {
