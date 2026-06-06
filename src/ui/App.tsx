@@ -4,13 +4,25 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useReducer, useRef, useState } from "react"
 import type { ClientConfig } from "../config"
 import { GatewayClient } from "../gateway/client"
-import type { AppEvent, HistoryResponse, PendingGateInfo, ThreadInfo } from "../gateway/types"
+import type {
+  AppEvent,
+  AutomationInfo,
+  ExtensionInfo,
+  ExtensionRegistryEntry,
+  ExtensionSetupResponse,
+  HistoryResponse,
+  LlmConfigSnapshot,
+  PendingGateInfo,
+  ThreadInfo,
+} from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
 import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebornProfile"
 import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
 import { filterSkills, parseSkillListOutput, skillDetailPath, type SkillListItem, type SkillListResult } from "../skillList"
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
 import { filterThreads, sortThreadsByRecent, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
+import { AutomationsSurface } from "./AutomationsSurface"
+import { ExtensionsSurface, extensionRows, type ExtensionRow } from "./ExtensionsSurface"
 import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
 import { SettingsSurface, SETTINGS_SECTION_COUNT } from "./SettingsSurface"
 import { SkillsSurface, type SkillDetailView } from "./SkillsSurface"
@@ -26,7 +38,7 @@ type AppProps = {
   config: ClientConfig
 }
 
-type ActiveOverlay = "commands" | "threads" | "models" | "settings" | "skills" | null
+type ActiveOverlay = "automations" | "commands" | "extensions" | "threads" | "models" | "settings" | "skills" | null
 const INPUT_HISTORY_LIMIT = 100
 
 export function App({ config }: AppProps) {
@@ -65,10 +77,27 @@ export function App({ config }: AppProps) {
   const [skillsLoading, setSkillsLoading] = useState(false)
   const [skillsError, setSkillsError] = useState<string | null>(null)
   const [skillDetail, setSkillDetail] = useState<SkillDetailView | null>(null)
+  const [automations, setAutomations] = useState<AutomationInfo[]>([])
+  const [automationsLoading, setAutomationsLoading] = useState(false)
+  const [automationsError, setAutomationsError] = useState<string | null>(null)
+  const [selectedAutomationIndex, setSelectedAutomationIndex] = useState(0)
+  const [extensions, setExtensions] = useState<ExtensionInfo[]>([])
+  const [extensionRegistry, setExtensionRegistry] = useState<ExtensionRegistryEntry[]>([])
+  const [extensionsLoading, setExtensionsLoading] = useState(false)
+  const [extensionsError, setExtensionsError] = useState<string | null>(null)
+  const [extensionActionMessage, setExtensionActionMessage] = useState<string | null>(null)
+  const [selectedExtensionIndex, setSelectedExtensionIndex] = useState(0)
+  const [extensionSetup, setExtensionSetup] = useState<ExtensionSetupResponse | null>(null)
+  const [extensionSetupInput, setExtensionSetupInput] = useState("")
+  const [extensionSetupInputKey, setExtensionSetupInputKey] = useState<string | null>(null)
+  const [llmConfig, setLlmConfig] = useState<LlmConfigSnapshot | null>(null)
+  const [llmConfigError, setLlmConfigError] = useState<string | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const activityFrame = useActivityFrame(state.isThinking)
   const thinkingLabel = thinkingLabelForActivity(state.activity, state.status, state.isThinking)
   const showCommandPalette = activeOverlay === "commands"
+  const showAutomations = activeOverlay === "automations"
+  const showExtensions = activeOverlay === "extensions"
   const showThreadPalette = activeOverlay === "threads"
   const showModelPalette = activeOverlay === "models"
   const showSettings = activeOverlay === "settings"
@@ -77,6 +106,7 @@ export function App({ config }: AppProps) {
   const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
   const filteredThreadList = useMemo(() => filterThreads(paletteThreads, threadSearch, threadPreviews), [paletteThreads, threadSearch, threadPreviews])
   const filteredSkillList = useMemo(() => filterSkills(skillList.skills, skillSearch), [skillList.skills, skillSearch])
+  const extensionList = useMemo(() => extensionRows(extensions, extensionRegistry), [extensions, extensionRegistry])
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
   const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
   const canCancelRun = Boolean((state.pendingGate?.thread_id || state.activeThreadId) && (state.pendingGate?.run_id || state.activeRunId))
@@ -93,6 +123,114 @@ export function App({ config }: AppProps) {
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
       renderer.destroy()
+      return
+    }
+    if (showAutomations) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        setActiveOverlay(null)
+        return
+      }
+      if (key.name === "up" || key.name === "k") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedAutomationIndex((index) => wrapIndex(index - 1, automations.length))
+        return
+      }
+      if (key.name === "down" || key.name === "tab" || key.name === "j") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedAutomationIndex((index) => wrapIndex(index + 1, automations.length))
+        return
+      }
+      if (printableKeyText(key).toLowerCase() === "r") {
+        key.preventDefault()
+        key.stopPropagation()
+        void loadAutomations()
+        return
+      }
+      return
+    }
+    if (showExtensions) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        if (extensionSetupInputKey) {
+          setExtensionSetupInputKey(null)
+          setExtensionSetupInput("")
+        } else {
+          setActiveOverlay(null)
+        }
+        return
+      }
+      if (extensionSetupInputKey) {
+        if (key.name === "backspace" || key.name === "delete") {
+          key.preventDefault()
+          key.stopPropagation()
+          setExtensionSetupInput((value) => value.slice(0, -1))
+          return
+        }
+        if (key.ctrl && key.name === "u") {
+          key.preventDefault()
+          key.stopPropagation()
+          setExtensionSetupInput("")
+          return
+        }
+        if (isPlainEnter(key)) {
+          key.preventDefault()
+          key.stopPropagation()
+          void submitSelectedExtensionSetup()
+          return
+        }
+        const text = printableKeyText(key)
+        if (text) {
+          key.preventDefault()
+          key.stopPropagation()
+          setExtensionSetupInput((value) => value + text)
+          return
+        }
+        return
+      }
+      if (key.name === "up" || key.name === "k") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedExtensionIndex((index) => wrapIndex(index - 1, extensionList.length))
+        setExtensionSetup(null)
+        return
+      }
+      if (key.name === "down" || key.name === "tab" || key.name === "j") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedExtensionIndex((index) => wrapIndex(index + 1, extensionList.length))
+        setExtensionSetup(null)
+        return
+      }
+      const text = printableKeyText(key).toLowerCase()
+      if (text === "r") {
+        key.preventDefault()
+        key.stopPropagation()
+        void loadExtensions()
+        return
+      }
+      if (text === "s") {
+        key.preventDefault()
+        key.stopPropagation()
+        void loadSelectedExtensionSetup()
+        return
+      }
+      if (text === "x") {
+        key.preventDefault()
+        key.stopPropagation()
+        void removeSelectedExtension()
+        return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault()
+        key.stopPropagation()
+        void runSelectedExtensionDefaultAction()
+        return
+      }
       return
     }
     if (showSkills) {
@@ -611,6 +749,70 @@ export function App({ config }: AppProps) {
     setActiveOverlay("models")
   }
 
+  async function openAutomationsOverlay() {
+    setActiveOverlay("automations")
+    await loadAutomations()
+  }
+
+  async function loadAutomations() {
+    setAutomationsLoading(true)
+    setAutomationsError(null)
+    try {
+      const response = await client.automations()
+      setAutomations(response.automations ?? [])
+      setSelectedAutomationIndex((index) => wrapIndex(index, response.automations?.length ?? 0))
+    } catch (error) {
+      setAutomations([])
+      setAutomationsError(errorMessage(error))
+    } finally {
+      setAutomationsLoading(false)
+    }
+  }
+
+  async function openExtensionsOverlay() {
+    setActiveOverlay("extensions")
+    await loadExtensions()
+  }
+
+  async function loadExtensions() {
+    setExtensionsLoading(true)
+    setExtensionsError(null)
+    setExtensionActionMessage(null)
+    try {
+      const [installed, registry] = await Promise.all([client.extensions(), client.extensionRegistry()])
+      setExtensions(installed.extensions ?? [])
+      setExtensionRegistry(registry.entries ?? [])
+      setSelectedExtensionIndex((index) => wrapIndex(index, extensionRows(installed.extensions ?? [], registry.entries ?? []).length))
+      setExtensionSetup(null)
+      setExtensionSetupInput("")
+      setExtensionSetupInputKey(null)
+    } catch (error) {
+      setExtensions([])
+      setExtensionRegistry([])
+      setExtensionsError(errorMessage(error))
+    } finally {
+      setExtensionsLoading(false)
+    }
+  }
+
+  async function openSettingsOverlay() {
+    setActiveOverlay("settings")
+    await loadLlmConfig()
+  }
+
+  async function loadLlmConfig() {
+    setLlmConfigError(null)
+    try {
+      const snapshot = await client.llmConfig()
+      setLlmConfig(snapshot)
+      const active = snapshot.active
+      if (active?.model) setSelectedModel(active.model)
+    } catch (error) {
+      setLlmConfig(null)
+      setLlmConfigError(errorMessage(error))
+    }
+  }
+
   async function openSkillsPalette() {
     setActiveOverlay("skills")
     setSkillsLoading(true)
@@ -661,6 +863,98 @@ export function App({ config }: AppProps) {
     if (!thread) return
     setActiveOverlay(null)
     await loadThread(thread.id)
+  }
+
+  function selectedExtension(): ExtensionRow | null {
+    return extensionList[wrapIndex(selectedExtensionIndex, extensionList.length)] ?? null
+  }
+
+  async function runSelectedExtensionDefaultAction() {
+    const row = selectedExtension()
+    if (!row) return
+    if (!row.installed) {
+      await runExtensionAction(() => client.installExtension(row.entry.package_ref))
+      return
+    }
+    if (row.needsSetup) {
+      await loadSelectedExtensionSetup()
+      return
+    }
+    if (!row.active) {
+      await runExtensionAction(() => client.activateExtension(row.id))
+    }
+  }
+
+  async function removeSelectedExtension() {
+    const row = selectedExtension()
+    if (!row?.installed) return
+    await runExtensionAction(() => client.removeExtension(row.id))
+  }
+
+  async function loadSelectedExtensionSetup() {
+    const row = selectedExtension()
+    if (!row) return
+    setExtensionsLoading(true)
+    setExtensionsError(null)
+    setExtensionActionMessage(null)
+    try {
+      const setup = await client.extensionSetup(row.id)
+      setExtensionSetup(setup)
+      const inputKey = firstSetupInputKey(setup)
+      setExtensionSetupInputKey(inputKey)
+      setExtensionSetupInput("")
+      if (!inputKey) setExtensionActionMessage("Setup is already complete.")
+    } catch (error) {
+      setExtensionsError(errorMessage(error))
+    } finally {
+      setExtensionsLoading(false)
+    }
+  }
+
+  async function submitSelectedExtensionSetup() {
+    const row = selectedExtension()
+    if (!row || !extensionSetupInputKey) return
+    const value = extensionSetupInput.trim()
+    if (!value) {
+      setExtensionsError("Setup value is required.")
+      return
+    }
+    const [kind, name] = extensionSetupInputKey.split(":", 2)
+    const payload = {
+      secrets: kind === "secret" ? { [name]: value } : {},
+      fields: kind === "field" ? { [name]: value } : {},
+    }
+    setExtensionsLoading(true)
+    setExtensionsError(null)
+    try {
+      const setup = await client.submitExtensionSetup(row.id, payload)
+      setExtensionSetup(setup)
+      setExtensionSetupInput("")
+      const inputKey = firstSetupInputKey(setup)
+      setExtensionSetupInputKey(inputKey)
+      setExtensionActionMessage(inputKey ? "Setup value submitted." : "Setup complete.")
+      await loadExtensions()
+    } catch (error) {
+      setExtensionsError(errorMessage(error))
+    } finally {
+      setExtensionsLoading(false)
+    }
+  }
+
+  async function runExtensionAction(action: () => Promise<{ success: boolean; message?: string | null; instructions?: string | null; auth_url?: string | null }>) {
+    setExtensionsLoading(true)
+    setExtensionsError(null)
+    setExtensionActionMessage(null)
+    try {
+      const response = await action()
+      setExtensionActionMessage(response.message || response.instructions || (response.success ? "Extension action complete." : "Extension action failed."))
+      if (response.auth_url) await openExternalUrl(response.auth_url)
+      await loadExtensions()
+    } catch (error) {
+      setExtensionsError(errorMessage(error))
+    } finally {
+      setExtensionsLoading(false)
+    }
   }
 
   async function loadThreadPreviews(threads: ThreadInfo[]) {
@@ -748,6 +1042,14 @@ export function App({ config }: AppProps) {
         clearComposer("skills")
         await openSkillsPalette()
         return
+      case "extensions":
+        clearComposer("extensions")
+        await openExtensionsOverlay()
+        return
+      case "automations":
+        clearComposer("automations")
+        await openAutomationsOverlay()
+        return
       case "new-thread":
         clearComposer()
         await createThread()
@@ -762,6 +1064,7 @@ export function App({ config }: AppProps) {
         return
       case "settings":
         clearComposer("settings")
+        await openSettingsOverlay()
         return
       case "local-command":
         if (command.localArgs && config.mode === "local") {
@@ -1051,7 +1354,29 @@ export function App({ config }: AppProps) {
 
   return (
     <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505" }}>
-      {showSkills ? (
+      {showAutomations ? (
+        <AutomationsSurface
+          automations={automations}
+          error={automationsError}
+          height={height}
+          loading={automationsLoading}
+          selectedIndex={wrapIndex(selectedAutomationIndex, automations.length)}
+          width={width}
+        />
+      ) : showExtensions ? (
+        <ExtensionsSurface
+          actionMessage={extensionActionMessage}
+          error={extensionsError}
+          height={height}
+          loading={extensionsLoading}
+          rows={extensionList}
+          selectedIndex={wrapIndex(selectedExtensionIndex, extensionList.length)}
+          setup={extensionSetup}
+          setupInput={extensionSetupInput}
+          setupInputLabel={extensionSetupInputLabel(extensionSetup, extensionSetupInputKey)}
+          width={width}
+        />
+      ) : showSkills ? (
         <SkillsSurface
           detail={skillDetail}
           error={skillsError}
@@ -1073,6 +1398,8 @@ export function App({ config }: AppProps) {
           selectedIndex={selectedSettingsIndex}
           selectedModel={selectedModel}
           selectedProvider={providerLabel(config.provider)}
+          llmConfig={llmConfig}
+          llmConfigError={llmConfigError}
           status={state.status}
           width={width}
         />
@@ -1118,6 +1445,25 @@ export function App({ config }: AppProps) {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
+}
+
+function firstSetupInputKey(setup: ExtensionSetupResponse): string | null {
+  const secret = (setup.secrets ?? []).find((item) => !item.provided && !item.optional)
+  if (secret) return `secret:${secret.name}`
+  const field = (setup.fields ?? []).find((item) => item.required && !item.value)
+  if (field) return `field:${field.name}`
+  return null
+}
+
+function extensionSetupInputLabel(setup: ExtensionSetupResponse | null, key: string | null): string | null {
+  if (!setup || !key) return null
+  const [kind, name] = key.split(":", 2)
+  if (kind === "secret") {
+    const secret = (setup.secrets ?? []).find((item) => item.name === name)
+    return secret ? `${secret.provider}: ${secret.prompt}` : name
+  }
+  const field = (setup.fields ?? []).find((item) => item.name === name)
+  return field?.prompt || field?.label || name
 }
 
 function modelIndex(models: string[], model: string): number {

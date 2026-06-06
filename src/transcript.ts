@@ -151,8 +151,7 @@ export function mergeHistoryTranscript(current: TranscriptItem[], history: Histo
   const liveThinkingItems = current.filter(
     (item) => item.role === "thinking" && item.threadId === history.thread_id,
   )
-  const preservedThinkingItems = hasAssistantAfterLatestUser(history) ? [] : liveThinkingItems
-  if (liveCapabilityItems.length === 0) return mergeTranscript(transcriptFromHistory(history), preservedThinkingItems)
+  if (liveCapabilityItems.length === 0) return mergeLiveThinkingItems(transcriptFromHistory(history), liveThinkingItems, history)
 
   const liveByResultRef = new Map<string, TranscriptItem>()
   const liveByInvocationId = new Map<string, TranscriptItem>()
@@ -196,7 +195,24 @@ export function mergeHistoryTranscript(current: TranscriptItem[], history: Histo
     transcriptIdByCurrentId,
     history,
   )
-  return mergeTranscript(positionedLiveItems, preservedThinkingItems)
+  return mergeLiveThinkingItems(positionedLiveItems, liveThinkingItems, history)
+}
+
+function mergeLiveThinkingItems(
+  transcript: TranscriptItem[],
+  liveThinkingItems: TranscriptItem[],
+  history: HistoryResponse,
+): TranscriptItem[] {
+  let positioned = transcript
+  for (const item of liveThinkingItems) {
+    if (positioned.some((existing) => existing.id === item.id)) continue
+    const anchorId = assistantAnchorAfterLatestUser(history)
+    const anchorIndex = anchorId ? positioned.findIndex((existing) => existing.id === anchorId) : -1
+    positioned = anchorIndex >= 0
+      ? [...positioned.slice(0, anchorIndex), item, ...positioned.slice(anchorIndex)]
+      : [...positioned, item]
+  }
+  return positioned
 }
 
 export function capabilityPreviewTranscriptId(timelineMessageId: string): string {

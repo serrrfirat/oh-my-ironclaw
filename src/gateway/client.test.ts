@@ -408,6 +408,45 @@ describe("WebChat event mapping", () => {
     ])
   })
 
+  test("maps projection gates to approval requests after run status", () => {
+    const events = mapWebChatEvents(
+      {
+        type: "projection_update",
+        cursor: "cursor-1",
+        state: {
+          thread_id: "thread-1",
+          items: [
+            { run_status: { run_id: "run-1", status: "waiting_for_approval" } },
+            { gate: { gate_ref: "gate:approval-1", headline: "Shell command approval required" } },
+          ],
+        },
+      },
+      "thread-1",
+    )
+
+    expect(events).toEqual([
+      {
+        type: "run_status",
+        status: "waiting_for_approval",
+        run_id: "run-1",
+        failure_category: null,
+        thread_id: "thread-1",
+      },
+      {
+        type: "gate_required",
+        request_id: "gate:approval-1",
+        gate_name: "approval",
+        tool_name: "approval",
+        description: "Shell command approval required",
+        parameters: "",
+        resume_kind: { gate_ref: "gate:approval-1" },
+        thread_id: "thread-1",
+        run_id: null,
+        gate_ref: "gate:approval-1",
+      },
+    ])
+  })
+
   test("maps tool progress to a tool activity event", () => {
     const event = mapWebChatEvent(
       {

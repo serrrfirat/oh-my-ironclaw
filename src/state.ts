@@ -227,15 +227,16 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
         }),
       }
     case "gate_required":
+      const gateRunId = "run_id" in event ? event.run_id ?? state.activeRunId : state.activeRunId
       return {
         ...state,
         isThinking: false,
         status: "waiting for approval",
-        activeRunId: "run_id" in event ? event.run_id : state.activeRunId,
+        activeRunId: gateRunId,
         pendingGate: {
           request_id: event.request_id,
           thread_id: event.thread_id ?? state.activeThreadId ?? "",
-          run_id: "run_id" in event ? event.run_id : null,
+          run_id: gateRunId,
           gate_ref: "gate_ref" in event ? event.gate_ref : null,
           gate_name: event.gate_name,
           tool_name: event.tool_name,
@@ -679,7 +680,7 @@ function isFailedRunStatus(status: string): boolean {
 }
 
 function isActiveRunStatus(status: string): boolean {
-  return ["accepted", "queued", "running"].includes(statusKey(status))
+  return ["accepted", "queued", "running", "waiting_for_approval"].includes(statusKey(status))
 }
 
 function runFailureMessage(status: string, category?: string | null): string {

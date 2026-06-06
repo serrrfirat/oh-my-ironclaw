@@ -2,8 +2,15 @@ import type { ClientConfig } from "../config"
 import { parseSse } from "./sse"
 import type {
   AppEvent,
+  AutomationListResponse,
+  ExtensionActionResponse,
+  ExtensionListResponse,
+  ExtensionRegistryResponse,
+  ExtensionSetupResponse,
   GateResolveRequest,
   HistoryResponse,
+  LifecyclePackageRef,
+  LlmConfigSnapshot,
   ManualTokenSecretSubmitRequest,
   ManualTokenSetupResponse,
   ManualTokenSubmitRequest,
@@ -149,6 +156,71 @@ export class GatewayClient {
         body: JSON.stringify({ client_action_id: actionId("cancel") }),
       },
     )
+  }
+
+  async automations(limit = 50): Promise<AutomationListResponse> {
+    const params = new URLSearchParams({ limit: String(limit) })
+    return this.requestJson<AutomationListResponse>(`/api/webchat/v2/automations?${params}`, { method: "GET" })
+  }
+
+  async extensions(): Promise<ExtensionListResponse> {
+    return this.requestJson<ExtensionListResponse>("/api/webchat/v2/extensions", { method: "GET" })
+  }
+
+  async extensionRegistry(): Promise<ExtensionRegistryResponse> {
+    return this.requestJson<ExtensionRegistryResponse>("/api/webchat/v2/extensions/registry", { method: "GET" })
+  }
+
+  async installExtension(packageRef: LifecyclePackageRef): Promise<ExtensionActionResponse> {
+    return this.requestJson<ExtensionActionResponse>("/api/webchat/v2/extensions/install", {
+      method: "POST",
+      body: JSON.stringify({ package_ref: packageRef }),
+    })
+  }
+
+  async activateExtension(packageId: string): Promise<ExtensionActionResponse> {
+    return this.requestJson<ExtensionActionResponse>(
+      `/api/webchat/v2/extensions/${encodeURIComponent(packageId)}/activate`,
+      { method: "POST" },
+    )
+  }
+
+  async removeExtension(packageId: string): Promise<ExtensionActionResponse> {
+    return this.requestJson<ExtensionActionResponse>(
+      `/api/webchat/v2/extensions/${encodeURIComponent(packageId)}/remove`,
+      { method: "POST" },
+    )
+  }
+
+  async extensionSetup(packageId: string): Promise<ExtensionSetupResponse> {
+    return this.requestJson<ExtensionSetupResponse>(
+      `/api/webchat/v2/extensions/${encodeURIComponent(packageId)}/setup`,
+      { method: "GET" },
+    )
+  }
+
+  async submitExtensionSetup(
+    packageId: string,
+    payload: { secrets?: Record<string, string>; fields?: Record<string, string> },
+  ): Promise<ExtensionSetupResponse> {
+    return this.requestJson<ExtensionSetupResponse>(
+      `/api/webchat/v2/extensions/${encodeURIComponent(packageId)}/setup`,
+      {
+        method: "POST",
+        body: JSON.stringify({ action: "submit", payload }),
+      },
+    )
+  }
+
+  async llmConfig(): Promise<LlmConfigSnapshot> {
+    return this.requestJson<LlmConfigSnapshot>("/api/webchat/v2/llm/providers", { method: "GET" })
+  }
+
+  async setActiveLlm(providerId: string, model?: string | null): Promise<LlmConfigSnapshot> {
+    return this.requestJson<LlmConfigSnapshot>("/api/webchat/v2/llm/active", {
+      method: "POST",
+      body: JSON.stringify({ provider_id: providerId, model }),
+    })
   }
 
   async *events(threadId?: string | null, lastEventId?: string): AsyncGenerator<AppEvent> {
@@ -561,6 +633,7 @@ function capabilityDisplayPreviewEvent(frame: RebornWebChatEventFrame, threadId:
 function projectionEvents(frame: RebornWebChatEventFrame, threadId: string): AppEvent[] {
   const items = frame.state?.items ?? []
   const runStatusEvents: AppEvent[] = []
+  const gateEvents: AppEvent[] = []
   const thinkingEvents: AppEvent[] = []
   const workSummaryEvents: AppEvent[] = []
   const skillActivationEvents: AppEvent[] = []
@@ -573,6 +646,18 @@ function projectionEvents(frame: RebornWebChatEventFrame, threadId: string): App
         run_id: runStatus.run_id,
         failure_category: runStatus.failure_category,
         thread_id: threadId,
+    })))
+    gateEvents.push(...gateFromProjectionItem(item).map((gate): AppEvent => ({
+      type: "gate_required",
+      request_id: gate.gate_ref,
+      gate_name: "approval",
+      tool_name: "approval",
+      description: gate.headline,
+      parameters: "",
+      resume_kind: { gate_ref: gate.gate_ref },
+      thread_id: threadId,
+      run_id: null,
+      gate_ref: gate.gate_ref,
     })))
     thinkingEvents.push(...thinkingFromProjectionItem(item).map((thinking): AppEvent => ({
       type: "thinking_update",
@@ -599,7 +684,7 @@ function projectionEvents(frame: RebornWebChatEventFrame, threadId: string): App
     textEvents.push(...textBodyFromProjectionItem(item).map((content): AppEvent => ({ type: "response", content, thread_id: threadId })))
   }
 
-  const events = [...runStatusEvents, ...thinkingEvents, ...workSummaryEvents, ...skillActivationEvents, ...textEvents]
+  const events = [...runStatusEvents, ...gateEvents, ...thinkingEvents, ...workSummaryEvents, ...skillActivationEvents, ...textEvents]
   return events.length > 0 ? events : [{ type: "status", message: frame.type, thread_id: threadId }]
 }
 
@@ -734,6 +819,21 @@ function runStatusFromRecord(
           : null,
     },
   ]
+}
+
+function gateFromProjectionItem(item: Record<string, unknown>): Array<{ gate_ref: string; headline: string }> {
+  if (item.type === "gate") return gateFromProjectionRecord(item)
+  const gate = item.gate
+  if (gate && typeof gate === "object") return gateFromProjectionRecord(gate as Record<string, unknown>)
+  return []
+}
+
+function gateFromProjectionRecord(record: Record<string, unknown>): Array<{ gate_ref: string; headline: string }> {
+  if (typeof record.gate_ref !== "string") return []
+  return [{
+    gate_ref: record.gate_ref,
+    headline: typeof record.headline === "string" ? record.headline : "Approval required",
+  }]
 }
 
 function actionId(prefix: string): string {

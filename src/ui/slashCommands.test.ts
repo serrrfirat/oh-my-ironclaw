@@ -13,7 +13,18 @@ describe("slash commands", () => {
     expect(slashCommandsForMode("remote")).toContainEqual(expect.objectContaining({
       name: "/extension",
       source: "remote",
+      action: "extensions",
     }))
+  })
+
+  test("exposes automations overlay command in every mode", () => {
+    for (const mode of ["remote", "local"] as const) {
+      expect(slashCommandsForMode(mode)).toContainEqual(expect.objectContaining({
+        name: "/automations",
+        source: "tui",
+        action: "automations",
+      }))
+    }
   })
 
   test("exposes TUI new thread command in every mode", () => {

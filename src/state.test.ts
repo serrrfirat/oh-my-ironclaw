@@ -462,7 +462,7 @@ describe("UI state", () => {
     )
   })
 
-  test("keeps live thinking through in-progress history but drops it after a final reply", () => {
+  test("keeps live thinking through history refreshes before a final reply", () => {
     const withThinking = reduceUiState(initialUiState, {
       type: "event",
       event: {
@@ -516,7 +516,12 @@ describe("UI state", () => {
     })
 
     expect(inProgress.transcript.map((item) => item.role)).toEqual(["user", "thinking"])
-    expect(completed.transcript.map((item) => item.role)).toEqual(["user", "assistant"])
+    expect(completed.transcript.map((item) => item.role)).toEqual(["user", "thinking", "assistant"])
+    expect(completed.transcript[1]).toMatchObject({
+      id: "thinking-thinking:run-1:1",
+      role: "thinking",
+      text: "checking context",
+    })
   })
 
   test("tracks tool progress as activity", () => {
@@ -1214,5 +1219,38 @@ describe("UI state", () => {
       provider: "google",
       account_label: "GSuite OAuth",
     })
+  })
+
+  test("correlates projection gates with the active run id", () => {
+    const running = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "run_status",
+        status: "waiting_for_approval",
+        run_id: "run-1",
+        thread_id: "thread-1",
+      },
+    })
+    const state = reduceUiState(running, {
+      type: "event",
+      event: {
+        type: "gate_required",
+        request_id: "gate:approval-1",
+        thread_id: "thread-1",
+        run_id: null,
+        gate_ref: "gate:approval-1",
+        gate_name: "approval",
+        tool_name: "approval",
+        description: "Shell command approval required",
+        parameters: "",
+        resume_kind: { gate_ref: "gate:approval-1" },
+      },
+    })
+
+    expect(state.pendingGate).toMatchObject({
+      run_id: "run-1",
+      gate_ref: "gate:approval-1",
+    })
+    expect(state.activeRunId).toBe("run-1")
   })
 })

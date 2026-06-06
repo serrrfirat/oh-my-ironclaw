@@ -172,7 +172,7 @@ The client currently uses:
 
 Mapped SSE events include `running`, `capability_progress`, `capability_activity`, `gate`, `final_reply`, `failed`, `projection_snapshot`, and `projection_update`.
 
-`capability_activity` is rendered as a tool/activity row, but it is metadata-only: invocation id, capability id, status, provider/runtime/process metadata, output byte count, and safe error kind. Full tool input/output previews require a separate server-side display-preview event before the TUI can render opencode-style expandable tool output.
+`capability_activity` is rendered as a tool/activity row, but it is metadata-only: invocation id, capability id, status, provider/runtime/process metadata, output byte count, and safe error kind. Full tool input/output previews require a separate server-side display-preview event before the TUI can render expandable tool output.
 
 ## LocalDevYolo Splash
 

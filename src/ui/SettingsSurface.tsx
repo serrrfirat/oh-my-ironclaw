@@ -1,4 +1,5 @@
 import type { ClientConfig } from "../config"
+import type { LlmConfigSnapshot } from "../gateway/types"
 
 type SettingsSection = "Profile" | "Connection" | "Models" | "Secrets" | "Tools" | "Approvals"
 type SettingsMenuItem = { label: SettingsSection; meta: string }
@@ -14,6 +15,8 @@ export function SettingsSurface({
   selectedIndex,
   selectedModel,
   selectedProvider,
+  llmConfig,
+  llmConfigError,
   status,
   width,
 }: {
@@ -23,6 +26,8 @@ export function SettingsSurface({
   selectedIndex: number
   selectedModel: string
   selectedProvider: string
+  llmConfig?: LlmConfigSnapshot | null
+  llmConfigError?: string | null
   status: string
   width: number
 }) {
@@ -60,6 +65,8 @@ export function SettingsSurface({
           config={config}
           connected={connected}
           item={selectedItem}
+          llmConfig={llmConfig}
+          llmConfigError={llmConfigError}
           selectedModel={selectedModel}
           selectedProvider={selectedProvider}
           sourcePath={sourcePath}
@@ -87,6 +94,8 @@ export function SettingsSurface({
           config={config}
           connected={connected}
           item={selectedItem}
+          llmConfig={llmConfig}
+          llmConfigError={llmConfigError}
           selectedModel={selectedModel}
           selectedProvider={selectedProvider}
           sourcePath={sourcePath}
@@ -160,6 +169,8 @@ function SettingsPreview({
   config,
   connected,
   item,
+  llmConfig,
+  llmConfigError,
   selectedModel,
   selectedProvider,
   sourcePath,
@@ -170,6 +181,8 @@ function SettingsPreview({
   config: ClientConfig
   connected: boolean
   item: SettingsMenuItem
+  llmConfig?: LlmConfigSnapshot | null
+  llmConfigError?: string | null
   selectedModel: string
   selectedProvider: string
   sourcePath: string
@@ -180,6 +193,8 @@ function SettingsPreview({
     authState,
     config,
     connected,
+    llmConfig,
+    llmConfigError,
     selectedModel,
     selectedProvider,
     sourcePath,
@@ -233,13 +248,15 @@ function settingsFieldsForSection(
     authState: string
     config: ClientConfig
     connected: boolean
+    llmConfig?: LlmConfigSnapshot | null
+    llmConfigError?: string | null
     selectedModel: string
     selectedProvider: string
     sourcePath: string
     status: string
   },
 ) {
-  const { authState, config, connected, selectedModel, selectedProvider, sourcePath, status } = context
+  const { authState, config, connected, llmConfig, llmConfigError, selectedModel, selectedProvider, sourcePath, status } = context
   switch (section) {
     case "Connection":
       return [
@@ -249,11 +266,21 @@ function settingsFieldsForSection(
         { label: "mode", value: config.mode },
       ]
     case "Models":
+      if (llmConfigError) {
+        return [
+          { label: "error", value: llmConfigError },
+          { label: "active", value: selectedModel },
+          { label: "provider", value: selectedProvider || "unknown" },
+          { label: "source", value: "WebChat v2 LLM providers" },
+        ]
+      }
       return [
         { label: "active", value: selectedModel },
-        { label: "provider", value: selectedProvider || "unknown" },
-        { label: "command", value: "/model" },
-        { label: "source", value: "Reborn product workflow" },
+        { label: "provider", value: llmConfig?.active?.provider_id || selectedProvider || "unknown" },
+        { label: "providers", value: String(llmConfig?.providers?.length ?? 0) },
+        { label: "api keys", value: providerKeySummary(llmConfig) },
+        { label: "models", value: providerModelSummary(llmConfig) },
+        { label: "source", value: "WebChat v2 LLM providers" },
       ]
     case "Secrets":
       return [
@@ -299,6 +326,21 @@ function SettingsField({ label, value, width }: { label: string; value: string; 
   )
 }
 
+function providerKeySummary(llmConfig?: LlmConfigSnapshot | null): string {
+  const providers = llmConfig?.providers ?? []
+  if (providers.length === 0) return "unknown"
+  const required = providers.filter((provider) => provider.api_key_required).length
+  const set = providers.filter((provider) => provider.api_key_set).length
+  return `${set} set · ${required} required`
+}
+
+function providerModelSummary(llmConfig?: LlmConfigSnapshot | null): string {
+  const activeProvider = llmConfig?.providers?.find((provider) => provider.active)
+  if (!activeProvider) return "unknown"
+  const activeModel = activeProvider.active_model || llmConfig?.active?.model || activeProvider.default_model
+  return `${activeModel} · ${activeProvider.can_list_models ? "listable" : "fixed"}`
+}
+
 function SettingsFooter({ width }: { width: number }) {
   return (
     <box style={{ width, height: 1, flexDirection: "row", marginTop: 1 }}>
@@ -310,7 +352,7 @@ function SettingsFooter({ width }: { width: number }) {
 function SettingsDivider({ width }: { width: number }) {
   return (
     <box style={{ height: 1 }}>
-      <text fg="#1f1f1f">{padEnd("", width).replaceAll(" ", "─")}</text>
+      <text fg="#1f1f1f">{padEnd("", width).replaceAll(" ", "-")}</text>
     </box>
   )
 }
@@ -322,8 +364,8 @@ function padEnd(value: string, width: number) {
 function truncate(value: string, width: number) {
   if (width <= 0) return ""
   if (value.length <= width) return value
-  if (width <= 1) return "…".slice(0, width)
-  return `${value.slice(0, width - 1)}…`
+  if (width <= 3) return ".".repeat(width)
+  return `${value.slice(0, width - 3)}...`
 }
 
 function wrapIndex(index: number, length: number) {

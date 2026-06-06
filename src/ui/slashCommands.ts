@@ -1,6 +1,17 @@
 import type { ClientMode } from "../config"
 
-export type SlashCommandAction = "threads" | "models" | "skills" | "new-thread" | "cancel-run" | "load-older" | "settings" | "local-command" | "quit"
+export type SlashCommandAction =
+  | "threads"
+  | "models"
+  | "skills"
+  | "extensions"
+  | "automations"
+  | "new-thread"
+  | "cancel-run"
+  | "load-older"
+  | "settings"
+  | "local-command"
+  | "quit"
 export type SlashCommandSource = "remote" | "local" | "tui"
 export type SlashCommand = {
   name: string
@@ -27,6 +38,7 @@ const REMOTE_EXTENSION_COMMAND: SlashCommand = {
   name: "/extension",
   description: "Show product workflow extension lifecycle",
   source: "remote",
+  action: "extensions",
 }
 
 const LOCAL_SKILLS_COMMAND: SlashCommand = {
@@ -108,6 +120,7 @@ const LOCAL_CLI_COMMANDS: SlashCommand[] = [
 
 const TUI_CONTROL_COMMANDS: SlashCommand[] = [
   { name: "/new", description: "Start a new thread", source: "tui", action: "new-thread" },
+  { name: "/automations", description: "Open schedule automation dashboard", source: "tui", action: "automations" },
   { name: "/settings", description: "Open settings dashboard", source: "tui", action: "settings" },
   { name: "/threads", description: "Open thread picker", source: "tui", action: "threads" },
   { name: "/history", description: "Load older timeline messages", source: "tui", action: "load-older" },
