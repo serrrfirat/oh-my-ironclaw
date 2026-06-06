@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { SyntaxStyle, type KeyEvent, type TextareaRenderable } from "@opentui/core"
-import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
+import { useKeyboard, useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useReducer, useRef, useState } from "react"
 import type { ClientConfig } from "../config"
 import { GatewayClient } from "../gateway/client"
@@ -69,6 +69,7 @@ export function App({ config }: AppProps) {
   const inputHistoryIndexRef = useRef<number | null>(null)
   const inputHistoryDraftRef = useRef("")
   const suppressInputHistoryResetRef = useRef(false)
+  const lastSelectedTextRef = useRef("")
   const authTokenCredentialRef = useRef<{ gateKey: string | null; credentialRef: string | null }>({ gateKey: null, credentialRef: null })
   const [state, dispatch] = useReducer(reduceUiState, initialUiState)
   const [input, setInput] = useState("")
@@ -152,9 +153,22 @@ export function App({ config }: AppProps) {
     })
   }
 
+  useSelectionHandler((selection) => {
+    const selectedText = selection.getSelectedText()
+    if (!selectedText) return
+    lastSelectedTextRef.current = selectedText
+    copyTextToClipboard(selectedText)
+  })
+
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
       renderer.destroy()
+      return
+    }
+    if (isCommandCopy(key)) {
+      key.preventDefault()
+      key.stopPropagation()
+      copyTextToClipboard(lastSelectedTextRef.current || textareaRef.current?.plainText || input)
       return
     }
     if (showAutomations) {
@@ -780,6 +794,12 @@ export function App({ config }: AppProps) {
         void runSlashCommand(slashCommands[selectedCommandIndex] ?? slashCommands[0])
         return
       }
+    }
+    if (isCommandSpace(key)) {
+      key.preventDefault()
+      key.stopPropagation()
+      clearComposer()
+      return
     }
     if (isPlainEnter(key)) {
       key.preventDefault()
@@ -1731,6 +1751,10 @@ export function App({ config }: AppProps) {
     resetInputHistoryNavigation()
   }
 
+  function copyTextToClipboard(text: string) {
+    if (text) renderer.copyToClipboardOSC52(text)
+  }
+
   function setComposerText(value: string) {
     suppressInputHistoryResetRef.current = true
     setInput(value)
@@ -2279,6 +2303,18 @@ function isPlainEnter(key: {
     !key.super &&
     !key.hyper
   )
+}
+
+function hasCommandModifier(key: Pick<KeyEvent, "meta" | "super">): boolean {
+  return key.meta || Boolean(key.super)
+}
+
+function isCommandCopy(key: KeyEvent): boolean {
+  return hasCommandModifier(key) && key.name.toLowerCase() === "c"
+}
+
+function isCommandSpace(key: KeyEvent): boolean {
+  return hasCommandModifier(key) && (key.name === "space" || key.sequence === " ")
 }
 
 function printableKeyText(key: KeyEvent): string {
