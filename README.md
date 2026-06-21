@@ -19,9 +19,9 @@ From an IronClaw Reborn source checkout:
 ```bash
 IRONCLAW_REBORN_WEBUI_TOKEN=local-dev-token \
 IRONCLAW_REBORN_WEBUI_USER_ID=local-user \
-cargo run -p ironclaw \
+cargo run -p ironclaw_reborn_cli \
   --features webui-v2-beta \
-  --bin ironclaw \
+  --bin ironclaw-reborn \
   -- serve --host 127.0.0.1 --port 3000
 ```
 
@@ -67,7 +67,7 @@ bun run dev
 With `OPEN_IRONCLAW_REBORN_SOURCE` set, local commands run as:
 
 ```bash
-cargo run -p ironclaw --features "$OPEN_IRONCLAW_REBORN_FEATURES" --bin ironclaw -- <command>
+cargo run -p ironclaw_reborn_cli --features "$OPEN_IRONCLAW_REBORN_FEATURES" --bin ironclaw-reborn -- <command>
 ```
 
 If `OPEN_IRONCLAW_REBORN_FEATURES` is unset, the `--features` argument is omitted.
