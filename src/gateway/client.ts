@@ -1,14 +1,22 @@
 import type { ClientConfig } from "../config"
 import { parseSse } from "./sse"
 import type {
+  AccountLoginLinkResponse,
+  AccountTracesResponse,
   AppEvent,
+  AttachmentBytes,
   AutomationListResponse,
+  AutomationMutationResponse,
   CodexLoginStart,
   ConnectableChannelListResponse,
+  CreateProjectRequest,
   ExtensionActionResponse,
   ExtensionListResponse,
   ExtensionRegistryResponse,
   ExtensionSetupResponse,
+  FsListResponse,
+  FsMountsResponse,
+  GatewayErrorBody,
   GateResolveRequest,
   HistoryResponse,
   LifecyclePackageRef,
@@ -18,6 +26,8 @@ import type {
   LlmProviderTestResult,
   LlmProviderUpsertPayload,
   LlmProviderView,
+  LogQuery,
+  LogQueryResponse,
   ManualTokenSecretSubmitRequest,
   ManualTokenSetupResponse,
   ManualTokenSubmitRequest,
@@ -26,18 +36,39 @@ import type {
   NearAiLoginStart,
   NearAiWalletLoginRequest,
   NearAiWalletLoginResult,
+  OutboundDeliveryTargetListResponse,
+  OutboundPreferencesResponse,
+  OutgoingAttachment,
+  ProjectFsListResponse,
+  ProjectFsStatResponse,
+  ProjectListResponse,
+  ProjectMemberListResponse,
+  ProjectResponse,
+  ProjectRole,
   RebornCancelRunResponse,
   RebornCreateThreadResponse,
+  RebornDeleteThreadResponse,
   RebornListThreadsResponse,
   RebornMessageRecord,
+  RebornRetryRunResponse,
   RebornSubmitTurnResponse,
   RebornThreadRecord,
   RebornTimelineResponse,
   RebornWebChatEventFrame,
   SendMessageResponse,
+  SessionResponse,
+  SettingsToolEntryResponse,
+  SettingsToolPermissionState,
+  SettingsToolsResponse,
+  SkillActionResponse,
+  SkillContentResponse,
+  SkillListResponse,
+  SkillSearchResponse,
   TimelineMessageInfo,
   ThreadInfo,
   ThreadListResponse,
+  TraceCreditsResponse,
+  TraceHoldAuthorizeResponse,
   TurnInfo,
 } from "./types"
 
@@ -95,24 +126,74 @@ export class GatewayClient {
     }
   }
 
-  async send(content: string, threadId?: string | null): Promise<SendMessageResponse> {
+  async send(
+    content: string,
+    threadId?: string | null,
+    options?: { attachments?: OutgoingAttachment[]; model?: string | null },
+  ): Promise<SendMessageResponse> {
     const targetThreadId = threadId ?? (await this.createThread()).thread.thread_id
+    const attachments = options?.attachments ?? []
     const response = await this.requestJson<RebornSubmitTurnResponse>(
       `/api/webchat/v2/threads/${encodeURIComponent(targetThreadId)}/messages`,
       {
         method: "POST",
         body: JSON.stringify({
-          content,
           client_action_id: actionId("message"),
+          content,
+          ...(attachments.length > 0 ? { attachments } : {}),
+          ...(options?.model ? { model: options.model } : {}),
         }),
       },
     )
+    return submitTurnToSendResponse(response)
+  }
+
+  async deleteThread(threadId: string): Promise<RebornDeleteThreadResponse> {
+    return this.requestJson<RebornDeleteThreadResponse>(
+      `/api/webchat/v2/threads/${encodeURIComponent(threadId)}`,
+      { method: "DELETE" },
+    )
+  }
+
+  async session(): Promise<SessionResponse> {
+    return this.requestJson<SessionResponse>("/api/webchat/v2/session", { method: "GET" })
+  }
+
+  // Count threads waiting on approval, for the approval-inbox badge.
+  async approvalInbox(limit = 100): Promise<{ threads: RebornThreadRecord[]; count: number }> {
+    const params = new URLSearchParams({ limit: String(limit), needs_approval: "true" })
+    const page = await this.requestJson<RebornListThreadsResponse>(
+      `/api/webchat/v2/threads?${params}`,
+      { method: "GET" },
+    ).catch((error: unknown) => {
+      if (isUnavailableThreadList(error)) return { threads: [], next_cursor: null }
+      throw error
+    })
+    return { threads: page.threads, count: page.threads.length }
+  }
+
+  // Raw bytes of one landed attachment (image/pdf/etc.), for save-to-file.
+  async attachment(threadId: string, messageId: string, attachmentId: string): Promise<AttachmentBytes> {
+    const response = await this.request(
+      `/api/webchat/v2/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: "GET" },
+    )
+    const bytes = new Uint8Array(await response.arrayBuffer())
     return {
-      message_id: response.accepted_message_ref,
-      status: response.status,
-      thread_id: response.thread_id,
-      run_id: response.outcome === "deferred_busy" ? response.active_run_id : response.run_id,
+      mime_type: response.headers.get("Content-Type") ?? "application/octet-stream",
+      filename: filenameFromContentDisposition(response.headers.get("Content-Disposition")),
+      bytes,
     }
+  }
+
+  async retryRun(threadId: string, runId: string): Promise<RebornRetryRunResponse> {
+    return this.requestJson<RebornRetryRunResponse>(
+      `/api/webchat/v2/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}/retry`,
+      {
+        method: "POST",
+        body: JSON.stringify({ client_action_id: actionId("retry") }),
+      },
+    )
   }
 
   async resolveGate(payload: GateResolveRequest): Promise<SendMessageResponse> {
@@ -283,21 +364,377 @@ export class GatewayClient {
     return this.requestJson<CodexLoginStart>("/api/webchat/v2/llm/codex/login", { method: "POST" })
   }
 
+  // ---- Skills (remote HTTP) ----
+
+  async skills(): Promise<SkillListResponse> {
+    return this.requestJson<SkillListResponse>("/api/webchat/v2/skills", { method: "GET" })
+  }
+
+  async searchSkills(query: string): Promise<SkillSearchResponse> {
+    return this.requestJson<SkillSearchResponse>("/api/webchat/v2/skills/search", {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    })
+  }
+
+  async installSkill(name: string, content?: string | null): Promise<SkillActionResponse> {
+    return this.requestJson<SkillActionResponse>("/api/webchat/v2/skills/install", {
+      method: "POST",
+      body: JSON.stringify({ name, ...(content != null ? { content } : {}) }),
+    })
+  }
+
+  async skillContent(name: string): Promise<SkillContentResponse> {
+    return this.requestJson<SkillContentResponse>(
+      `/api/webchat/v2/skills/${encodeURIComponent(name)}`,
+      { method: "GET" },
+    )
+  }
+
+  async updateSkill(name: string, content: string): Promise<SkillActionResponse> {
+    return this.requestJson<SkillActionResponse>(
+      `/api/webchat/v2/skills/${encodeURIComponent(name)}`,
+      { method: "PUT", body: JSON.stringify({ content }) },
+    )
+  }
+
+  async removeSkill(name: string): Promise<SkillActionResponse> {
+    return this.requestJson<SkillActionResponse>(
+      `/api/webchat/v2/skills/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    )
+  }
+
+  async setSkillAutoActivate(name: string, enabled: boolean): Promise<SkillActionResponse> {
+    return this.requestJson<SkillActionResponse>(
+      `/api/webchat/v2/skills/${encodeURIComponent(name)}/auto-activate`,
+      { method: "POST", body: JSON.stringify({ enabled }) },
+    )
+  }
+
+  async setAutoActivateLearned(enabled: boolean): Promise<SkillActionResponse> {
+    return this.requestJson<SkillActionResponse>("/api/webchat/v2/skills/auto-activate-learned", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    })
+  }
+
+  // ---- Settings: tools / approvals ----
+
+  async settingsTools(): Promise<SettingsToolsResponse> {
+    return this.requestJson<SettingsToolsResponse>("/api/webchat/v2/settings/tools", { method: "GET" })
+  }
+
+  async setSettingsToolsAutoApprove(enabled: boolean): Promise<SettingsToolEntryResponse> {
+    return this.requestJson<SettingsToolEntryResponse>("/api/webchat/v2/settings/tools", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    })
+  }
+
+  async setSettingsToolPermission(
+    capabilityId: string,
+    state: SettingsToolPermissionState,
+  ): Promise<SettingsToolEntryResponse> {
+    return this.requestJson<SettingsToolEntryResponse>(
+      `/api/webchat/v2/settings/tools/${encodeURIComponent(capabilityId)}`,
+      { method: "POST", body: JSON.stringify({ state }) },
+    )
+  }
+
+  // ---- Automation mutations ----
+
+  async pauseAutomation(automationId: string): Promise<AutomationMutationResponse> {
+    return this.requestJson<AutomationMutationResponse>(
+      `/api/webchat/v2/automations/${encodeURIComponent(automationId)}/pause`,
+      { method: "POST" },
+    )
+  }
+
+  async resumeAutomation(automationId: string): Promise<AutomationMutationResponse> {
+    return this.requestJson<AutomationMutationResponse>(
+      `/api/webchat/v2/automations/${encodeURIComponent(automationId)}/resume`,
+      { method: "POST" },
+    )
+  }
+
+  async renameAutomation(automationId: string, name: string): Promise<AutomationMutationResponse> {
+    return this.requestJson<AutomationMutationResponse>(
+      `/api/webchat/v2/automations/${encodeURIComponent(automationId)}`,
+      { method: "POST", body: JSON.stringify({ name }) },
+    )
+  }
+
+  async deleteAutomation(automationId: string): Promise<AutomationMutationResponse> {
+    return this.requestJson<AutomationMutationResponse>(
+      `/api/webchat/v2/automations/${encodeURIComponent(automationId)}`,
+      { method: "DELETE" },
+    )
+  }
+
+  // ---- Outbound preferences / targets ----
+
+  async outboundPreferences(): Promise<OutboundPreferencesResponse> {
+    return this.requestJson<OutboundPreferencesResponse>("/api/webchat/v2/outbound/preferences", {
+      method: "GET",
+    })
+  }
+
+  // Passing null clears the saved final-reply target. `default_modality` is
+  // response-only in the server contract, so it is never sent here.
+  async setOutboundPreferences(finalReplyTargetId: string | null): Promise<OutboundPreferencesResponse> {
+    return this.requestJson<OutboundPreferencesResponse>("/api/webchat/v2/outbound/preferences", {
+      method: "POST",
+      body: JSON.stringify({ final_reply_target_id: finalReplyTargetId }),
+    })
+  }
+
+  async outboundTargets(): Promise<OutboundDeliveryTargetListResponse> {
+    return this.requestJson<OutboundDeliveryTargetListResponse>("/api/webchat/v2/outbound/targets", {
+      method: "GET",
+    })
+  }
+
+  // ---- Logs ----
+
+  async logs(query: LogQuery = {}): Promise<LogQueryResponse> {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) {
+      if (value === undefined || value === null) continue
+      params.set(key, String(value))
+    }
+    const search = params.toString()
+    return this.requestJson<LogQueryResponse>(`/api/webchat/v2/logs${search ? `?${search}` : ""}`, {
+      method: "GET",
+    })
+  }
+
+  // ---- Traces ----
+
+  async traceCredits(): Promise<TraceCreditsResponse> {
+    return this.requestJson<TraceCreditsResponse>("/api/webchat/v2/traces/credit", { method: "GET" })
+  }
+
+  async traceAccount(): Promise<AccountTracesResponse> {
+    return this.requestJson<AccountTracesResponse>("/api/webchat/v2/traces/account", { method: "GET" })
+  }
+
+  async traceAccountLoginLink(): Promise<AccountLoginLinkResponse> {
+    return this.requestJson<AccountLoginLinkResponse>("/api/webchat/v2/traces/account-login-link", {
+      method: "POST",
+    })
+  }
+
+  async authorizeTraceHold(submissionId: string): Promise<TraceHoldAuthorizeResponse> {
+    return this.requestJson<TraceHoldAuthorizeResponse>(
+      `/api/webchat/v2/traces/holds/${encodeURIComponent(submissionId)}/authorize`,
+      { method: "POST" },
+    )
+  }
+
+  // ---- Thread-scoped project files ----
+
+  async threadFiles(threadId: string, path?: string): Promise<ProjectFsListResponse> {
+    const params = new URLSearchParams()
+    if (path) params.set("path", path)
+    const search = params.toString()
+    return this.requestJson<ProjectFsListResponse>(
+      `/api/webchat/v2/threads/${encodeURIComponent(threadId)}/files${search ? `?${search}` : ""}`,
+      { method: "GET" },
+    )
+  }
+
+  async threadFileStat(threadId: string, path: string): Promise<ProjectFsStatResponse> {
+    const params = new URLSearchParams({ path })
+    return this.requestJson<ProjectFsStatResponse>(
+      `/api/webchat/v2/threads/${encodeURIComponent(threadId)}/files/stat?${params}`,
+      { method: "GET" },
+    )
+  }
+
+  async threadFileContent(threadId: string, path: string): Promise<AttachmentBytes> {
+    const params = new URLSearchParams({ path })
+    const response = await this.request(
+      `/api/webchat/v2/threads/${encodeURIComponent(threadId)}/files/content?${params}`,
+      { method: "GET" },
+    )
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    return {
+      mime_type: response.headers.get("Content-Type") ?? "application/octet-stream",
+      filename: filenameFromContentDisposition(response.headers.get("Content-Disposition")),
+      bytes,
+    }
+  }
+
+  // ---- Global filesystem mounts ----
+
+  async fsMounts(): Promise<FsMountsResponse> {
+    return this.requestJson<FsMountsResponse>("/api/webchat/v2/fs/mounts", { method: "GET" })
+  }
+
+  async fsList(mount: string, path?: string, projectId?: string): Promise<FsListResponse> {
+    const params = new URLSearchParams({ mount })
+    if (path) params.set("path", path)
+    if (projectId) params.set("project_id", projectId)
+    return this.requestJson<FsListResponse>(`/api/webchat/v2/fs/list?${params}`, { method: "GET" })
+  }
+
+  async fsStat(mount: string, path: string, projectId?: string): Promise<ProjectFsStatResponse> {
+    const params = new URLSearchParams({ mount, path })
+    if (projectId) params.set("project_id", projectId)
+    return this.requestJson<ProjectFsStatResponse>(`/api/webchat/v2/fs/stat?${params}`, { method: "GET" })
+  }
+
+  async fsContent(mount: string, path: string, projectId?: string): Promise<AttachmentBytes> {
+    const params = new URLSearchParams({ mount, path })
+    if (projectId) params.set("project_id", projectId)
+    const response = await this.request(`/api/webchat/v2/fs/content?${params}`, { method: "GET" })
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    return {
+      mime_type: response.headers.get("Content-Type") ?? "application/octet-stream",
+      filename: filenameFromContentDisposition(response.headers.get("Content-Disposition")),
+      bytes,
+    }
+  }
+
+  // ---- Projects (feature-gated by features.reborn_projects) ----
+
+  async projects(limit?: number): Promise<ProjectListResponse> {
+    const params = new URLSearchParams()
+    if (limit != null) params.set("limit", String(limit))
+    const search = params.toString()
+    return this.requestJson<ProjectListResponse>(`/api/webchat/v2/projects${search ? `?${search}` : ""}`, {
+      method: "GET",
+    })
+  }
+
+  async createProject(payload: CreateProjectRequest): Promise<ProjectResponse> {
+    return this.requestJson<ProjectResponse>("/api/webchat/v2/projects", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async project(projectId: string): Promise<ProjectResponse> {
+    return this.requestJson<ProjectResponse>(
+      `/api/webchat/v2/projects/${encodeURIComponent(projectId)}`,
+      { method: "GET" },
+    )
+  }
+
+  async deleteProject(projectId: string): Promise<unknown> {
+    return this.requestJson<unknown>(`/api/webchat/v2/projects/${encodeURIComponent(projectId)}`, {
+      method: "DELETE",
+    })
+  }
+
+  async projectMembers(projectId: string): Promise<ProjectMemberListResponse> {
+    return this.requestJson<ProjectMemberListResponse>(
+      `/api/webchat/v2/projects/${encodeURIComponent(projectId)}/members`,
+      { method: "GET" },
+    )
+  }
+
+  async addProjectMember(projectId: string, userId: string, role: ProjectRole): Promise<unknown> {
+    return this.requestJson<unknown>(
+      `/api/webchat/v2/projects/${encodeURIComponent(projectId)}/members`,
+      { method: "POST", body: JSON.stringify({ user_id: userId, role }) },
+    )
+  }
+
+  async updateProjectMember(projectId: string, userId: string, role: ProjectRole): Promise<unknown> {
+    return this.requestJson<unknown>(
+      `/api/webchat/v2/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+      { method: "POST", body: JSON.stringify({ role }) },
+    )
+  }
+
+  async removeProjectMember(projectId: string, userId: string): Promise<unknown> {
+    return this.requestJson<unknown>(
+      `/api/webchat/v2/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+      { method: "DELETE" },
+    )
+  }
+
+  // Long-lived SSE subscription with automatic resume. On a keep-alive-closed
+  // stream (server forces a reconnect at max lifetime), a retryable error frame,
+  // or a retryable HTTP status (429 busy / 503), the loop reconnects with
+  // `?after_cursor=<last SSE id>` (Last-Event-ID semantics) after an exponential
+  // backoff. A non-retryable error surfaces an `error` AppEvent and stops.
   async *events(threadId?: string | null, lastEventId?: string): AsyncGenerator<AppEvent> {
     if (!threadId) return
-    const params = new URLSearchParams({ token: this.config.token })
-    if (lastEventId) params.set("after_cursor", lastEventId)
+    let cursor = lastEventId
+    let backoffMs = SSE_BASE_BACKOFF_MS
 
-    const response = await fetch(
-      `${this.config.baseUrl}/api/webchat/v2/threads/${encodeURIComponent(threadId)}/events?${params}`,
-    )
-    if (!response.ok) {
-      throw new Error(`SSE failed: HTTP ${response.status} ${await response.text()}`)
-    }
+    while (true) {
+      const params = new URLSearchParams({ token: this.config.token })
+      if (cursor) params.set("after_cursor", cursor)
 
-    for await (const frame of parseSse(response)) {
-      for (const event of mapWebChatEvents(parseWebChatEvent(frame.data), threadId)) {
-        yield event
+      let response: Response
+      try {
+        response = await fetch(
+          `${this.config.baseUrl}/api/webchat/v2/threads/${encodeURIComponent(threadId)}/events?${params}`,
+        )
+      } catch (error) {
+        // Transport error (connection reset, DNS, etc.) — treat as retryable.
+        yield { type: "warning", source: "sse", message: `stream disconnected: ${String(error)}`, thread_id: threadId }
+        await sleep(backoffMs)
+        backoffMs = nextBackoff(backoffMs)
+        continue
+      }
+
+      if (!response.ok) {
+        const body = await parseGatewayErrorBody(response)
+        if (isRetryableStatus(response.status, body)) {
+          yield {
+            type: "warning",
+            source: "sse",
+            message: `stream unavailable (HTTP ${response.status}${body?.kind ? `, ${body.kind}` : ""}); retrying`,
+            thread_id: threadId,
+          }
+          await sleep(backoffMs)
+          backoffMs = nextBackoff(backoffMs)
+          continue
+        }
+        yield { type: "error", message: `SSE failed: HTTP ${response.status}${body?.error ? ` ${body.error}` : ""}`, thread_id: threadId }
+        return
+      }
+
+      // Connected: reset backoff so the next transient blip starts small again.
+      backoffMs = SSE_BASE_BACKOFF_MS
+      let closedCleanly = true
+      try {
+        for await (const frame of parseSse(response)) {
+          if (frame.id) cursor = frame.id
+          if (frame.event === "error") {
+            const errorFrame = parseSseErrorFrame(frame.data)
+            if (errorFrame && !errorFrame.retryable) {
+              yield { type: "error", message: `stream error: ${errorFrame.error}`, thread_id: threadId }
+              return
+            }
+            yield {
+              type: "warning",
+              source: "sse",
+              message: `stream error: ${errorFrame?.error ?? "unknown"}; reconnecting`,
+              thread_id: threadId,
+            }
+            closedCleanly = false
+            break
+          }
+          for (const event of mapWebChatEvents(parseWebChatEvent(frame.data), threadId)) {
+            yield event
+          }
+        }
+      } catch (error) {
+        yield { type: "warning", source: "sse", message: `stream read failed: ${String(error)}`, thread_id: threadId }
+        closedCleanly = false
+      }
+
+      // Stream ended (max-lifetime close or a retryable error frame). Reconnect
+      // from the last cursor after a short backoff.
+      if (!closedCleanly) {
+        await sleep(backoffMs)
+        backoffMs = nextBackoff(backoffMs)
       }
     }
   }
@@ -349,7 +786,7 @@ export class GatewayClient {
 
     if (!response.ok) {
       const text = await response.text()
-      throw new GatewayHttpError(response.status, text || response.statusText)
+      throw GatewayError.fromResponse(response.status, text || response.statusText)
     }
 
     return response
@@ -366,23 +803,110 @@ function llmProviderActionPayload(provider: LlmProviderView, model?: string | nu
   }
 }
 
-class GatewayHttpError extends Error {
+// Typed error for WebChat v2 responses. Parses the wire error body
+// {error,kind,retryable,field?,validation_code?} (WebUiV2HttpErrorBody) so
+// callers can branch on `kind`/`retryable` instead of scraping strings.
+export class GatewayError extends Error {
   constructor(
     readonly status: number,
     readonly body: string,
+    readonly parsed: GatewayErrorBody | null,
   ) {
-    super(`HTTP ${status}: ${body}`)
+    super(
+      parsed
+        ? `HTTP ${status}: ${parsed.error}${parsed.kind ? ` (${parsed.kind})` : ""}`
+        : `HTTP ${status}: ${body}`,
+    )
+    this.name = "GatewayError"
+  }
+
+  static fromResponse(status: number, body: string): GatewayError {
+    return new GatewayError(status, body, parseGatewayErrorBodyText(body))
+  }
+
+  get errorCode(): string | null {
+    return this.parsed?.error ?? null
+  }
+
+  get kind(): string | null {
+    return this.parsed?.kind ?? null
+  }
+
+  get retryable(): boolean {
+    return this.parsed?.retryable ?? false
+  }
+
+  get field(): string | null {
+    return this.parsed?.field ?? null
+  }
+
+  get validationCode(): string | null {
+    return this.parsed?.validation_code ?? null
+  }
+}
+
+function parseGatewayErrorBodyText(body: string): GatewayErrorBody | null {
+  try {
+    const parsed = JSON.parse(body) as Partial<GatewayErrorBody>
+    if (parsed && typeof parsed === "object" && typeof parsed.error === "string" && typeof parsed.kind === "string") {
+      return {
+        error: parsed.error,
+        kind: parsed.kind,
+        retryable: parsed.retryable === true,
+        field: typeof parsed.field === "string" ? parsed.field : null,
+        validation_code: typeof parsed.validation_code === "string" ? parsed.validation_code : null,
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return null
+}
+
+async function parseGatewayErrorBody(response: Response): Promise<GatewayErrorBody | null> {
+  try {
+    return parseGatewayErrorBodyText(await response.text())
+  } catch {
+    return null
+  }
+}
+
+const SSE_BASE_BACKOFF_MS = 500
+const SSE_MAX_BACKOFF_MS = 15_000
+
+function nextBackoff(current: number): number {
+  return Math.min(current * 2, SSE_MAX_BACKOFF_MS)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Retryable transports: 429 busy (over SSE stream cap) and 503 service_unavailable.
+function isRetryableStatus(status: number, body: GatewayErrorBody | null): boolean {
+  if (body?.retryable) return true
+  return status === 429 || status === 503
+}
+
+function parseSseErrorFrame(data: string): { error: string; kind?: string; retryable: boolean } | null {
+  if (!data.trim()) return null
+  try {
+    const parsed = JSON.parse(data) as { error?: unknown; kind?: unknown; retryable?: unknown }
+    if (typeof parsed.error !== "string") return null
+    return {
+      error: parsed.error,
+      kind: typeof parsed.kind === "string" ? parsed.kind : undefined,
+      retryable: parsed.retryable === true,
+    }
+  } catch {
+    return null
   }
 }
 
 function isUnavailableThreadList(error: unknown): boolean {
-  if (!(error instanceof GatewayHttpError) || error.status !== 503) return false
-  try {
-    const body = JSON.parse(error.body) as { error?: string; kind?: string; retryable?: boolean }
-    return body.error === "unavailable" && body.kind === "service_unavailable" && body.retryable === true
-  } catch {
-    return false
-  }
+  if (!(error instanceof GatewayError) || error.status !== 503) return false
+  const body = error.parsed
+  return body?.error === "unavailable" && body?.kind === "service_unavailable" && body?.retryable === true
 }
 
 function mapThread(thread: RebornThreadRecord): ThreadInfo {
@@ -591,13 +1115,26 @@ export function mapWebChatEvents(frame: RebornWebChatEventFrame | null, threadId
         thread_id: threadId,
       }]
     case "failed":
+      return compactEvents(
+        {
+          type: "run_status",
+          status: frame.run_state?.status ?? "failed",
+          run_id: frame.run_state?.run_id,
+          failure_category: frame.run_state?.failure?.category,
+          thread_id: threadId,
+        },
+        runUsageEvent(frame, threadId),
+      )
+    case "cancelled": {
+      const cancel = isCancelResponse(frame.response) ? frame.response : null
       return [{
-        type: "run_status",
-        status: frame.run_state?.status ?? "failed",
-        run_id: frame.run_state?.run_id,
-        failure_category: frame.run_state?.failure?.category,
+        type: "run_cancelled",
+        run_id: cancel?.run_id ?? null,
+        status: cancel?.status ?? "cancelled",
+        already_terminal: cancel?.already_terminal ?? null,
         thread_id: threadId,
       }]
+    }
     case "projection_snapshot":
     case "projection_update":
       return projectionEvents(frame, threadId)
@@ -608,6 +1145,23 @@ export function mapWebChatEvents(frame: RebornWebChatEventFrame | null, threadId
 
 function compactEvents(...events: Array<AppEvent | null>): AppEvent[] {
   return events.filter((event): event is AppEvent => Boolean(event))
+}
+
+function runUsageEvent(frame: RebornWebChatEventFrame, threadId: string): AppEvent | null {
+  const usage = frame.run_state?.usage ?? null
+  const cost = frame.run_state?.cost ?? null
+  if (!usage && !cost) return null
+  return {
+    type: "run_usage",
+    run_id: frame.run_state?.run_id ?? null,
+    usage,
+    cost,
+    thread_id: threadId,
+  }
+}
+
+function isCancelResponse(value: unknown): value is RebornCancelRunResponse {
+  return Boolean(value) && typeof value === "object" && "run_id" in (value as Record<string, unknown>)
 }
 
 function gateRequiredEvent(
@@ -908,6 +1462,43 @@ function gateFromProjectionRecord(record: Record<string, unknown>): Array<{ gate
 
 function actionId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+// Fold the RebornSubmitTurnResponse tagged union into the flat SendMessageResponse
+// the UI consumes. `rejected_busy` is not an error: its `notice` is surfaced so the
+// caller can show a non-error notice and keep the composer intact.
+function submitTurnToSendResponse(response: RebornSubmitTurnResponse): SendMessageResponse {
+  if (response.outcome === "rejected_busy") {
+    return {
+      message_id: response.accepted_message_ref,
+      status: response.status ?? "rejected_busy",
+      thread_id: response.thread_id,
+      run_id: response.active_run_id ?? null,
+      outcome: "rejected_busy",
+      notice: response.notice,
+    }
+  }
+  return {
+    message_id: response.accepted_message_ref,
+    status: response.status,
+    thread_id: response.thread_id,
+    run_id: response.run_id,
+    outcome: response.outcome,
+  }
+}
+
+function filenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null
+  const star = header.match(/filename\*=(?:UTF-8'')?([^;]+)/i)
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ""))
+    } catch {
+      return star[1].trim().replace(/^"|"$/g, "")
+    }
+  }
+  const plain = header.match(/filename="?([^";]+)"?/i)
+  return plain?.[1]?.trim() ?? null
 }
 
 function resolveGatePathParts(payload: GateResolveRequest): { runId?: string | null; gateRef?: string | null } {

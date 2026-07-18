@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { GatewayClient, mapWebChatEvent, mapWebChatEvents } from "./client"
+import { GatewayClient, GatewayError, mapWebChatEvent, mapWebChatEvents } from "./client"
 
 describe("Gateway client", () => {
   test("loads every paginated thread page", async () => {
@@ -674,6 +674,79 @@ describe("WebChat event mapping", () => {
     })
   })
 
+  test("maps a cancelled event to a run-cancelled UI event", () => {
+    const event = mapWebChatEvent(
+      {
+        type: "cancelled",
+        cursor: "cursor-1",
+        response: { run_id: "run-1", status: "Cancelled", event_cursor: 12, already_terminal: false },
+      },
+      "thread-1",
+    )
+
+    expect(event).toEqual({
+      type: "run_cancelled",
+      run_id: "run-1",
+      status: "Cancelled",
+      already_terminal: false,
+      thread_id: "thread-1",
+    })
+  })
+
+  test("captures usage and cost from a failed run_state", () => {
+    const events = mapWebChatEvents(
+      {
+        type: "failed",
+        cursor: "cursor-1",
+        run_state: {
+          run_id: "run-1",
+          status: "Failed",
+          failure: { category: "model_unavailable" },
+          usage: {
+            input_tokens: 1200,
+            output_tokens: 340,
+            cache_read_input_tokens: 800,
+            cache_creation_input_tokens: 0,
+          },
+          cost: {
+            input_cost_usd: "0.012",
+            cached_input_cost_usd: "0.001",
+            output_cost_usd: "0.02",
+            total_cost_usd: "0.033",
+            currency: "USD",
+          },
+        },
+      },
+      "thread-1",
+    )
+
+    expect(events[0]).toEqual({
+      type: "run_status",
+      status: "Failed",
+      run_id: "run-1",
+      failure_category: "model_unavailable",
+      thread_id: "thread-1",
+    })
+    expect(events[1]).toEqual({
+      type: "run_usage",
+      run_id: "run-1",
+      usage: {
+        input_tokens: 1200,
+        output_tokens: 340,
+        cache_read_input_tokens: 800,
+        cache_creation_input_tokens: 0,
+      },
+      cost: {
+        input_cost_usd: "0.012",
+        cached_input_cost_usd: "0.001",
+        output_cost_usd: "0.02",
+        total_cost_usd: "0.033",
+        currency: "USD",
+      },
+      thread_id: "thread-1",
+    })
+  })
+
   test("maps capability display previews to a first-class UI event", () => {
     const event = mapWebChatEvent(
       {
@@ -716,5 +789,422 @@ describe("WebChat event mapping", () => {
       truncated: false,
       thread_id: "thread-1",
     })
+  })
+})
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  })
+}
+
+function recordingClient(handler: (url: string, init?: RequestInit) => unknown) {
+  const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+  const requests: Array<{ url: string; method: string; body: unknown }> = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    requests.push({
+      url,
+      method: init?.method ?? "GET",
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    })
+    const result = handler(url, init)
+    return result instanceof Response ? result : jsonResponse(result)
+  }) as unknown as typeof fetch
+  return { client, requests, restore: () => { globalThis.fetch = originalFetch } }
+}
+
+describe("WebChat v2 message + session surface", () => {
+  test("sends client_action_id, attachments and model, folding rejected_busy into a notice", async () => {
+    const { client, requests, restore } = recordingClient(() => ({
+      outcome: "rejected_busy",
+      thread_id: "thread-1",
+      accepted_message_ref: "msg-1",
+      active_run_id: "run-9",
+      status: "Running",
+      notice: "A run is already active on this thread.",
+    }))
+
+    try {
+      const response = await client.send("hello", "thread-1", {
+        attachments: [{ mime_type: "image/png", filename: "a.png", data_base64: "AAA" }],
+        model: "gpt-5.5",
+      })
+
+      expect(requests[0]?.url).toBe("http://example.test/api/webchat/v2/threads/thread-1/messages")
+      const body = requests[0]?.body as Record<string, unknown>
+      expect(typeof body.client_action_id).toBe("string")
+      expect(body.content).toBe("hello")
+      expect(body.attachments).toEqual([{ mime_type: "image/png", filename: "a.png", data_base64: "AAA" }])
+      expect(body.model).toBe("gpt-5.5")
+      expect(response.outcome).toBe("rejected_busy")
+      expect(response.notice).toBe("A run is already active on this thread.")
+      expect(response.run_id).toBe("run-9")
+    } finally {
+      restore()
+    }
+  })
+
+  test("maps a submitted outcome to the run id", async () => {
+    const { client, requests, restore } = recordingClient(() => ({
+      outcome: "submitted",
+      thread_id: "thread-1",
+      accepted_message_ref: "msg-1",
+      turn_id: "turn-1",
+      run_id: "run-1",
+      status: "Queued",
+      resolved_run_profile_id: "profile",
+      resolved_run_profile_version: 3,
+      event_cursor: 0,
+    }))
+
+    try {
+      const response = await client.send("hi", "thread-1")
+      expect(response.outcome).toBe("submitted")
+      expect(response.run_id).toBe("run-1")
+      expect((requests[0]?.body as Record<string, unknown>).attachments).toBeUndefined()
+    } finally {
+      restore()
+    }
+  })
+
+  test("deletes a thread", async () => {
+    const { client, requests, restore } = recordingClient(() => ({ thread_id: "thread-1", deleted: true }))
+    try {
+      const response = await client.deleteThread("thread-1")
+      expect(requests[0]?.method).toBe("DELETE")
+      expect(requests[0]?.url).toBe("http://example.test/api/webchat/v2/threads/thread-1")
+      expect(response.deleted).toBe(true)
+    } finally {
+      restore()
+    }
+  })
+
+  test("fetches the session snapshot", async () => {
+    const session = {
+      tenant_id: "tenant-1",
+      user_id: "user-1",
+      capabilities: { operator_webui_config: true },
+      features: { reborn_projects: false, global_auto_approve: true },
+      attachments: { accept: ["image/png"], max_count: 10, max_file_bytes: 5, max_total_bytes: 10 },
+    }
+    const { client, requests, restore } = recordingClient(() => session)
+    try {
+      const response = await client.session()
+      expect(requests[0]?.url).toBe("http://example.test/api/webchat/v2/session")
+      expect(response.capabilities.operator_webui_config).toBe(true)
+      expect(response.features.global_auto_approve).toBe(true)
+    } finally {
+      restore()
+    }
+  })
+
+  test("counts the approval inbox with the needs_approval query param", async () => {
+    const { client, requests, restore } = recordingClient(() => ({
+      threads: [{ thread_id: "thread-1" }, { thread_id: "thread-2" }],
+      next_cursor: null,
+    }))
+    try {
+      const inbox = await client.approvalInbox()
+      const url = new URL(requests[0]?.url ?? "")
+      expect(url.searchParams.get("needs_approval")).toBe("true")
+      expect(inbox.count).toBe(2)
+    } finally {
+      restore()
+    }
+  })
+
+  test("retries a failed run", async () => {
+    const { client, requests, restore } = recordingClient(() => ({ run_id: "run-2", status: "Queued", event_cursor: 5 }))
+    try {
+      const response = await client.retryRun("thread-1", "run-1")
+      expect(requests[0]?.method).toBe("POST")
+      expect(requests[0]?.url).toBe("http://example.test/api/webchat/v2/threads/thread-1/runs/run-1/retry")
+      expect(typeof (requests[0]?.body as Record<string, unknown>).client_action_id).toBe("string")
+      expect(response.run_id).toBe("run-2")
+    } finally {
+      restore()
+    }
+  })
+
+  test("downloads attachment bytes with filename from Content-Disposition", async () => {
+    const { client, restore } = recordingClient(
+      () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: {
+            "Content-Type": "image/png",
+            "Content-Disposition": 'attachment; filename="pic.png"',
+          },
+        }),
+    )
+    try {
+      const file = await client.attachment("thread-1", "msg-1", "att-1")
+      expect(file.mime_type).toBe("image/png")
+      expect(file.filename).toBe("pic.png")
+      expect(Array.from(file.bytes)).toEqual([1, 2, 3])
+    } finally {
+      restore()
+    }
+  })
+})
+
+describe("WebChat v2 skills / settings / automations / outbound / logs / traces", () => {
+  test("issues the skills request surface", async () => {
+    const { client, requests, restore } = recordingClient((url) => {
+      if (url.endsWith("/skills")) return { skills: [], count: 0, auto_activate_learned: true }
+      if (url.endsWith("/skills/search")) return { catalog: [], installed: [], registry_url: "r" }
+      if (url.endsWith("/skills/content")) return { name: "x", content: "c" }
+      return { success: true, message: "ok" }
+    })
+    try {
+      await client.skills()
+      await client.searchSkills("deploy")
+      await client.installSkill("deploy", "# deploy")
+      await client.updateSkill("deploy", "# v2")
+      await client.setSkillAutoActivate("deploy", true)
+      await client.setAutoActivateLearned(false)
+      await client.removeSkill("deploy")
+
+      expect(requests.map((r) => `${r.method} ${new URL(r.url).pathname}`)).toEqual([
+        "GET /api/webchat/v2/skills",
+        "POST /api/webchat/v2/skills/search",
+        "POST /api/webchat/v2/skills/install",
+        "PUT /api/webchat/v2/skills/deploy",
+        "POST /api/webchat/v2/skills/deploy/auto-activate",
+        "POST /api/webchat/v2/skills/auto-activate-learned",
+        "DELETE /api/webchat/v2/skills/deploy",
+      ])
+      expect(requests[1]?.body).toEqual({ query: "deploy" })
+      expect(requests[2]?.body).toEqual({ name: "deploy", content: "# deploy" })
+      expect(requests[3]?.body).toEqual({ content: "# v2" })
+      expect(requests[4]?.body).toEqual({ enabled: true })
+      expect(requests[5]?.body).toEqual({ enabled: false })
+    } finally {
+      restore()
+    }
+  })
+
+  test("sets tool permission state with the wire vocabulary", async () => {
+    const { client, requests, restore } = recordingClient(() => ({ entry: { key: "tool.shell", value: null, source: "user", redacted: false, mutable: true } }))
+    try {
+      await client.settingsTools()
+      await client.setSettingsToolsAutoApprove(true)
+      await client.setSettingsToolPermission("tool.shell", "always_allow")
+
+      expect(requests[0]?.method).toBe("GET")
+      expect(requests[1]?.body).toEqual({ enabled: true })
+      expect(requests[2]?.url).toBe("http://example.test/api/webchat/v2/settings/tools/tool.shell")
+      expect(requests[2]?.body).toEqual({ state: "always_allow" })
+    } finally {
+      restore()
+    }
+  })
+
+  test("mutates automations", async () => {
+    const { client, requests, restore } = recordingClient(() => ({ updated: true }))
+    try {
+      await client.pauseAutomation("auto-1")
+      await client.resumeAutomation("auto-1")
+      await client.renameAutomation("auto-1", "Nightly")
+      await client.deleteAutomation("auto-1")
+
+      expect(requests.map((r) => `${r.method} ${new URL(r.url).pathname}`)).toEqual([
+        "POST /api/webchat/v2/automations/auto-1/pause",
+        "POST /api/webchat/v2/automations/auto-1/resume",
+        "POST /api/webchat/v2/automations/auto-1",
+        "DELETE /api/webchat/v2/automations/auto-1",
+      ])
+      expect(requests[2]?.body).toEqual({ name: "Nightly" })
+    } finally {
+      restore()
+    }
+  })
+
+  test("clears the outbound final-reply target by sending null", async () => {
+    const { client, requests, restore } = recordingClient(() => ({
+      final_reply_target_status: "none_configured",
+      default_modality: "text",
+    }))
+    try {
+      await client.setOutboundPreferences(null)
+      await client.setOutboundPreferences("target-7")
+      expect(requests[0]?.body).toEqual({ final_reply_target_id: null })
+      expect(requests[1]?.body).toEqual({ final_reply_target_id: "target-7" })
+    } finally {
+      restore()
+    }
+  })
+
+  test("passes log filters as query params", async () => {
+    const { client, requests, restore } = recordingClient(() => ({
+      source: "caller",
+      entries: [],
+      tail_supported: true,
+      follow_supported: false,
+    }))
+    try {
+      await client.logs({ limit: 50, level: "error", thread_id: "thread-1", tail: true })
+      const url = new URL(requests[0]?.url ?? "")
+      expect(url.pathname).toBe("/api/webchat/v2/logs")
+      expect(url.searchParams.get("limit")).toBe("50")
+      expect(url.searchParams.get("level")).toBe("error")
+      expect(url.searchParams.get("thread_id")).toBe("thread-1")
+      expect(url.searchParams.get("tail")).toBe("true")
+    } finally {
+      restore()
+    }
+  })
+
+  test("authorizes a trace hold", async () => {
+    const { client, requests, restore } = recordingClient(() => ({ authorized: true }))
+    try {
+      const response = await client.authorizeTraceHold("submission-1")
+      expect(requests[0]?.method).toBe("POST")
+      expect(requests[0]?.url).toBe("http://example.test/api/webchat/v2/traces/holds/submission-1/authorize")
+      expect(response.authorized).toBe(true)
+    } finally {
+      restore()
+    }
+  })
+
+  test("browses filesystem mounts with mount and path params", async () => {
+    const { client, requests, restore } = recordingClient((url) => {
+      if (url.includes("/fs/mounts")) return { mounts: [{ mount: "workspace", label: "Workspace" }] }
+      return { mount: "workspace", path: "/src", entries: [] }
+    })
+    try {
+      await client.fsMounts()
+      await client.fsList("workspace", "/src", "project-1")
+      const listUrl = new URL(requests[1]?.url ?? "")
+      expect(listUrl.searchParams.get("mount")).toBe("workspace")
+      expect(listUrl.searchParams.get("path")).toBe("/src")
+      expect(listUrl.searchParams.get("project_id")).toBe("project-1")
+    } finally {
+      restore()
+    }
+  })
+})
+
+describe("Gateway error parsing", () => {
+  test("parses the typed v2 error body", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ error: "invalid_request", kind: "validation", retryable: false, field: "content", validation_code: "missing_field" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      )) as unknown as typeof fetch
+    try {
+      await client.session()
+      throw new Error("expected rejection")
+    } catch (error) {
+      expect(error).toBeInstanceOf(GatewayError)
+      const gatewayError = error as GatewayError
+      expect(gatewayError.status).toBe(400)
+      expect(gatewayError.errorCode).toBe("invalid_request")
+      expect(gatewayError.kind).toBe("validation")
+      expect(gatewayError.retryable).toBe(false)
+      expect(gatewayError.field).toBe("content")
+      expect(gatewayError.validationCode).toBe("missing_field")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+describe("SSE robustness", () => {
+  function sseResponse(frames: string[]): Response {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const frame of frames) controller.enqueue(encoder.encode(frame))
+        controller.close()
+      },
+    })
+    return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } })
+  }
+
+  test("reconnects with after_cursor after a stream closes", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    const urls: string[] = []
+    let call = 0
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input))
+      call += 1
+      if (call === 1) {
+        return sseResponse([
+          'id: 41\nevent: final_reply\ndata: {"type":"final_reply","cursor":41,"reply":{"text":"hi"}}\n\n',
+        ])
+      }
+      return sseResponse([
+        'id: 42\nevent: final_reply\ndata: {"type":"final_reply","cursor":42,"reply":{"text":"again"}}\n\n',
+      ])
+    }) as unknown as typeof fetch
+
+    try {
+      const events: string[] = []
+      for await (const event of client.events("thread-1")) {
+        if (event.type === "response") events.push(event.content)
+        if (events.length >= 2) break
+      }
+      expect(events).toEqual(["hi", "again"])
+      expect(new URL(urls[0] ?? "").searchParams.get("after_cursor")).toBeNull()
+      expect(new URL(urls[1] ?? "").searchParams.get("after_cursor")).toBe("41")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("surfaces a non-retryable error frame and stops", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      sseResponse([
+        'event: error\ndata: {"error":"replay unavailable","kind":"replay_unavailable","retryable":false}\n\n',
+      ])) as unknown as typeof fetch
+
+    try {
+      const events = []
+      for await (const event of client.events("thread-1")) {
+        events.push(event)
+      }
+      expect(events.at(-1)).toEqual({ type: "error", message: "stream error: replay unavailable", thread_id: "thread-1" })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("backs off and reconnects on a retryable 429", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    let call = 0
+    globalThis.fetch = (async () => {
+      call += 1
+      if (call === 1) {
+        return new Response(JSON.stringify({ error: "rate_limited", kind: "busy", retryable: true }), {
+          status: 429,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      return sseResponse(['id: 1\nevent: final_reply\ndata: {"type":"final_reply","cursor":1,"reply":{"text":"ok"}}\n\n'])
+    }) as unknown as typeof fetch
+
+    try {
+      const events: string[] = []
+      for await (const event of client.events("thread-1")) {
+        if (event.type === "response") {
+          events.push(event.content)
+          break
+        }
+      }
+      expect(call).toBeGreaterThanOrEqual(2)
+      expect(events).toEqual(["ok"])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })

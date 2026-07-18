@@ -1,4 +1,12 @@
-import type { AppEvent, HistoryResponse, PendingGateInfo, ThreadInfo } from "./gateway/types"
+import type {
+  AppEvent,
+  HistoryResponse,
+  PendingGateInfo,
+  RebornRunCost,
+  RebornRunUsage,
+  SessionResponse,
+  ThreadInfo,
+} from "./gateway/types"
 import {
   capabilityDisplayPreviewDetail,
   capabilityEventActivity,
@@ -24,6 +32,14 @@ export type ActivityItem = {
   kind?: string
 }
 
+// Per-run token usage + USD cost for the status bar, captured from the failed
+// run_state SSE event (and any future run-state read).
+export type RunUsageCost = {
+  runId?: string | null
+  usage?: RebornRunUsage | null
+  cost?: RebornRunCost | null
+}
+
 export type UiState = {
   connected: boolean
   status: string
@@ -38,6 +54,14 @@ export type UiState = {
   pendingGate?: PendingGateInfo | null
   lastError?: string | null
   streamingAssistantId?: string | null
+  // GET /session snapshot, drives UI capability/feature gating. Null until fetched.
+  session?: SessionResponse | null
+  // Non-error notice (e.g. rejected_busy). Cleared when a new run starts.
+  notice?: string | null
+  // Latest per-run usage/cost for the status bar.
+  runUsageCost?: RunUsageCost | null
+  // Count of threads waiting on approval (approval-inbox badge).
+  approvalCount: number
 }
 
 export const initialUiState: UiState = {
@@ -51,6 +75,10 @@ export const initialUiState: UiState = {
   hasOlderHistory: false,
   activity: [],
   pendingGate: null,
+  session: null,
+  notice: null,
+  runUsageCost: null,
+  approvalCount: 0,
 }
 
 export type UiAction =
@@ -63,6 +91,9 @@ export type UiAction =
   | { type: "user_sent"; content: string; threadId?: string | null }
   | { type: "event"; event: AppEvent }
   | { type: "gate_cleared" }
+  | { type: "session"; session: SessionResponse }
+  | { type: "notice"; message: string | null }
+  | { type: "approval_count"; count: number }
 
 export function reduceUiState(state: UiState, action: UiAction): UiState {
   switch (action.type) {
@@ -106,6 +137,12 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         historyCursor: action.history.next_cursor ?? null,
         hasOlderHistory: Boolean(action.history.next_cursor),
       }
+    case "session":
+      return { ...state, session: action.session }
+    case "notice":
+      return { ...state, notice: action.message }
+    case "approval_count":
+      return { ...state, approvalCount: action.count }
     case "run_started":
       return {
         ...state,
@@ -113,12 +150,14 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         activeRunId: action.runId ?? state.activeRunId,
         status: action.status ?? "running",
         isThinking: true,
+        notice: null,
       }
     case "user_sent":
       return {
         ...state,
         status: "sent",
         isThinking: true,
+        notice: null,
         activity: clearRunningActivity(state.activity),
         transcript: [
           ...state.transcript,
@@ -173,6 +212,12 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
         activeRunId: isTrackedRunStatus(event.status) ? event.run_id ?? state.activeRunId : null,
         isThinking: isThinkingRunStatus(event.status),
       }
+    case "run_cancelled":
+      return applyRunCancelled(state, event)
+    case "run_usage":
+      return { ...state, runUsageCost: { runId: event.run_id, usage: event.usage, cost: event.cost } }
+    case "notice":
+      return { ...state, notice: event.message }
     case "stream_chunk":
       return appendAssistantChunk(state, event.content, event.thread_id)
     case "response":
@@ -281,10 +326,56 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
           status: event.state === "failed" ? "error" : "info",
         }),
       }
+    case "warning":
+      return {
+        ...state,
+        activity: pushActivity(state.activity, {
+          id: `warning-${Date.now()}`,
+          label: event.source ? `${event.source} warning` : "warning",
+          detail: event.message,
+          status: "info",
+        }),
+      }
     case "error":
       return reduceUiState(state, { type: "error", message: event.message })
     default:
       return state
+  }
+}
+
+function applyRunCancelled(
+  state: UiState,
+  event: Extract<AppEvent, { type: "run_cancelled" }>,
+): UiState {
+  const runId = event.run_id ?? state.activeRunId
+  const id = runId ? `run-${runId}-cancelled` : `run-cancelled-${Date.now()}`
+  const detail = "Run was cancelled before a reply was produced."
+  const transcript = state.transcript.some((item) => item.id === id)
+    ? state.transcript
+    : [
+        ...state.transcript,
+        {
+          id,
+          role: "system" as const,
+          text: detail,
+          threadId: event.thread_id,
+          state: event.status ?? "cancelled",
+        },
+      ]
+
+  return {
+    ...state,
+    status: event.status ?? "cancelled",
+    isThinking: false,
+    activeRunId: null,
+    pendingGate: null,
+    transcript,
+    activity: upsertActivity(state.activity, {
+      id,
+      label: "run cancelled",
+      detail,
+      status: "info",
+    }),
   }
 }
 

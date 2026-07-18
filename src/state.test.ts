@@ -1355,3 +1355,72 @@ describe("UI state", () => {
     expect(running.isThinking).toBe(false)
   })
 })
+
+describe("UI state — capability parity", () => {
+  test("stores the session snapshot for UI gating", () => {
+    const session = {
+      tenant_id: "tenant-1",
+      user_id: "user-1",
+      capabilities: { operator_webui_config: true },
+      features: { reborn_projects: true, global_auto_approve: false },
+      attachments: { accept: ["image/png"], max_count: 10, max_file_bytes: 5, max_total_bytes: 10 },
+    }
+    const state = reduceUiState(initialUiState, { type: "session", session })
+    expect(state.session).toBe(session)
+    expect(state.session?.capabilities.operator_webui_config).toBe(true)
+    expect(state.session?.features.reborn_projects).toBe(true)
+  })
+
+  test("surfaces a rejected_busy notice without marking an error", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "notice",
+      message: "A run is already active on this thread.",
+    })
+    expect(state.notice).toBe("A run is already active on this thread.")
+    expect(state.lastError).toBeUndefined()
+    expect(state.status).not.toBe("error")
+  })
+
+  test("clears the notice when a new run starts", () => {
+    const noticed = reduceUiState(initialUiState, { type: "notice", message: "busy" })
+    const started = reduceUiState(noticed, { type: "run_started", threadId: "thread-1", runId: "run-1" })
+    expect(started.notice).toBeNull()
+  })
+
+  test("maps a run_cancelled event to a cancelled system message", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_cancelled", run_id: "run-1", status: "Cancelled", thread_id: "thread-1" },
+    })
+    expect(state.isThinking).toBe(false)
+    expect(state.activeRunId).toBeNull()
+    expect(state.transcript).toContainEqual({
+      id: "run-run-1-cancelled",
+      role: "system",
+      text: "Run was cancelled before a reply was produced.",
+      threadId: "thread-1",
+      state: "Cancelled",
+    })
+  })
+
+  test("captures usage and cost for the status bar", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "run_usage",
+        run_id: "run-1",
+        usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        cost: { input_cost_usd: "0.01", cached_input_cost_usd: "0", output_cost_usd: "0.02", total_cost_usd: "0.03", currency: "USD" },
+        thread_id: "thread-1",
+      },
+    })
+    expect(state.runUsageCost?.runId).toBe("run-1")
+    expect(state.runUsageCost?.usage?.input_tokens).toBe(100)
+    expect(state.runUsageCost?.cost?.total_cost_usd).toBe("0.03")
+  })
+
+  test("tracks the approval-inbox count", () => {
+    const state = reduceUiState(initialUiState, { type: "approval_count", count: 3 })
+    expect(state.approvalCount).toBe(3)
+  })
+})
