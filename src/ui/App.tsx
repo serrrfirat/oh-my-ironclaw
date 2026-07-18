@@ -42,7 +42,8 @@ import { AutomationsSurface } from "./AutomationsSurface"
 import { ChannelsSurface } from "./ChannelsSurface"
 import { ExtensionsSurface, extensionRows, type ExtensionRow } from "./ExtensionsSurface"
 import { LlmProvidersSurface, type LlmProviderFormView } from "./LlmProvidersSurface"
-import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
+import { ConversationSurface, ThreadsSidebar, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
+import { computeSidebarLayout } from "./threadsSidebar"
 import { HomeSurface, type HomeSection } from "./HomeSurface"
 import {
   buildActiveRows,
@@ -150,6 +151,10 @@ export function App({ config }: AppProps) {
   const [authTokenSubmitting, setAuthTokenSubmitting] = useState(false)
   const [selectedThreadIndex, setSelectedThreadIndex] = useState(0)
   const [selectedGateAction, setSelectedGateAction] = useState<GateAction>("approved")
+  // --- Persistent threads sidebar (conversation view) ---
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarFocused, setSidebarFocused] = useState(false)
+  const [sidebarIndex, setSidebarIndex] = useState(0)
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   const [activeOverlay, setActiveOverlay] = useState<ActiveOverlay>(null)
   const [paletteThreads, setPaletteThreads] = useState<ThreadInfo[]>([])
@@ -328,6 +333,19 @@ export function App({ config }: AppProps) {
   const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
   const canCancelRun = Boolean((state.pendingGate?.thread_id || state.activeThreadId) && (state.pendingGate?.run_id || state.activeRunId))
 
+  // --- Threads sidebar layout (persistent, collapsible, responsive) ---
+  // Reuses state.threads (the same list the ctrl+t palette shows) — no new fetch.
+  const sidebarThreads = useMemo(() => sortThreadsByRecent(state.threads), [state.threads])
+  const sidebarLayout = computeSidebarLayout(width, sidebarCollapsed)
+  const sidebarActive = sidebarLayout.visible && sidebarFocused
+  const chatContentWidth = Math.max(1, sidebarLayout.chatWidth - 4)
+  // Threads currently awaiting approval — drives the sidebar's warn status dot.
+  const approvalThreadIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (state.pendingGate?.thread_id) ids.add(state.pendingGate.thread_id)
+    return ids
+  }, [state.pendingGate?.thread_id])
+
   // --- Home (control room) view-model, assembled from UiState + fetched lists ---
   const homeRecentThreads = useMemo(() => sortThreadsByRecent(state.threads).slice(0, HOME_RECENT_LIMIT), [state.threads])
   const homeHeldAutomations = useMemo(
@@ -414,6 +432,9 @@ export function App({ config }: AppProps) {
   // ^H, and there editing (of the composer / a rename / token / target / search
   // field) must win over toggling home. The /home command still reaches home.
   const isTextInputFocused = (): boolean => {
+    // When the threads sidebar owns focus, the composer is not the text sink, so
+    // global toggles (ctrl+h) should fire rather than being treated as edits.
+    if (sidebarActive) return false
     // Conversation composer — also the sink for the slash-command palette and
     // inline "/…" filtering, both of which keep activeOverlay null.
     if (!showHome && activeOverlay === null) return true
@@ -451,6 +472,49 @@ export function App({ config }: AppProps) {
       key.preventDefault()
       key.stopPropagation()
       toggleHome()
+      return
+    }
+    // --- Threads sidebar (conversation view only; no overlay/home on top) ---
+    const inConversationView = !showHome && activeOverlay === null
+    // ctrl+b collapses/expands the sidebar regardless of which pane has focus.
+    if (inConversationView && key.ctrl && key.name === "b") {
+      key.preventDefault()
+      key.stopPropagation()
+      setSidebarCollapsed((collapsed) => !collapsed)
+      setSidebarFocused(false)
+      return
+    }
+    // While the sidebar owns focus, it captures navigation keys (up/down select,
+    // enter opens, tab/esc returns focus to the chat) and swallows the rest so
+    // they never reach the composer.
+    if (inConversationView && sidebarLayout.visible && sidebarFocused) {
+      if (key.name === "tab" || key.name === "escape") {
+        key.preventDefault(); key.stopPropagation(); setSidebarFocused(false); return
+      }
+      if (key.name === "up" || key.name === "k") {
+        key.preventDefault(); key.stopPropagation()
+        setSidebarIndex((index) => wrapIndex(index - 1, sidebarThreads.length)); return
+      }
+      if (key.name === "down" || key.name === "j") {
+        key.preventDefault(); key.stopPropagation()
+        setSidebarIndex((index) => wrapIndex(index + 1, sidebarThreads.length)); return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault(); key.stopPropagation()
+        const thread = sidebarThreads[wrapIndex(sidebarIndex, sidebarThreads.length)]
+        if (thread) void loadThread(thread.id)
+        setSidebarFocused(false)
+        return
+      }
+      return
+    }
+    // From the chat, tab moves focus into the sidebar (unless a gate or the slash
+    // palette is claiming tab), seeding the cursor on the active thread.
+    if (inConversationView && sidebarLayout.visible && !sidebarFocused && key.name === "tab" && !state.pendingGate && !showSlashCommands) {
+      key.preventDefault(); key.stopPropagation()
+      const activeIndex = sidebarThreads.findIndex((thread) => thread.id === state.activeThreadId)
+      setSidebarIndex(activeIndex >= 0 ? activeIndex : 0)
+      setSidebarFocused(true)
       return
     }
     if (showAutomations) {
@@ -3541,7 +3605,6 @@ export function App({ config }: AppProps) {
 
   const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
   const composerWidth = clamp(width - 8, 42, 82)
-  const conversationWidth = Math.max(1, width - 4)
   const turnElapsedMs = state.isThinking ? activeTurnElapsedMs(state.transcript, nowMs) : null
   const handleInputChange = () => {
     setInput(textareaRef.current?.plainText ?? "")
@@ -3776,28 +3839,45 @@ export function App({ config }: AppProps) {
           height={height}
         />
       ) : hasConversation ? (
-        <ConversationSurface
-          contentWidth={conversationWidth}
-          composer={composer}
-          composerWidth={conversationWidth}
-          height={height}
-          lastError={state.lastError}
-          markdownStyle={markdownStyle}
-          pendingGate={state.pendingGate ?? null}
-          selectedGateAction={selectedGateAction}
-          authTokenInput={authTokenInput}
-          authTokenError={authTokenError}
-          authTokenSubmitting={authTokenSubmitting}
-          showOlderHistoryHint={state.hasOlderHistory}
-          transcript={state.transcript}
-          expandedActivityIds={expandedActivityIds}
-          onToggleActivityExpanded={toggleActivityExpanded}
-          onResolve={(action) => void resolveGate(action)}
-          onSelectGateAction={setSelectedGateAction}
-          onSubmitAuthToken={() => void submitAuthToken()}
-          onCancelAuthGate={() => void cancelAuthGate()}
-          onOpenAuthUrl={(gate) => void openAuthUrl(gate)}
-        />
+        <box style={{ width, height, flexDirection: "row", backgroundColor: theme.bg }}>
+          {sidebarLayout.visible ? (
+            <ThreadsSidebar
+              threads={sidebarThreads}
+              activeThreadId={state.activeThreadId}
+              selectedIndex={sidebarIndex}
+              focused={sidebarFocused}
+              threadPreviews={threadPreviews}
+              dotContext={{ activeThreadId: state.activeThreadId, activeRunning: state.isThinking, approvalThreadIds }}
+              width={sidebarLayout.sidebarWidth}
+              height={height}
+            />
+          ) : null}
+          <box style={{ flexGrow: 1, height, flexDirection: "column" }}>
+            <ConversationSurface
+              contentWidth={chatContentWidth}
+              composer={composer}
+              composerWidth={chatContentWidth}
+              chatFocused={!sidebarActive}
+              height={height}
+              lastError={state.lastError}
+              markdownStyle={markdownStyle}
+              pendingGate={state.pendingGate ?? null}
+              selectedGateAction={selectedGateAction}
+              authTokenInput={authTokenInput}
+              authTokenError={authTokenError}
+              authTokenSubmitting={authTokenSubmitting}
+              showOlderHistoryHint={state.hasOlderHistory}
+              transcript={state.transcript}
+              expandedActivityIds={expandedActivityIds}
+              onToggleActivityExpanded={toggleActivityExpanded}
+              onResolve={(action) => void resolveGate(action)}
+              onSelectGateAction={setSelectedGateAction}
+              onSubmitAuthToken={() => void submitAuthToken()}
+              onCancelAuthGate={() => void cancelAuthGate()}
+              onOpenAuthUrl={(gate) => void openAuthUrl(gate)}
+            />
+          </box>
+        </box>
       ) : (
         <WelcomeSurface
           baseUrl={config.baseUrl}

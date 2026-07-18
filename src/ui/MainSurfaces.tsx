@@ -9,8 +9,13 @@ import { transcriptItemContentLength, type TranscriptItem } from "../transcript"
 import { activityGroupSummary, groupTranscriptEntries } from "./activityGroups"
 import { TranscriptMessage } from "./TranscriptMessage"
 import { sourceColor, type SlashCommand } from "./slashCommands"
-import { theme } from "./theme"
-import { Tag } from "./pixel"
+import { theme, toneColors, type Tone } from "./theme"
+import { Card, Tag } from "./pixel"
+import {
+  threadStatusDotTone,
+  windowThreads,
+  type ThreadDotContext,
+} from "./threadsSidebar"
 
 export type GateAction = "approved" | "denied" | "always"
 
@@ -110,6 +115,7 @@ export function ConversationSurface({
   composerWidth,
   composer,
   contentWidth,
+  chatFocused = true,
   height,
   lastError,
   markdownStyle,
@@ -131,6 +137,7 @@ export function ConversationSurface({
   composerWidth: number
   composer: ComposerCommonProps
   contentWidth: number
+  chatFocused?: boolean
   height: number
   lastError?: string | null
   markdownStyle: SyntaxStyle
@@ -152,7 +159,10 @@ export function ConversationSurface({
   const slashPopupHeight = composer.showSlashCommands ? slashCommandPopupHeight(composer.slashCommands) : 0
   const threadPopupHeight = composer.showThreadPalette ? threadPaletteHeight(composer.threads) : 0
   const modelPopupHeight = composer.showModelPalette ? modelPaletteHeight(composer.models) : 0
-  const transcriptHeight = Math.max(6, height - (pendingGate ? 16 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight)
+  // The framed gate/auth cards are ~2 rows taller than the old flat panels, so
+  // reserve a little more room below the transcript when a gate is showing to
+  // keep the composer from being pushed off the bottom.
+  const transcriptHeight = Math.max(6, height - (pendingGate ? 20 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight)
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const transcriptEndKey = transcript.map((item) => `${item.id}:${transcriptItemContentLength(item)}`).join("|")
   const transcriptEntries = groupTranscriptEntries(transcript)
@@ -237,7 +247,7 @@ export function ConversationSurface({
         <box style={{ width: composerWidth, height: 1 }} />
       )}
       <Composer
-        focused={!pendingGate}
+        focused={!pendingGate && chatFocused}
         {...composer}
         showThinkingStatus={false}
         width={composerWidth}
@@ -417,9 +427,23 @@ function Composer({
           width={width}
         />
       ) : null}
-      <box style={{ width, height: 6, flexDirection: "row", backgroundColor: theme.bgSoft }}>
-        <box style={{ width: 1, backgroundColor: isThinking ? railColor : theme.accent }} />
-        <box style={{ flexDirection: "column", flexGrow: 1, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
+      {/* Glass composer: a rounded-border framed well whose edge is the focus /
+          thinking indicator (rail color while streaming, accent when focused,
+          hairline otherwise) — replacing the flat left rail. */}
+      <box
+        style={{
+          width,
+          height: 6,
+          flexDirection: "column",
+          backgroundColor: theme.bgSoft,
+          border: true,
+          borderStyle: "rounded",
+          borderColor: isThinking ? railColor : focused ? theme.accent : theme.border,
+          paddingLeft: 1,
+          paddingRight: 1,
+        }}
+      >
+        <box style={{ flexDirection: "column", flexGrow: 1 }}>
           <textarea
             ref={inputRef}
             focused={focused}
@@ -454,6 +478,110 @@ function Composer({
           </box>
         </box>
       </box>
+    </box>
+  )
+}
+
+// Persistent Glass threads sidebar for the conversation view: a framed rounded
+// panel titled THREADS listing threads with a status dot, the active thread
+// highlighted, and (when focused) a movable selection cursor. Reads the same
+// thread list + previews the ctrl+t palette uses — no new fetches.
+export function ThreadsSidebar({
+  threads,
+  activeThreadId,
+  selectedIndex,
+  focused,
+  threadPreviews,
+  dotContext,
+  width,
+  height,
+}: {
+  threads: ThreadInfo[]
+  activeThreadId?: string | null
+  selectedIndex: number
+  focused: boolean
+  threadPreviews: ThreadPreviewMap
+  dotContext: ThreadDotContext
+  width: number
+  height: number
+}) {
+  // Border (1×2) + padding (1×2) inset → inner content width is width - 4.
+  const innerWidth = Math.max(1, width - 4)
+  // Rows available after border (2), header (1), header border (1), footer (1).
+  const visibleCount = Math.max(1, height - 5)
+  const safeSelected = threads.length ? wrapIndex(selectedIndex, threads.length) : 0
+  const { visible, start } = windowThreads(threads, safeSelected, visibleCount)
+  return (
+    <box
+      style={{
+        width,
+        height,
+        flexDirection: "column",
+        backgroundColor: theme.bg,
+        border: true,
+        borderStyle: "rounded",
+        borderColor: focused ? theme.accent : theme.border,
+        paddingLeft: 1,
+        paddingRight: 1,
+        paddingTop: 0,
+      }}
+    >
+      <box style={{ width: innerWidth, height: 2, flexDirection: "row", alignItems: "center", backgroundColor: theme.barBg, border: ["bottom"], borderStyle: "single", borderColor: theme.border }}>
+        <text fg={theme.accent}>◆ </text>
+        <text fg={theme.textStrong}>THREADS</text>
+        <box style={{ flexGrow: 1 }} />
+        <text fg={theme.textFaint}>{String(threads.length)}</text>
+      </box>
+      {visible.length ? (
+        visible.map((thread, index) => (
+          <SidebarThreadRow
+            key={thread.id}
+            active={thread.id === activeThreadId}
+            cursor={focused && start + index === safeSelected}
+            focused={focused}
+            title={threadDisplayTitle(thread, threadPreviews)}
+            dotTone={threadStatusDotTone(thread, dotContext)}
+            width={innerWidth}
+          />
+        ))
+      ) : (
+        <box style={{ height: 1 }}>
+          <text fg={theme.textMuted}>{truncate("No threads yet", innerWidth)}</text>
+        </box>
+      )}
+      <box style={{ flexGrow: 1 }} />
+      <text fg={theme.textFaint}>{truncate(focused ? "↑↓ move · enter open · tab chat" : "tab focus · ^b hide", innerWidth)}</text>
+    </box>
+  )
+}
+
+function SidebarThreadRow({
+  active,
+  cursor,
+  focused,
+  title,
+  dotTone,
+  width,
+}: {
+  active: boolean
+  cursor: boolean
+  focused: boolean
+  title: string
+  dotTone: Tone
+  width: number
+}) {
+  const highlighted = active || (focused && cursor)
+  const bg = highlighted ? theme.accentSoftBg : theme.bg
+  const railColor = highlighted ? theme.accent : theme.bg
+  const marker = focused && cursor ? "›" : " "
+  // rail(1) + marker(1) + dot(1) + space(1) → title budget is width - 4.
+  const titleWidth = Math.max(4, width - 4)
+  return (
+    <box style={{ width, height: 1, flexDirection: "row", backgroundColor: bg }}>
+      <box style={{ width: 1, backgroundColor: railColor }} />
+      <text fg={highlighted ? theme.accent : theme.textMuted}>{marker}</text>
+      <text fg={toneColors(dotTone).fg}>●</text>
+      <text fg={highlighted ? theme.accentText : theme.text}> {truncate(title, titleWidth)}</text>
     </box>
   )
 }
@@ -715,15 +843,12 @@ function GatePanel({
   const context = gate.approval_context ?? null
   const contextLines = approvalContextLines(context)
   const allowAlways = Boolean(gate.allow_always)
-  const height = 8 + Math.min(contextLines.length, 3) + (allowAlways ? 0 : 0)
   return (
-    <box
-      focused
-      // Pixel: warnSoftBg strip + 3px warn left rail, square corners.
-      style={{ width, height, flexDirection: "row", backgroundColor: theme.warnSoftBg }}
-    >
-      <box style={{ width: 1, backgroundColor: theme.warn }} />
-      <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
+    // Glass: framed rounded card in the warn tone (amber frame + warn-tinted
+    // fill) keeps the approval's amber identity as an elevated card rather than a
+    // flat left-rail strip.
+    <Card tone="warn" width={width} focused>
+      <box style={{ flexDirection: "column", paddingTop: 1 }}>
         <box style={{ height: 1, flexDirection: "row" }}>
           <Tag label="approval" tone="warn" />
           <text fg={theme.warn}> {truncate(context?.tool_name ?? gate.tool_name, width - 16)}</text>
@@ -750,7 +875,7 @@ function GatePanel({
           <text fg={theme.textFaint}>  ctrl+a approve{allowAlways ? " · w always" : ""} · ctrl+d deny</text>
         </box>
       </box>
-    </box>
+    </Card>
   )
 }
 
@@ -788,28 +913,28 @@ function AuthGatePanel({
 
   const masked = token ? "*".repeat(Math.min(token.length, Math.max(1, width - 12))) : "Paste access token"
   return (
-    <box
-      focused
-      style={{ width, height: 10, backgroundColor: theme.accentSoftBg, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
-    >
-      <AuthGateHeader gate={gate} width={width} />
-      <text fg={theme.text}>{truncate(gate.description, width - 6)}</text>
-      <AuthProviderLine gate={gate} width={width} />
-      <box style={{ height: 1 }} />
-      <box style={{ height: 3, border: true, borderColor: theme.accent, backgroundColor: theme.accentSoftBg, paddingLeft: 1, paddingRight: 1 }}>
-        <text fg={token ? theme.textStrong : theme.textMuted}>{truncate(masked, width - 10)}</text>
+    // Glass: auth challenges are framed accent-tone cards.
+    <Card tone="accent" width={width} focused>
+      <box style={{ flexDirection: "column", paddingTop: 1 }}>
+        <AuthGateHeader gate={gate} width={width} />
+        <text fg={theme.text}>{truncate(gate.description, width - 6)}</text>
+        <AuthProviderLine gate={gate} width={width} />
+        <box style={{ height: 1 }} />
+        <box style={{ height: 3, border: true, borderColor: theme.accent, backgroundColor: theme.accentSoftBg, paddingLeft: 1, paddingRight: 1 }}>
+          <text fg={token ? theme.textStrong : theme.textMuted}>{truncate(masked, width - 10)}</text>
+        </box>
+        <box style={{ height: 1, flexDirection: "row" }}>
+          <text fg={error ? theme.danger : theme.textMuted}>
+            {truncate(error || (submitting ? "checking token..." : "type token, enter submit, esc cancel"), width - 6)}
+          </text>
+        </box>
+        <box style={{ height: 2, flexDirection: "row", marginTop: 1 }}>
+          <AuthGateButton label={submitting ? "Checking" : "Use token"} primary disabled={submitting} onClick={onSubmit} />
+          <box style={{ width: 2 }} />
+          <AuthGateButton label="Cancel" disabled={submitting} onClick={onCancel} />
+        </box>
       </box>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={error ? theme.danger : theme.textMuted}>
-          {truncate(error || (submitting ? "checking token..." : "type token, enter submit, esc cancel"), width - 6)}
-        </text>
-      </box>
-      <box style={{ height: 2, flexDirection: "row", marginTop: 1 }}>
-        <AuthGateButton label={submitting ? "Checking" : "Use token"} primary disabled={submitting} onClick={onSubmit} />
-        <box style={{ width: 2 }} />
-        <AuthGateButton label="Cancel" disabled={submitting} onClick={onCancel} />
-      </box>
-    </box>
+    </Card>
   )
 }
 
@@ -827,24 +952,23 @@ function OAuthGatePanel({
   onOpenUrl: () => void
 }) {
   return (
-    <box
-      focused
-      style={{ width, height: 10, backgroundColor: theme.accentSoftBg, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
-    >
-      <AuthGateHeader gate={gate} width={width} />
-      <text fg={theme.text}>{truncate(gate.description, width - 6)}</text>
-      <AuthProviderLine gate={gate} width={width} />
-      <AuthExpiryLine expiresAt={gate.expires_at} width={width} />
-      <text fg={theme.textMuted}>{truncate(gate.authorization_url || "No authorization URL provided", width - 6)}</text>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={error ? theme.danger : theme.textMuted}>{truncate(error || "o open browser, esc cancel", width - 6)}</text>
+    <Card tone="accent" width={width} focused>
+      <box style={{ flexDirection: "column", paddingTop: 1 }}>
+        <AuthGateHeader gate={gate} width={width} />
+        <text fg={theme.text}>{truncate(gate.description, width - 6)}</text>
+        <AuthProviderLine gate={gate} width={width} />
+        <AuthExpiryLine expiresAt={gate.expires_at} width={width} />
+        <text fg={theme.textMuted}>{truncate(gate.authorization_url || "No authorization URL provided", width - 6)}</text>
+        <box style={{ height: 1, flexDirection: "row" }}>
+          <text fg={error ? theme.danger : theme.textMuted}>{truncate(error || "o open browser, esc cancel", width - 6)}</text>
+        </box>
+        <box style={{ height: 2, flexDirection: "row", marginTop: 1 }}>
+          <AuthGateButton label="Open" primary disabled={!gate.authorization_url} onClick={onOpenUrl} />
+          <box style={{ width: 2 }} />
+          <AuthGateButton label="Cancel" onClick={onCancel} />
+        </box>
       </box>
-      <box style={{ height: 2, flexDirection: "row", marginTop: 1 }}>
-        <AuthGateButton label="Open" primary disabled={!gate.authorization_url} onClick={onOpenUrl} />
-        <box style={{ width: 2 }} />
-        <AuthGateButton label="Cancel" onClick={onCancel} />
-      </box>
-    </box>
+    </Card>
   )
 }
 
@@ -863,24 +987,23 @@ function GenericAuthGatePanel({
 }) {
   const hasUrl = Boolean(gate.authorization_url)
   return (
-    <box
-      focused
-      style={{ width, height: 10, backgroundColor: theme.accentSoftBg, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
-    >
-      <AuthGateHeader gate={gate} width={width} />
-      <text fg={theme.text}>{truncate(gate.description || "Authentication required.", width - 6)}</text>
-      <AuthProviderLine gate={gate} width={width} />
-      <AuthExpiryLine expiresAt={gate.expires_at} width={width} />
-      <text fg={theme.textMuted}>{truncate(hasUrl ? gate.authorization_url || "" : "Continue in the connected auth flow.", width - 6)}</text>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={error ? theme.danger : theme.textMuted}>{truncate(error || (hasUrl ? "o open browser, esc cancel" : "esc cancel"), width - 6)}</text>
+    <Card tone="accent" width={width} focused>
+      <box style={{ flexDirection: "column", paddingTop: 1 }}>
+        <AuthGateHeader gate={gate} width={width} />
+        <text fg={theme.text}>{truncate(gate.description || "Authentication required.", width - 6)}</text>
+        <AuthProviderLine gate={gate} width={width} />
+        <AuthExpiryLine expiresAt={gate.expires_at} width={width} />
+        <text fg={theme.textMuted}>{truncate(hasUrl ? gate.authorization_url || "" : "Continue in the connected auth flow.", width - 6)}</text>
+        <box style={{ height: 1, flexDirection: "row" }}>
+          <text fg={error ? theme.danger : theme.textMuted}>{truncate(error || (hasUrl ? "o open browser, esc cancel" : "esc cancel"), width - 6)}</text>
+        </box>
+        <box style={{ height: 2, flexDirection: "row", marginTop: 1 }}>
+          {hasUrl ? <AuthGateButton label="Open" primary onClick={onOpenUrl} /> : null}
+          {hasUrl ? <box style={{ width: 2 }} /> : null}
+          <AuthGateButton label="Cancel" onClick={onCancel} />
+        </box>
       </box>
-      <box style={{ height: 2, flexDirection: "row", marginTop: 1 }}>
-        {hasUrl ? <AuthGateButton label="Open" primary onClick={onOpenUrl} /> : null}
-        {hasUrl ? <box style={{ width: 2 }} /> : null}
-        <AuthGateButton label="Cancel" onClick={onCancel} />
-      </box>
-    </box>
+    </Card>
   )
 }
 

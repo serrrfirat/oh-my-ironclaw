@@ -1,7 +1,9 @@
 import { theme, toneColors, type Tone } from "./theme"
 
-// Shared Pixel-theme primitives for the surfaces. Flat canvas, hairline
-// separators, square uppercase tag chips, accent brand mark.
+// Shared "Glass" primitives for the surfaces: rounded-border framed panels and
+// cards over the zinc canvas, elevated fills, pill tag chips, accent brand mark.
+// (Formerly the flat "Pixel" look; exported names/props are kept stable so call
+// sites don't churn.)
 
 export function truncate(value: string, max: number): string {
   if (max <= 0) return ""
@@ -34,21 +36,30 @@ export function formatDate(value?: string | null, fallback = "—"): string {
   return new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
-// Top bar: brand "◆ ironclaw" (◆ accent) + surface title + right-aligned meta,
-// with a hairline separator below.
+// Glass top bar: brand "◆ ironclaw" (◆ accent) + surface title + right-aligned
+// meta, elevated on a subtle fill with a bottom border edge (rather than a bare
+// hairline) so the header reads as a bar sitting above the panel body.
 export function SurfaceHeader({ title, meta, width }: { title: string; meta?: string; width: number }) {
   const right = meta ?? ""
   const spacer = Math.max(1, width - 10 - title.length - right.length - 4)
   return (
-    <box style={{ width, height: 2, flexDirection: "column" }}>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={theme.accent}>◆ </text>
-        <text fg={theme.textStrong}>ironclaw</text>
-        <text fg={theme.textFaint}>{padEnd("", spacer)}</text>
-        <text fg={theme.text}>{title}</text>
-        {right ? <text fg={theme.textFaint}> · {right}</text> : null}
-      </box>
-      <Hairline width={width} />
+    <box
+      style={{
+        width,
+        height: 2,
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: theme.barBg,
+        border: ["bottom"],
+        borderStyle: "single",
+        borderColor: theme.border,
+      }}
+    >
+      <text fg={theme.accent}>◆ </text>
+      <text fg={theme.textStrong}>ironclaw</text>
+      <text fg={theme.textFaint}>{padEnd("", spacer)}</text>
+      <text fg={theme.text}>{title}</text>
+      {right ? <text fg={theme.textFaint}> · {right}</text> : null}
     </box>
   )
 }
@@ -61,12 +72,59 @@ export function Hairline({ width }: { width: number }) {
   )
 }
 
-// Square uppercase tag chip: colored text on a soft tone tint, e.g. " RUNNING ".
+// Pill tag chip: uppercase colored text on a soft tone tint with horizontal
+// padding, e.g. " RUNNING ". Terminals can't round a text background, so the
+// padded fill is the pill.
 export function Tag({ label, tone }: { label: string; tone: Tone }) {
   const { fg, bg } = toneColors(tone)
   return (
     <box style={{ height: 1, backgroundColor: bg, paddingLeft: 1, paddingRight: 1 }}>
       <text fg={fg}>{label.toUpperCase()}</text>
+    </box>
+  )
+}
+
+// Glass card: a rounded-border framed panel with an elevated fill, for
+// tool-output wells and gate/auth blocks. A neutral card uses the card tokens;
+// passing a `tone` tints the frame + fill to that status (warn for approvals,
+// accent for auth). The border consumes 1 cell per side — callers that pass a
+// fixed `width` get inner content of `width - 2`, minus any padding they add.
+export function Card({
+  tone,
+  width,
+  title,
+  focused,
+  padded = true,
+  onMouseDown,
+  children,
+}: {
+  tone?: Tone
+  width?: number
+  title?: string
+  focused?: boolean
+  padded?: boolean
+  onMouseDown?: () => void
+  children: React.ReactNode
+}) {
+  const borderColor = tone ? toneColors(tone).fg : theme.cardBorder
+  const backgroundColor = tone ? toneColors(tone).bg : theme.cardBg
+  return (
+    <box
+      focused={focused}
+      title={title}
+      onMouseDown={onMouseDown}
+      style={{
+        width,
+        flexDirection: "column",
+        border: true,
+        borderStyle: "rounded",
+        borderColor,
+        backgroundColor,
+        paddingLeft: padded ? 1 : 0,
+        paddingRight: padded ? 1 : 0,
+      }}
+    >
+      {children}
     </box>
   )
 }
@@ -123,8 +181,13 @@ export function ListRow({
   trailing?: React.ReactNode
   width: number
 }) {
+  // Glass list: only the SELECTED row is emphasised — an accentSoftBg fill with
+  // a coloured left edge (railTone recolors it) reads as a filled chip. A true
+  // per-row rounded border isn't viable at 1 row tall, so the fill + edge is the
+  // chip. Unselected rows stay quiet: the left edge is painted in the canvas bg
+  // (invisible) so widths still line up but the list isn't a grid of rails.
   const bg = selected ? theme.accentSoftBg : theme.bg
-  const railColor = selected ? (railTone ? toneColors(railTone).fg : theme.accent) : theme.border
+  const railColor = selected ? (railTone ? toneColors(railTone).fg : theme.accent) : theme.bg
   const suffixColor = suffixTone ? toneColors(suffixTone).fg : theme.textFaint
   const suffixText = suffix ? ` ${suffix}` : ""
   const resolvedTextWidth = textWidth ?? Math.max(4, width - 3 - suffixText.length)
@@ -141,7 +204,11 @@ export function ListRow({
   )
 }
 
-// Full-screen surface chrome: flat canvas with header + padded content.
+// Full-screen surface chrome: a rounded-border framed Glass panel over the
+// canvas, header inside. The frame's border (1 cell/side) plus 1 cell of padding
+// per side keeps the inner content width at exactly `width - 4` — the same
+// budget the flat Pixel surface exposed — so every child surface's existing
+// `width - 4` math still lines up without churn.
 export function Surface({
   title,
   meta,
@@ -157,7 +224,20 @@ export function Surface({
 }) {
   const contentWidth = Math.max(1, width - 4)
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
+    <box
+      style={{
+        width,
+        height,
+        flexDirection: "column",
+        backgroundColor: theme.bg,
+        border: true,
+        borderStyle: "rounded",
+        borderColor: theme.border,
+        paddingLeft: 1,
+        paddingRight: 1,
+        paddingTop: 0,
+      }}
+    >
       <SurfaceHeader title={title} meta={meta} width={contentWidth} />
       <box style={{ height: 1 }} />
       {children}

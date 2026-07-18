@@ -140,6 +140,8 @@ The settings surface is functional: the **Tools** section cycles per-tool permis
 - `esc`: close an open palette / back out a sub-mode; otherwise cancel the active run
 - `ctrl+p`: command palette
 - `ctrl+t`: thread picker (`ctrl+d` deletes the selected thread with a `y`/`n` confirm)
+- `ctrl+b`: collapse / expand the persistent threads sidebar (conversation view)
+- `tab`: move focus between the threads sidebar and the chat; when the sidebar is focused, `↑`/`↓` select a thread and `enter` opens it
 - `ctrl+m`: model picker
 - `ctrl+n`: new thread
 - `ctrl+x`: cancel active run
@@ -182,7 +184,9 @@ The terminal title always reflects how many things are waiting on you (pending a
 
 ## Design
 
-The UI uses the **IronClaw DS (PR #5563) "Pixel" theme** — a flat `#09090b` canvas with hairline separators, square uppercase tag chips, a signal-blue accent ramp (`#2882c8 → #4ca7e6 → #6bb8ec`), and a strict status canon (running = info blue, success = ok green, approval/attention = warn amber, failure/cancelled = danger red, paused/idle = muted). All tokens live in `src/ui/theme.ts`; surfaces import from it rather than hard-coding colors. The LocalDevYolo rainbow splash variant is preserved.
+The UI uses the **IronClaw DS "Glass" look** — the same `#09090b` zinc canvas, signal-blue accent ramp (`#2882c8 → #4ca7e6 → #6bb8ec`), pill tag chips, and strict status canon (running = info blue, success = ok green, approval/attention = warn amber, failure/cancelled = danger red, paused/idle = muted), but rendered as **rounded-border framed panels and elevated cards** rather than flat text on the canvas. Surfaces are wrapped in a rounded frame with a barred header; tool output sits in a rounded card-bg well; approval gates are framed warn-tone cards (keeping the amber identity) and auth challenges are framed accent-tone cards; the composer is a rounded glass well whose border edge doubles as the focus / thinking indicator. Lists stay quiet — only the selected row is emphasised (accent-tinted fill + a coloured left edge) so the list doesn't become a grid of boxes. All tokens (including the Glass `cardBg` / `cardBorder` / `barBg`) live in `src/ui/theme.ts`; surfaces import from it rather than hard-coding colors. The LocalDevYolo rainbow splash variant is preserved.
+
+The conversation view is a two-pane layout: a persistent **threads sidebar** (`THREADS`, ~28 cols) on the left listing threads with a status dot (running = info, needs-approval = warn, idle = muted), the active thread highlighted, over the conversation on the right. The sidebar reads the same in-memory thread list as the `ctrl+t` picker (no extra fetches). It auto-collapses below ~90 cols (chat takes the full width); `ctrl+b` toggles it, and `tab` moves focus between the sidebar and the chat — when the sidebar is focused, `↑`/`↓` select and `enter` opens the thread.
 
 ## Configuration
 

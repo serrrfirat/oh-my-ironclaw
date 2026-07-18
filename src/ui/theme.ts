@@ -10,6 +10,12 @@ export const theme = {
   bgSoft: "#131316", // hover/selection fallback surface
   border: "#232326", // hairline (white 10% on canvas)
   borderSoft: "#1c1c1f", // white 8%
+  // Glass elevation: framed panels/cards sit on a slightly lifted fill with a
+  // marginally brighter edge than the flat hairline, so a bordered card reads as
+  // "above" the canvas rather than drawn on it.
+  cardBg: "#16191d", // card / tool-output well fill (elevated over canvas)
+  cardBorder: "#2c2c31", // card frame edge (a touch brighter than border)
+  barBg: "#0e0e11", // glass bar fill (top/status bars, composer)
   text: "#e0e0e0",
   textStrong: "#fafafa",
   textMuted: "#a1a1aa",

@@ -76,11 +76,14 @@ export function TranscriptMessage({
     const summary = collapsedActivitySummary(detail)
     const hint = expanded ? "click to collapse" : "click to expand"
     return (
+      // Glass: tool output sits in a rounded card (card-bg fill + card frame).
+      // Border (1/side) + inner padding (2 left / 1 right) preserves the former
+      // 3-left / 2-right content inset, so the truncation budgets below still hold.
       <box
         onMouseDown={() => onToggleActivityExpanded(item.id)}
-        style={{ width, flexDirection: "row", backgroundColor: theme.bgCode, marginBottom: 1 }}
+        style={{ width, flexDirection: "row", backgroundColor: theme.cardBg, border: true, borderStyle: "rounded", borderColor: theme.cardBorder, marginBottom: 1 }}
       >
-        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 3, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
+        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 1 }}>
           <box style={{ height: 1, flexDirection: "row" }}>
             <text fg={theme.textFaint}>{expanded ? "▾ " : "▸ "}</text>
             <text fg={activityColor}>{icon}</text>
