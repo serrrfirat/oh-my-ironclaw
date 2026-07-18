@@ -90,32 +90,53 @@ export function Hint({ text, width }: { text: string; width: number }) {
 
 // A list row with a 2px left rail + indent (Pixel: no card fill). Selected rows
 // get an accentSoftBg strip + accentText marker instead of a fill.
+//
+// The common shape is rail + marker + text + a plain textFaint `suffix`. The
+// optional slots cover the surface variants without duplicating the markup:
+//   railTone     – recolor the selected rail (e.g. Traces holds use warn)
+//   leading      – node rendered between the marker and text (chip / dir arrow)
+//   textWidth    – explicit truncation budget when a surface sizes text itself
+//   alignSuffix  – push everything after the text to the right edge (flexGrow)
+//   trailing     – node(s) rendered after the suffix (extra chips / statuses)
 export function ListRow({
   selected,
   marker,
+  railTone,
+  leading,
   text,
+  textWidth,
   suffix,
   suffixTone,
+  alignSuffix,
+  trailing,
   width,
 }: {
   selected: boolean
   marker?: string
+  railTone?: Tone
+  leading?: React.ReactNode
   text: string
+  textWidth?: number
   suffix?: string
   suffixTone?: Tone
+  alignSuffix?: "end"
+  trailing?: React.ReactNode
   width: number
 }) {
   const bg = selected ? theme.accentSoftBg : theme.bg
-  const railColor = selected ? theme.accent : theme.border
+  const railColor = selected ? (railTone ? toneColors(railTone).fg : theme.accent) : theme.border
   const suffixColor = suffixTone ? toneColors(suffixTone).fg : theme.textFaint
   const suffixText = suffix ? ` ${suffix}` : ""
-  const textWidth = Math.max(4, width - 3 - suffixText.length)
+  const resolvedTextWidth = textWidth ?? Math.max(4, width - 3 - suffixText.length)
   return (
     <box style={{ width, height: 1, flexDirection: "row", backgroundColor: bg }}>
       <box style={{ width: 1, backgroundColor: railColor }} />
       <text fg={selected ? theme.accent : theme.textMuted}> {marker ?? (selected ? "›" : " ")} </text>
-      <text fg={selected ? theme.accentText : theme.text}>{truncate(text, textWidth)}</text>
+      {leading}
+      <text fg={selected ? theme.accentText : theme.text}>{truncate(text, resolvedTextWidth)}</text>
       {suffixText ? <text fg={suffixColor}>{suffixText}</text> : null}
+      {alignSuffix === "end" ? <box style={{ flexGrow: 1 }} /> : null}
+      {trailing}
     </box>
   )
 }

@@ -1,7 +1,7 @@
 import type { SyntaxStyle } from "@opentui/core"
 import type { SkillInfo } from "../gateway/types"
 import { theme, statusColor } from "./theme"
-import { Hint, SurfaceHeader, Tag, truncate, wrapIndex } from "./pixel"
+import { Hint, ListRow, Surface, Tag, truncate, wrapIndex } from "./pixel"
 
 const SKILL_VISIBLE_LIMIT = 14
 
@@ -50,9 +50,7 @@ export function SkillsRemoteSurface({
 }) {
   const contentWidth = Math.max(1, width - 4)
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="skills" meta={loading ? "loading" : `${skills.length} · learned ${autoActivateLearned ? "on" : "off"}`} width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="skills" meta={loading ? "loading" : `${skills.length} · learned ${autoActivateLearned ? "on" : "off"}`} width={width} height={height}>
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : null}
       {message ? <text fg={theme.accentText}>{truncate(message, contentWidth)}</text> : null}
       {install ? (
@@ -64,7 +62,7 @@ export function SkillsRemoteSurface({
       )}
       <box style={{ flexGrow: 1 }} />
       <Hint text={hintText(Boolean(detail), Boolean(install), confirmingRemove)} width={contentWidth} />
-    </box>
+    </Surface>
   )
 }
 
@@ -103,15 +101,23 @@ function SkillList({
       {visible.length ? (
         visible.map((skill, index) => {
           const isSelected = start + index === selected
+          const nameWidth = Math.max(8, Math.floor(width * 0.32))
           return (
-            <box key={`${skill.source}:${skill.name}`} style={{ width, height: 1, flexDirection: "row", backgroundColor: isSelected ? theme.accentSoftBg : theme.bg }}>
-              <box style={{ width: 1, backgroundColor: isSelected ? theme.accent : theme.border }} />
-              <text fg={isSelected ? theme.accent : theme.textMuted}> {isSelected && confirmingRemove ? "✕" : isSelected ? "›" : " "} </text>
-              {skill.auto_activate ? <Tag label="auto" tone="ok" /> : null}
-              <text fg={isSelected ? theme.accentText : theme.text}> {truncate(skill.name, Math.max(8, Math.floor(width * 0.32)))}</text>
-              <text fg={statusColor(skill.trust)}> {truncate(skill.trust, 9)}</text>
-              <text fg={theme.textFaint}> {truncate(skill.description || "", Math.max(6, width - Math.floor(width * 0.32) - 22))}</text>
-            </box>
+            <ListRow
+              key={`${skill.source}:${skill.name}`}
+              selected={isSelected}
+              marker={isSelected && confirmingRemove ? "✕" : isSelected ? "›" : " "}
+              leading={skill.auto_activate ? <Tag label="auto" tone="ok" /> : undefined}
+              text={` ${truncate(skill.name, nameWidth)}`}
+              textWidth={width}
+              trailing={
+                <>
+                  <text fg={statusColor(skill.trust)}> {truncate(skill.trust, 9)}</text>
+                  <text fg={theme.textFaint}> {truncate(skill.description || "", Math.max(6, width - nameWidth - 22))}</text>
+                </>
+              }
+              width={width}
+            />
           )
         })
       ) : (

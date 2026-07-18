@@ -1,6 +1,6 @@
 import type { AccountTracesResponse, TraceCreditsResponse } from "../gateway/types"
 import { theme } from "./theme"
-import { Field, Hint, SurfaceHeader, Tag, truncate, wrapIndex } from "./pixel"
+import { Field, Hint, ListRow, Surface, Tag, truncate, wrapIndex } from "./pixel"
 
 export function TracesSurface({
   credits,
@@ -27,9 +27,7 @@ export function TracesSurface({
   const holds = credits?.holds ?? []
   const selectedHold = wrapIndex(selectedHoldIndex, holds.length)
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="traces" meta={loading ? "loading" : error ? "unavailable" : credits?.enrolled ? "enrolled" : "not enrolled"} width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="traces" meta={loading ? "loading" : error ? "unavailable" : credits?.enrolled ? "enrolled" : "not enrolled"} width={width} height={height}>
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : null}
       {message ? <text fg={theme.accentText}>{truncate(message, contentWidth)}</text> : null}
       {credits ? (
@@ -46,12 +44,15 @@ export function TracesSurface({
       <text fg={theme.text}>Holds ({holds.length})</text>
       {holds.length ? (
         holds.map((hold, index) => (
-          <box key={hold.submission_id} style={{ width: contentWidth, height: 1, flexDirection: "row", backgroundColor: index === selectedHold ? theme.accentSoftBg : theme.bg }}>
-            <box style={{ width: 1, backgroundColor: index === selectedHold ? theme.warn : theme.border }} />
-            <text fg={index === selectedHold ? theme.accent : theme.textMuted}> {index === selectedHold ? "›" : " "} </text>
-            <Tag label="hold" tone="warn" />
-            <text fg={index === selectedHold ? theme.accentText : theme.text}> {truncate(`${hold.submission_id} · ${hold.reason}`, Math.max(8, contentWidth - 12))}</text>
-          </box>
+          <ListRow
+            key={hold.submission_id}
+            selected={index === selectedHold}
+            railTone="warn"
+            leading={<Tag label="hold" tone="warn" />}
+            text={` ${truncate(`${hold.submission_id} · ${hold.reason}`, Math.max(8, contentWidth - 12))}`}
+            textWidth={contentWidth}
+            width={contentWidth}
+          />
         ))
       ) : (
         <text fg={theme.textMuted}>no holds awaiting authorization</text>
@@ -63,6 +64,6 @@ export function TracesSurface({
       {loginLink ? <Field label="login link" value={loginLink} width={contentWidth} /> : null}
       <box style={{ flexGrow: 1 }} />
       <Hint text="a authorize hold · L account login link · r refresh · esc back" width={contentWidth} />
-    </box>
+    </Surface>
   )
 }

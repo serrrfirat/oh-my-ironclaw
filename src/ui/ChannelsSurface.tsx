@@ -1,5 +1,6 @@
 import type { ConnectableChannelInfo } from "../gateway/types"
 import { theme } from "./theme"
+import { Surface } from "./pixel"
 
 const CHANNEL_VISIBLE_LIMIT = 14
 
@@ -23,9 +24,7 @@ export function ChannelsSurface({
   const listWidth = Math.min(58, Math.max(36, Math.floor(contentWidth * 0.46)))
   const narrow = width < 94
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="channels" meta={loading ? "loading" : `${channels.length} connectable`} width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="channels" meta={loading ? "loading" : `${channels.length} connectable`} width={width} height={height}>
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : null}
       {narrow ? (
         <box style={{ flexDirection: "column" }}>
@@ -42,7 +41,7 @@ export function ChannelsSurface({
       )}
       <box style={{ flexGrow: 1 }} />
       <text fg={theme.textMuted}>{truncate("up/down select · r refresh · esc back", contentWidth)}</text>
-    </box>
+    </Surface>
   )
 }
 
@@ -96,20 +95,6 @@ function ChannelDetail({ channel, width }: { channel: ConnectableChannelInfo | n
       <box style={{ height: 1 }} />
       <Field label="success" value={channel.action.success_message} width={width - 4} />
       <Field label="error" value={channel.action.error_message} width={width - 4} />
-    </box>
-  )
-}
-
-function SurfaceHeader({ title, meta, width }: { title: string; meta: string; width: number }) {
-  return (
-    <box style={{ width, height: 2, flexDirection: "column" }}>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={theme.accentText}>ironclaw</text>
-        <text fg={theme.textMuted}>{padEnd("", Math.max(1, width - title.length - meta.length - 12))}</text>
-        <text fg={theme.text}>{title}</text>
-        <text fg={theme.textMuted}> · {meta}</text>
-      </box>
-      <text fg={theme.border}>{padEnd("", width).replaceAll(" ", "-")}</text>
     </box>
   )
 }

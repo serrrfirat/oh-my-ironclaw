@@ -1,5 +1,6 @@
 import type { ExtensionInfo, ExtensionRegistryEntry, ExtensionSetupResponse } from "../gateway/types"
 import { theme } from "./theme"
+import { Surface } from "./pixel"
 
 export type ExtensionRow =
   | { source: "installed"; id: string; name: string; kind: string; description: string; installed: true; active: boolean; needsSetup: boolean; status: string; version?: string | null; info: ExtensionInfo }
@@ -69,9 +70,7 @@ export function ExtensionsSurface({
   const listWidth = Math.min(58, Math.max(36, Math.floor(contentWidth * 0.46)))
   const narrow = width < 94
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="extensions" meta={loading ? "loading" : `${installed} installed · ${available} available`} width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="extensions" meta={loading ? "loading" : `${installed} installed · ${available} available`} width={width} height={height}>
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : actionMessage ? <text fg={theme.accentText}>{truncate(actionMessage, contentWidth)}</text> : null}
       {narrow ? (
         <box style={{ flexDirection: "column" }}>
@@ -88,7 +87,7 @@ export function ExtensionsSurface({
       )}
       <box style={{ flexGrow: 1 }} />
       <text fg={theme.textMuted}>{truncate("up/down select · enter install/activate · s setup · x remove · r refresh · esc back", contentWidth)}</text>
-    </box>
+    </Surface>
   )
 }
 
@@ -196,20 +195,6 @@ function Field({ label, value, width }: { label: string; value: string; width: n
     <box style={{ width, height: 1, flexDirection: "row" }}>
       <text fg={theme.textMuted}>{padEnd(label, labelWidth)}</text>
       <text fg={theme.text}>{truncate(value, Math.max(1, width - labelWidth))}</text>
-    </box>
-  )
-}
-
-function SurfaceHeader({ title, meta, width }: { title: string; meta: string; width: number }) {
-  return (
-    <box style={{ width, height: 2, flexDirection: "column" }}>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={theme.accentText}>ironclaw</text>
-        <text fg={theme.textMuted}>{padEnd("", Math.max(1, width - title.length - meta.length - 12))}</text>
-        <text fg={theme.text}>{title}</text>
-        <text fg={theme.textMuted}> · {meta}</text>
-      </box>
-      <text fg={theme.border}>{padEnd("", width).replaceAll(" ", "-")}</text>
     </box>
   )
 }

@@ -1,5 +1,6 @@
 import type { LlmConfigSnapshot, LlmProviderView } from "../gateway/types"
 import { theme } from "./theme"
+import { Surface } from "./pixel"
 
 const PROVIDER_VISIBLE_LIMIT = 14
 
@@ -48,9 +49,7 @@ export function LlmProvidersSurface({
   const listWidth = Math.min(58, Math.max(36, Math.floor(contentWidth * 0.46)))
   const narrow = width < 94
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="providers" meta={loading ? "loading" : `${configured}/${providers.length} configured`} width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="providers" meta={loading ? "loading" : `${configured}/${providers.length} configured`} width={width} height={height}>
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : actionMessage ? <text fg={theme.accentText}>{truncate(actionMessage, contentWidth)}</text> : null}
       {narrow ? (
         <box style={{ flexDirection: "column" }}>
@@ -67,7 +66,7 @@ export function LlmProvidersSurface({
       )}
       <box style={{ flexGrow: 1 }} />
       <text fg={theme.textMuted}>{truncate("up/down select · n new · e edit · enter active · s key · l github · g google · w wallet · t test · m models · x delete · r refresh · esc back", contentWidth)}</text>
-    </box>
+    </Surface>
   )
 }
 
@@ -184,20 +183,6 @@ function WalletLoginPreview({ input, width }: { input: string; width: number }) 
       <text fg={theme.warn}>{truncate("near ai wallet login", width - 2)}</text>
       <text fg={theme.textMuted}>{truncate("paste signed JSON payload, enter submit", width - 2)}</text>
       <text fg={theme.textStrong}>{truncate(input || "{}", width - 2)}</text>
-    </box>
-  )
-}
-
-function SurfaceHeader({ title, meta, width }: { title: string; meta: string; width: number }) {
-  return (
-    <box style={{ width, height: 2, flexDirection: "column" }}>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={theme.accentText}>ironclaw</text>
-        <text fg={theme.textMuted}>{padEnd("", Math.max(1, width - title.length - meta.length - 12))}</text>
-        <text fg={theme.text}>{title}</text>
-        <text fg={theme.textMuted}> · {meta}</text>
-      </box>
-      <text fg={theme.border}>{padEnd("", width).replaceAll(" ", "-")}</text>
     </box>
   )
 }

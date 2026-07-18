@@ -1,7 +1,7 @@
 import type { ClientConfig } from "../config"
 import type { LlmConfigSnapshot, SessionResponse } from "../gateway/types"
 import { theme } from "./theme"
-import { Field, Hairline, padEnd, truncate, wrapIndex } from "./pixel"
+import { Field, padEnd, Surface, truncate, wrapIndex } from "./pixel"
 
 export type SettingsSection = "Profile" | "Connection" | "Providers" | "Extensions" | "Channels" | "Skills" | "Automations" | "Tools" | "Outbound"
 type SettingsMenuItem = { label: SettingsSection; meta: string }
@@ -103,9 +103,7 @@ export function SettingsSurface({
   )
 
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SettingsHeader width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="settings" width={width} height={height}>
       {narrow ? (
         <box style={{ flexDirection: "column" }}>
           <text fg={theme.textStrong}>Settings</text>
@@ -126,21 +124,7 @@ export function SettingsSurface({
         </box>
       )}
       <SettingsFooter width={contentWidth} />
-    </box>
-  )
-}
-
-function SettingsHeader({ width }: { width: number }) {
-  return (
-    <box style={{ width, height: 2, flexDirection: "column" }}>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={theme.accent}>◆ </text>
-        <text fg={theme.textStrong}>ironclaw</text>
-        <text fg={theme.textFaint}>{padEnd("", Math.max(1, width - 20))}</text>
-        <text fg={theme.text}>settings</text>
-      </box>
-      <Hairline width={width} />
-    </box>
+    </Surface>
   )
 }
 

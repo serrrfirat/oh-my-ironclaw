@@ -1,6 +1,6 @@
 import type { ProjectInfo, ProjectMemberInfo } from "../gateway/types"
 import { theme, statusColor, statusTone } from "./theme"
-import { Field, Hint, SurfaceHeader, Tag, truncate, wrapIndex } from "./pixel"
+import { Field, Hint, ListRow, Surface, Tag, truncate, wrapIndex } from "./pixel"
 
 const PROJECT_VISIBLE_LIMIT = 14
 
@@ -34,9 +34,7 @@ export function ProjectsSurface({
   const contentWidth = Math.max(1, width - 4)
   const selected = projects[wrapIndex(selectedIndex, projects.length)] ?? null
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="projects" meta={loading ? "loading" : `${projects.length} projects`} width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="projects" meta={loading ? "loading" : `${projects.length} projects`} width={width} height={height}>
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : null}
       {message ? <text fg={theme.accentText}>{truncate(message, contentWidth)}</text> : null}
       {view === "create" ? (
@@ -52,7 +50,7 @@ export function ProjectsSurface({
       )}
       <box style={{ flexGrow: 1 }} />
       <Hint text={hintForView(view, confirmingDelete)} width={contentWidth} />
-    </box>
+    </Surface>
   )
 }
 
@@ -73,12 +71,14 @@ function ProjectList({ projects, selectedIndex, width }: { projects: ProjectInfo
       {visible.map((project, index) => {
         const isSelected = start + index === selected
         return (
-          <box key={project.project_id} style={{ width, height: 1, flexDirection: "row", backgroundColor: isSelected ? theme.accentSoftBg : theme.bg }}>
-            <box style={{ width: 1, backgroundColor: isSelected ? theme.accent : theme.border }} />
-            <text fg={isSelected ? theme.accent : theme.textMuted}> {isSelected ? "›" : " "} </text>
-            <text fg={isSelected ? theme.accentText : theme.text}>{truncate(project.name || "untitled", Math.max(6, width - 14))}</text>
-            <text fg={statusColor(project.state)}> {truncate(project.role, 8)}</text>
-          </box>
+          <ListRow
+            key={project.project_id}
+            selected={isSelected}
+            text={project.name || "untitled"}
+            textWidth={Math.max(6, width - 14)}
+            trailing={<text fg={statusColor(project.state)}> {truncate(project.role, 8)}</text>}
+            width={width}
+          />
         )
       })}
     </box>

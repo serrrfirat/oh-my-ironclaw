@@ -1,6 +1,6 @@
 import type { AutomationInfo } from "../gateway/types"
 import { theme, statusColor, statusTone } from "./theme"
-import { Field, formatDate, Hairline, Hint, Tag, truncate, wrapIndex } from "./pixel"
+import { Field, formatDate, Hint, Surface, Tag, truncate, wrapIndex } from "./pixel"
 
 const AUTOMATION_VISIBLE_LIMIT = 14
 
@@ -34,9 +34,7 @@ export function AutomationsSurface({
   const summary = automationSummary(automations)
   const narrow = width < 90
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="automations" meta={loading ? "loading" : `${automations.length} schedules`} width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="automations" meta={loading ? "loading" : `${automations.length} schedules`} width={width} height={height}>
       {typeof schedulerEnabled === "boolean" ? (
         <box style={{ height: 1, flexDirection: "row" }}>
           <text fg={theme.textMuted}>scheduler </text>
@@ -71,23 +69,7 @@ export function AutomationsSurface({
       )}
       <box style={{ flexGrow: 1 }} />
       <Hint text={confirmingDelete ? "delete automation? y confirm · n cancel" : "up/down select · p pause · r resume · n rename · d delete · g refresh · esc back"} width={contentWidth} />
-    </box>
-  )
-}
-
-function SurfaceHeader({ title, meta, width }: { title: string; meta: string; width: number }) {
-  const spacer = Math.max(1, width - 10 - title.length - meta.length - 4)
-  return (
-    <box style={{ width, height: 2, flexDirection: "column" }}>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={theme.accent}>◆ </text>
-        <text fg={theme.textStrong}>ironclaw</text>
-        <text fg={theme.textFaint}>{" ".repeat(spacer)}</text>
-        <text fg={theme.text}>{title}</text>
-        <text fg={theme.textFaint}> · {meta}</text>
-      </box>
-      <Hairline width={width} />
-    </box>
+    </Surface>
   )
 }
 

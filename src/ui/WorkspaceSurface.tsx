@@ -1,6 +1,6 @@
 import type { FsMountInfo, ProjectFsEntry, ProjectFsStat } from "../gateway/types"
 import { theme } from "./theme"
-import { Field, Hint, SurfaceHeader, truncate, wrapIndex } from "./pixel"
+import { Field, Hint, ListRow, Surface, truncate, wrapIndex } from "./pixel"
 
 const ENTRY_VISIBLE_LIMIT = 16
 const FILE_LINE_LIMIT = 20
@@ -38,9 +38,7 @@ export function WorkspaceSurface({
   const contentWidth = Math.max(1, width - 4)
   const meta = view.kind === "mounts" ? `${mounts.length} mounts` : `${view.mount}:${view.path || "/"}`
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="workspace" meta={loading ? "loading" : meta} width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="workspace" meta={loading ? "loading" : meta} width={width} height={height}>
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : null}
       {view.kind === "file" ? (
         <FilePane stat={stat} content={fileContent} offset={fileOffset} height={height} width={contentWidth} />
@@ -51,7 +49,7 @@ export function WorkspaceSurface({
       )}
       <box style={{ flexGrow: 1 }} />
       <Hint text={hintForView(view)} width={contentWidth} />
-    </box>
+    </Surface>
   )
 }
 
@@ -67,12 +65,14 @@ function MountList({ mounts, selectedIndex, loading, width }: { mounts: FsMountI
   return (
     <box style={{ flexDirection: "column" }}>
       {mounts.map((mount, index) => (
-        <box key={mount.mount} style={{ width, height: 1, flexDirection: "row", backgroundColor: index === selected ? theme.accentSoftBg : theme.bg }}>
-          <box style={{ width: 1, backgroundColor: index === selected ? theme.accent : theme.border }} />
-          <text fg={index === selected ? theme.accent : theme.textMuted}> {index === selected ? "›" : " "} </text>
-          <text fg={index === selected ? theme.accentText : theme.text}>{truncate(mount.label || mount.mount, 24)}</text>
-          <text fg={theme.textFaint}> {mount.mount}</text>
-        </box>
+        <ListRow
+          key={mount.mount}
+          selected={index === selected}
+          text={mount.label || mount.mount}
+          textWidth={24}
+          suffix={mount.mount}
+          width={width}
+        />
       ))}
     </box>
   )
@@ -89,12 +89,14 @@ function EntryList({ entries, selectedIndex, loading, width }: { entries: Projec
         const isSelected = start + index === selected
         const isDir = entry.kind === "directory"
         return (
-          <box key={entry.path} style={{ width, height: 1, flexDirection: "row", backgroundColor: isSelected ? theme.accentSoftBg : theme.bg }}>
-            <box style={{ width: 1, backgroundColor: isSelected ? theme.accent : theme.border }} />
-            <text fg={isSelected ? theme.accent : theme.textMuted}> {isSelected ? "›" : " "} </text>
-            <text fg={isDir ? theme.accentText : theme.textFaint}>{isDir ? "▸ " : "  "}</text>
-            <text fg={isSelected ? theme.accentText : theme.text}>{truncate(entry.name, Math.max(4, width - 6))}</text>
-          </box>
+          <ListRow
+            key={entry.path}
+            selected={isSelected}
+            leading={<text fg={isDir ? theme.accentText : theme.textFaint}>{isDir ? "▸ " : "  "}</text>}
+            text={entry.name}
+            textWidth={Math.max(4, width - 6)}
+            width={width}
+          />
         )
       })}
     </box>

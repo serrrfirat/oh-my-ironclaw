@@ -2,7 +2,7 @@ import type { SessionResponse } from "../gateway/types"
 import type { ToolPermissionRow } from "./toolPermissions"
 import { toolPermissionLabel, toolPermissionTone } from "./toolPermissions"
 import { theme, toneColors, booleanTone } from "./theme"
-import { Field, Hint, SurfaceHeader, Tag, truncate, wrapIndex } from "./pixel"
+import { Field, Hint, ListRow, Surface, Tag, truncate, wrapIndex } from "./pixel"
 
 const TOOL_VISIBLE_LIMIT = 14
 
@@ -32,9 +32,7 @@ export function ToolsSurface({
   const start = Math.min(Math.max(0, selected - TOOL_VISIBLE_LIMIT + 1), Math.max(0, rows.length - TOOL_VISIBLE_LIMIT))
   const visible = rows.slice(start, start + TOOL_VISIBLE_LIMIT)
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="tools" meta={loading ? "loading" : `${rows.length} capabilities`} width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="tools" meta={loading ? "loading" : `${rows.length} capabilities`} width={width} height={height}>
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : null}
       {message ? <text fg={theme.accentText}>{truncate(message, contentWidth)}</text> : null}
       <box style={{ height: 1, flexDirection: "row" }}>
@@ -62,14 +60,20 @@ export function ToolsSurface({
           const isSelected = start + index === selected
           const tone = toolPermissionTone(row.permission)
           return (
-            <box key={row.capabilityId} style={{ width: contentWidth, height: 1, flexDirection: "row", backgroundColor: isSelected ? theme.accentSoftBg : theme.bg }}>
-              <box style={{ width: 1, backgroundColor: isSelected ? theme.accent : theme.border }} />
-              <text fg={isSelected ? theme.accent : theme.textMuted}> {isSelected ? "›" : " "} </text>
-              <text fg={isSelected ? theme.accentText : theme.text}>{truncate(row.label, Math.max(8, contentWidth - 24))}</text>
-              <box style={{ flexGrow: 1 }} />
-              <text fg={toneColors(tone).fg}>{toolPermissionLabel(row.permission)}</text>
-              {!row.mutable ? <text fg={theme.textFaint}> (locked)</text> : null}
-            </box>
+            <ListRow
+              key={row.capabilityId}
+              selected={isSelected}
+              text={row.label}
+              textWidth={Math.max(8, contentWidth - 24)}
+              alignSuffix="end"
+              trailing={
+                <>
+                  <text fg={toneColors(tone).fg}>{toolPermissionLabel(row.permission)}</text>
+                  {!row.mutable ? <text fg={theme.textFaint}> (locked)</text> : null}
+                </>
+              }
+              width={contentWidth}
+            />
           )
         })
       ) : (
@@ -77,6 +81,6 @@ export function ToolsSurface({
       )}
       <box style={{ flexGrow: 1 }} />
       <Hint text="up/down select · enter cycle permission · g global auto-approve · r refresh · esc back" width={contentWidth} />
-    </box>
+    </Surface>
   )
 }

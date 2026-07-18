@@ -2,7 +2,7 @@ import type { LogEntry } from "../gateway/types"
 import type { LogFilterState } from "./logFilters"
 import { logLevelLabel } from "./logFilters"
 import { theme, statusColor } from "./theme"
-import { Hint, SurfaceHeader, truncate } from "./pixel"
+import { Hint, Surface, truncate } from "./pixel"
 
 export const LOG_VISIBLE_LIMIT = 16
 
@@ -45,9 +45,7 @@ export function LogsSurface({
   const start = Math.max(0, end - LOG_VISIBLE_LIMIT)
   const visible = entries.slice(start, end)
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="logs" meta={loading ? "loading" : `${entries.length} · ${source || "server"}`} width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="logs" meta={loading ? "loading" : `${entries.length} · ${source || "server"}`} width={width} height={height}>
       <FilterStrip filter={filter} editingTarget={editingTarget} targetInput={targetInput} width={contentWidth} />
       <box style={{ height: 1 }} />
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : null}
@@ -62,7 +60,7 @@ export function LogsSurface({
         text={`l level (${logLevelLabel(filter.level)}) · t target · f follow ${filter.follow ? "on" : "off"}${tailSupported ? " · tail" + (filter.tail ? " on" : " off") : ""}${maxOffset > 0 ? " · ↑/↓ scroll" : ""}${clampedOffset > 0 ? ` (+${clampedOffset} newer below)` : ""}${hasOlder ? " · o older" : ""} · r refresh · esc back${followSupported ? "" : ""}`}
         width={contentWidth}
       />
-    </box>
+    </Surface>
   )
 }
 
