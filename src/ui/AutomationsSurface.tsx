@@ -40,7 +40,10 @@ export function AutomationsSurface({
       {typeof schedulerEnabled === "boolean" ? (
         <box style={{ height: 1, flexDirection: "row" }}>
           <text fg={theme.textMuted}>scheduler </text>
-          <Tag label={schedulerEnabled ? "enabled" : "paused"} tone={schedulerEnabled ? "ok" : "warn"} />
+          {/* Banner is about the global scheduler being off (suppresses every */}
+          {/* automation), a deliberate degraded state → warn. Per-automation */}
+          {/* paused stays muted (see SummaryStrip / AutomationRow). */}
+          <Tag label={schedulerEnabled ? "enabled" : "disabled"} tone={schedulerEnabled ? "ok" : "warn"} />
         </box>
       ) : null}
       <SummaryStrip summary={summary} width={contentWidth} />
@@ -95,7 +98,7 @@ function SummaryStrip({ summary, width }: { summary: { scheduled: number; active
       <text fg={theme.textFaint}> · </text>
       <text fg={theme.text}>scheduled {summary.scheduled}</text>
       <text fg={theme.textFaint}> · </text>
-      <text fg={theme.warn}>paused {summary.paused}</text>
+      <text fg={statusColor("paused")}>paused {summary.paused}</text>
       <text fg={theme.textFaint}> · next {truncate(summary.nextRun || "none", Math.max(1, width - 42))}</text>
     </box>
   )

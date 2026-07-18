@@ -446,7 +446,7 @@ function Composer({
             <text fg={theme.text}>{selectedModel}</text>
             {selectedProvider ? <text fg={theme.textMuted}> {selectedProvider}</text> : null}
             {!connected ? <text fg={theme.danger}> · ! disconnected</text> : null}
-            {usageCostSummary(usageCost) ? <text fg={theme.textFaint}> · {usageCostSummary(usageCost)}</text> : null}
+            {usageCostSummary(usageCost, activeThreadId) ? <text fg={theme.textFaint}> · {usageCostSummary(usageCost, activeThreadId)}</text> : null}
             {approvalCount > 0 ? <text fg={theme.warn}> · {approvalCount} {approvalCount === 1 ? "approval" : "approvals"}</text> : null}
             {typeof turnElapsedMs === "number" ? <text fg={theme.textMuted}> · {formatDuration(turnElapsedMs)}</text> : null}
             {isThinking && showThinkingStatus ? <text fg={railColor}> {spinner} {thinkingLabel}</text> : null}
@@ -1035,8 +1035,12 @@ function formatDuration(ms: number): string {
   return `${Math.round(ms / 1000)}s`
 }
 
-function usageCostSummary(usageCost?: RunUsageCost | null): string | null {
+// Render usage/cost only when it belongs to the current thread context. A value
+// tagged with a different thread (or a leftover from a prior run/thread) is
+// stale and must not be shown against the active composer.
+function usageCostSummary(usageCost?: RunUsageCost | null, activeThreadId?: string | null): string | null {
   if (!usageCost) return null
+  if (usageCost.threadId && activeThreadId && usageCost.threadId !== activeThreadId) return null
   const usage = usageCost.usage
   const cost = usageCost.cost
   const parts: string[] = []

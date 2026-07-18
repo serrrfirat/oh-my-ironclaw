@@ -1,7 +1,7 @@
 import type { SessionResponse } from "../gateway/types"
 import type { ToolPermissionRow } from "./toolPermissions"
 import { toolPermissionLabel, toolPermissionTone } from "./toolPermissions"
-import { theme, toneColors } from "./theme"
+import { theme, toneColors, booleanTone } from "./theme"
 import { Field, Hint, SurfaceHeader, Tag, truncate, wrapIndex } from "./pixel"
 
 const TOOL_VISIBLE_LIMIT = 14
@@ -39,7 +39,7 @@ export function ToolsSurface({
       {message ? <text fg={theme.accentText}>{truncate(message, contentWidth)}</text> : null}
       <box style={{ height: 1, flexDirection: "row" }}>
         <text fg={theme.textMuted}>global auto-approve </text>
-        <Tag label={globalAutoApprove ? "on" : "off"} tone={globalAutoApprove ? "ok" : "muted"} />
+        <Tag label={globalAutoApprove ? "on" : "off"} tone={booleanTone(globalAutoApprove)} />
         <text fg={theme.textFaint}>  (g to toggle)</text>
       </box>
       <box style={{ height: 1 }} />

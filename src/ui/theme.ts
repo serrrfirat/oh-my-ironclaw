@@ -64,6 +64,7 @@ function statusKey(status: string): string {
 // Map any run/job/tool/automation status to its canon tone.
 export function statusTone(status: string): Tone {
   switch (statusKey(status)) {
+    case "info":
     case "running":
     case "in_progress":
     case "active":
@@ -84,6 +85,7 @@ export function statusTone(status: string): Tone {
     case "resumed":
     case "scheduled":
       return "ok"
+    case "warn":
     case "warning":
     case "degraded":
     case "attention":
@@ -96,6 +98,7 @@ export function statusTone(status: string): Tone {
     case "failure":
     case "failed":
     case "error":
+    case "fatal":
     case "cancelled":
     case "canceled":
     case "killed":
@@ -106,10 +109,19 @@ export function statusTone(status: string): Tone {
     case "disabled":
     case "inactive":
     case "unknown":
+    case "debug":
+    case "trace":
       return "muted"
     default:
       return "muted"
   }
+}
+
+// Boolean on/off canon: enabled → ok, disabled → muted. Route toggle indicators
+// (global auto-approve, feature flags) through this instead of an inline ternary
+// so the two states stay tied to the shared tone palette.
+export function booleanTone(enabled: boolean): Tone {
+  return enabled ? "ok" : "muted"
 }
 
 export function statusColor(status: string): string {

@@ -1,5 +1,5 @@
 import type { ProjectInfo, ProjectMemberInfo } from "../gateway/types"
-import { theme, statusColor } from "./theme"
+import { theme, statusColor, statusTone } from "./theme"
 import { Field, Hint, SurfaceHeader, Tag, truncate, wrapIndex } from "./pixel"
 
 const PROJECT_VISIBLE_LIMIT = 14
@@ -97,7 +97,7 @@ function ProjectDetail({ project, confirmingDelete, width }: { project: ProjectI
     <box style={{ width, flexDirection: "column" }}>
       <box style={{ height: 1, flexDirection: "row" }}>
         <text fg={theme.textStrong}>{truncate(project.name, Math.max(1, width - 12))} </text>
-        <Tag label={project.state} tone={project.state === "active" ? "ok" : "muted"} />
+        <Tag label={project.state} tone={statusTone(project.state)} />
       </box>
       <box style={{ height: 1 }} />
       <Field label="id" value={project.project_id} width={width} />
