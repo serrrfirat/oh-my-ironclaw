@@ -21,6 +21,7 @@ import {
   upsertTranscriptItem,
   type TranscriptItem,
 } from "./transcript"
+import type { NotifyLevel } from "./ui/notify"
 
 export { transcriptActivityLines, toolSummary } from "./transcript"
 export type { TranscriptActivity, TranscriptItem } from "./transcript"
@@ -70,6 +71,17 @@ export type UiState = {
   lastTerminalRunId?: string | null
   // Count of threads waiting on approval (approval-inbox badge).
   approvalCount: number
+  // How aggressively to page the user (bell/OS popup/title). Persisted client-side.
+  notifyLevel: NotifyLevel
+  // Running sum of per-run USD cost seen this session (drives the home "today $").
+  todayCostUsd: number
+  // Epoch ms the live pending gate was raised; drives the home NEEDS YOU age.
+  pendingGateSinceMs?: number | null
+  // Epoch ms the active run started; drives the home ACTIVE elapsed label.
+  activeRunSinceMs?: number | null
+  // The most recent run that failed (not cancelled) and still wants the user.
+  // Cleared on run_started. Drives a home NEEDS YOU "failed" row.
+  lastFailedRun?: { threadId?: string | null; runId?: string | null; detail: string; sinceMs: number } | null
 }
 
 export const initialUiState: UiState = {
@@ -88,6 +100,11 @@ export const initialUiState: UiState = {
   runUsageCost: null,
   lastTerminalRunId: null,
   approvalCount: 0,
+  notifyLevel: "blockers",
+  todayCostUsd: 0,
+  pendingGateSinceMs: null,
+  activeRunSinceMs: null,
+  lastFailedRun: null,
 }
 
 export type UiAction =
@@ -103,6 +120,7 @@ export type UiAction =
   | { type: "session"; session: SessionResponse }
   | { type: "notice"; message: string | null }
   | { type: "approval_count"; count: number }
+  | { type: "set_notify_level"; level: NotifyLevel }
 
 export function reduceUiState(state: UiState, action: UiAction): UiState {
   switch (action.type) {
@@ -134,6 +152,7 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         hasOlderHistory: Boolean(action.history.next_cursor),
         runUsageCost: threadSwitched ? null : state.runUsageCost,
         pendingGate,
+        pendingGateSinceMs: pendingGate ? state.pendingGateSinceMs ?? Date.now() : null,
         activeRunId: pendingGate?.run_id ?? (action.history.in_progress ? state.activeRunId : null),
         status: action.history.in_progress ? action.history.in_progress.state : "idle",
         isThinking: pendingGate
@@ -157,6 +176,9 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
       // state object (and the render it triggers). Return the same reference.
       if (state.approvalCount === action.count) return state
       return { ...state, approvalCount: action.count }
+    case "set_notify_level":
+      if (state.notifyLevel === action.level) return state
+      return { ...state, notifyLevel: action.level }
     case "run_started":
       return {
         ...state,
@@ -167,6 +189,8 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         notice: null,
         runUsageCost: null,
         lastTerminalRunId: null,
+        activeRunSinceMs: Date.now(),
+        lastFailedRun: null,
       }
     case "user_sent":
       return {
@@ -188,7 +212,7 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         ],
       }
     case "gate_cleared":
-      return { ...state, pendingGate: null }
+      return { ...state, pendingGate: null, pendingGateSinceMs: null }
     case "event":
       return applyEvent(state, action.event)
   }
@@ -249,6 +273,7 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
       return {
         ...state,
         runUsageCost: { runId: event.run_id, threadId: event.thread_id, usage: event.usage, cost: event.cost },
+        todayCostUsd: state.todayCostUsd + runCostUsd(event.cost),
       }
     case "notice":
       return { ...state, notice: event.message }
@@ -316,10 +341,11 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
         status: "waiting for approval",
         activeRunId: pendingGate.run_id ?? state.activeRunId,
         pendingGate,
+        pendingGateSinceMs: Date.now(),
       }
     }
     case "gate_resolved":
-      return { ...state, pendingGate: null, status: event.message, isThinking: true }
+      return { ...state, pendingGate: null, pendingGateSinceMs: null, status: event.message, isThinking: true }
     case "onboarding_state":
       return {
         ...state,
@@ -431,8 +457,12 @@ function applyTerminalRun(
     isThinking: false,
     activeRunId: null,
     pendingGate: null,
+    pendingGateSinceMs: null,
     lastError: cancelled ? state.lastError : detail,
     lastTerminalRunId: resolvedRunId,
+    lastFailedRun: cancelled
+      ? null
+      : { threadId: threadId ?? state.activeThreadId, runId: resolvedRunId, detail, sinceMs: Date.now() },
     transcript,
     activity: upsertActivity(state.activity, {
       id,
@@ -869,4 +899,11 @@ function statusKey(status: string): string {
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[-\s]+/g, "_")
     .toLowerCase()
+}
+
+// Extract a finite USD amount from a run-cost frame (amounts are wire strings);
+// non-finite/missing values contribute nothing to the running total.
+function runCostUsd(cost?: RebornRunCost | null): number {
+  const total = Number(cost?.total_cost_usd)
+  return Number.isFinite(total) ? total : 0
 }

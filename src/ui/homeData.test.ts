@@ -7,6 +7,9 @@ import {
   buildNeedsYou,
   buildVitals,
   formatAge,
+  formatUsd,
+  homeSelectableCount,
+  resolveHomeTarget,
 } from "./homeData"
 
 const NOW = 1_000_000_000_000
@@ -179,5 +182,49 @@ describe("buildAutomationsSummary", () => {
       heldCount: 0,
       nextLabel: null,
     })
+  })
+})
+
+describe("formatUsd", () => {
+  test("two decimals at or above a cent, four below", () => {
+    expect(formatUsd(4.2)).toBe("$4.20")
+    expect(formatUsd(0.005)).toBe("$0.0050")
+    expect(formatUsd(0)).toBe("$0.00")
+    expect(formatUsd(12)).toBe("$12.00")
+  })
+
+  test("nullish / non-finite yields null", () => {
+    expect(formatUsd(null)).toBeNull()
+    expect(formatUsd(undefined)).toBeNull()
+    expect(formatUsd(Number.NaN)).toBeNull()
+  })
+})
+
+describe("homeSelectableCount + resolveHomeTarget", () => {
+  const withRows = inputs({
+    gates: [{ threadId: "gate-thread", threadTitle: "Approve", sinceMs: NOW - 60_000 }],
+    heldAutomations: [{ automationId: "auto-held", name: "Nightly", sinceMs: NOW - 120_000 }],
+    activeRuns: [{ threadId: "active-thread", threadTitle: "Builder", status: "thinking", startedAtMs: NOW - 10_000 }],
+  })
+  const recent = ["recent-1", "recent-2"]
+
+  test("count spans needs-you + active + recent", () => {
+    // 1 gate + 1 held automation (needs-you) + 1 active + 2 recent = 5
+    expect(homeSelectableCount(withRows, recent.length, NOW)).toBe(5)
+  })
+
+  test("routes each flat index to the right target", () => {
+    // Order: needs-you (oldest-first: held@-120s, gate@-60s), active, recent.
+    expect(resolveHomeTarget(withRows, recent, NOW, 0)).toEqual({ kind: "automations" })
+    expect(resolveHomeTarget(withRows, recent, NOW, 1)).toEqual({ kind: "thread", threadId: "gate-thread" })
+    expect(resolveHomeTarget(withRows, recent, NOW, 2)).toEqual({ kind: "thread", threadId: "active-thread" })
+    expect(resolveHomeTarget(withRows, recent, NOW, 3)).toEqual({ kind: "thread", threadId: "recent-1" })
+    expect(resolveHomeTarget(withRows, recent, NOW, 4)).toEqual({ kind: "thread", threadId: "recent-2" })
+  })
+
+  test("out-of-range index resolves to null", () => {
+    expect(resolveHomeTarget(withRows, recent, NOW, 5)).toBeNull()
+    expect(resolveHomeTarget(withRows, recent, NOW, -1)).toBeNull()
+    expect(resolveHomeTarget(inputs(), [], NOW, 0)).toBeNull()
   })
 })

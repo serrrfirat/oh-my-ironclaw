@@ -1747,3 +1747,88 @@ describe("statusTone log levels", () => {
     expect(statusTone("fatal")).toBe("danger")
   })
 })
+
+describe("notify level + home-supporting state", () => {
+  test("set_notify_level updates and no-ops when unchanged", () => {
+    expect(initialUiState.notifyLevel).toBe("blockers")
+    const all = reduceUiState(initialUiState, { type: "set_notify_level", level: "all" })
+    expect(all.notifyLevel).toBe("all")
+    // Unchanged level returns the same reference (no needless re-render).
+    const same = reduceUiState(all, { type: "set_notify_level", level: "all" })
+    expect(same).toBe(all)
+  })
+
+  test("run_usage accumulates today's USD cost", () => {
+    const one = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "run_usage",
+        run_id: "r1",
+        thread_id: "t1",
+        cost: {
+          input_cost_usd: "0",
+          cached_input_cost_usd: "0",
+          output_cost_usd: "0",
+          total_cost_usd: "0.25",
+          currency: "USD",
+        },
+      },
+    })
+    expect(one.todayCostUsd).toBeCloseTo(0.25, 5)
+    const two = reduceUiState(one, {
+      type: "event",
+      event: {
+        type: "run_usage",
+        run_id: "r2",
+        thread_id: "t1",
+        cost: {
+          input_cost_usd: "0",
+          cached_input_cost_usd: "0",
+          output_cost_usd: "0",
+          total_cost_usd: "0.75",
+          currency: "USD",
+        },
+      },
+    })
+    expect(two.todayCostUsd).toBeCloseTo(1.0, 5)
+  })
+
+  test("a failed run records lastFailedRun; run_started clears it", () => {
+    const failed = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_status", status: "failed", run_id: "run-9", thread_id: "thread-9", failure_category: "boom" },
+    })
+    expect(failed.lastFailedRun).toMatchObject({ threadId: "thread-9", runId: "run-9", detail: "Run failed: boom" })
+    expect(typeof failed.lastFailedRun?.sinceMs).toBe("number")
+    const restarted = reduceUiState(failed, { type: "run_started", threadId: "thread-9", runId: "run-10", status: "running" })
+    expect(restarted.lastFailedRun).toBeNull()
+    expect(typeof restarted.activeRunSinceMs).toBe("number")
+  })
+
+  test("a cancelled run does not record a failed row", () => {
+    const cancelled = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_cancelled", run_id: "run-1", thread_id: "thread-1", status: "cancelled" },
+    })
+    expect(cancelled.lastFailedRun).toBeNull()
+  })
+
+  test("a raised gate stamps pendingGateSinceMs; clearing it resets", () => {
+    const gated = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "gate_required",
+        request_id: "req-1",
+        gate_name: "approval",
+        tool_name: "shell",
+        description: "run ls",
+        parameters: "ls",
+        thread_id: "thread-1",
+        resume_kind: null,
+      } as never,
+    })
+    expect(typeof gated.pendingGateSinceMs).toBe("number")
+    const cleared = reduceUiState(gated, { type: "gate_cleared" })
+    expect(cleared.pendingGateSinceMs).toBeNull()
+  })
+})

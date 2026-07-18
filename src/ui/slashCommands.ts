@@ -2,6 +2,7 @@ import type { ClientMode } from "../config"
 import { sourceColor as themeSourceColor } from "./theme"
 
 export type SlashCommandAction =
+  | "home"
   | "threads"
   | "models"
   | "skills"
@@ -103,6 +104,7 @@ const LOCAL_CLI_COMMANDS: SlashCommand[] = [
 ]
 
 const TUI_CONTROL_COMMANDS: SlashCommand[] = [
+  { name: "/home", description: "Open the home control room (needs-you · active · recent)", source: "tui", action: "home" },
   { name: "/new", description: "Start a new thread", source: "tui", action: "new-thread" },
   { name: "/automations", description: "Open schedule automation dashboard (pause/resume/rename/delete)", source: "tui", action: "automations" },
   { name: "/channels", description: "Open connectable channel dashboard", source: "tui", action: "channels" },

@@ -36,12 +36,33 @@ import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebo
 import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
 import { filterSkills, parseSkillListOutput, skillDetailPath, type SkillListItem, type SkillListResult } from "../skillList"
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
-import { filterThreads, sortThreadsByRecent, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
+import { filterThreads, sortThreadsByRecent, threadDisplayTitle, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
+import { loadUiPrefs, saveNotifyLevel } from "../uiPrefs"
 import { AutomationsSurface } from "./AutomationsSurface"
 import { ChannelsSurface } from "./ChannelsSurface"
 import { ExtensionsSurface, extensionRows, type ExtensionRow } from "./ExtensionsSurface"
 import { LlmProvidersSurface, type LlmProviderFormView } from "./LlmProvidersSurface"
 import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
+import { HomeSurface, type HomeSection } from "./HomeSurface"
+import {
+  buildActiveRows,
+  buildAutomationsSummary,
+  buildNeedsYou,
+  buildVitals,
+  formatUsd,
+  resolveHomeTarget,
+  type HomeInputs,
+} from "./homeData"
+import {
+  clearTitle,
+  makeNotifyGate,
+  notify,
+  setPendingTitle,
+  shouldNotify,
+  type NotifyEvent,
+  type NotifyKind,
+  type NotifyLevel,
+} from "./notify"
 import { SettingsSurface, SETTINGS_SECTION_COUNT, settingsSectionAt } from "./SettingsSurface"
 import { SkillsSurface, type SkillDetailView } from "./SkillsSurface"
 import { SkillsRemoteSurface, type RemoteSkillDetail, type SkillInstallState } from "./SkillsRemoteSurface"
@@ -105,6 +126,7 @@ type LlmProviderFormState = {
   defaults: Partial<Record<LlmProviderFormField, string>>
 }
 const INPUT_HISTORY_LIMIT = 100
+const HOME_RECENT_LIMIT = 6
 
 export function App({ config }: AppProps) {
   const renderer = useRenderer()
@@ -177,6 +199,23 @@ export function App({ config }: AppProps) {
   const [llmProviderForm, setLlmProviderForm] = useState<LlmProviderFormState | null>(null)
   const [selectedLlmProviderIndex, setSelectedLlmProviderIndex] = useState(0)
   const [nowMs, setNowMs] = useState(() => Date.now())
+  // --- Home (control room) surface ---
+  const [showHome, setShowHome] = useState(false)
+  const [selectedHomeIndex, setSelectedHomeIndex] = useState(0)
+  const [homeCreditsUsd, setHomeCreditsUsd] = useState<number | null>(null)
+  // Refs mirror render state so the SSE consumer / poll effects read fresh
+  // values without re-subscribing. threadsRef/threadPreviewsRef feed notification
+  // titles; the visibility refs gate notification suppression + title updates.
+  const threadsRef = useRef<ThreadInfo[]>([])
+  const threadPreviewsRef = useRef<ThreadPreviewMap>({})
+  const notifyLevelRef = useRef<NotifyLevel>(state.notifyLevel)
+  const conversationVisibleRef = useRef(false)
+  const activeOverlayRef = useRef<ActiveOverlay>(null)
+  const notifyGateRef = useRef(makeNotifyGate())
+  const prevApprovalCountRef = useRef(0)
+  const titleCountRef = useRef<number>(-1)
+  const automationsSigRef = useRef<string>("")
+  const homeCreditsSigRef = useRef<string>("")
   // --- Attachments staged for the next send ---
   const [stagedAttachments, setStagedAttachments] = useState<StagedAttachment[]>([])
   // --- Remote skills surface ---
@@ -280,6 +319,71 @@ export function App({ config }: AppProps) {
   const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
   const canCancelRun = Boolean((state.pendingGate?.thread_id || state.activeThreadId) && (state.pendingGate?.run_id || state.activeRunId))
 
+  // --- Home (control room) view-model, assembled from UiState + fetched lists ---
+  const homeRecentThreads = useMemo(() => sortThreadsByRecent(state.threads).slice(0, HOME_RECENT_LIMIT), [state.threads])
+  const homeHeldAutomations = useMemo(
+    () =>
+      automations
+        .filter((automation) => automation.last_status === "error")
+        .map((automation) => ({
+          automationId: automation.automation_id,
+          name: automation.name,
+          detail: "last run errored",
+          sinceMs: automation.last_run_at ? Date.parse(automation.last_run_at) : null,
+        })),
+    [automations],
+  )
+  const homeInputs: HomeInputs = {
+    connected: state.connected,
+    model: selectedModel,
+    credits: formatUsd(homeCreditsUsd),
+    todayCost: state.todayCostUsd > 0 ? formatUsd(state.todayCostUsd) : null,
+    pendingApprovals: state.approvalCount,
+    gates: state.pendingGate
+      ? [
+          {
+            threadId: state.pendingGate.thread_id,
+            threadTitle: threadTitleFor(state.pendingGate.thread_id),
+            challengeKind:
+              state.pendingGate.gate_name === "auth"
+                ? state.pendingGate.challenge_kind || "auth"
+                : state.pendingGate.challenge_kind ?? null,
+            detail: state.pendingGate.description || state.pendingGate.tool_name,
+            sinceMs: state.pendingGateSinceMs ?? null,
+          },
+        ]
+      : [],
+    failedRuns: state.lastFailedRun
+      ? [
+          {
+            threadId: state.lastFailedRun.threadId ?? "",
+            threadTitle: threadTitleFor(state.lastFailedRun.threadId),
+            detail: state.lastFailedRun.detail,
+            sinceMs: state.lastFailedRun.sinceMs,
+          },
+        ]
+      : [],
+    activeRuns:
+      state.isThinking && state.activeThreadId
+        ? [
+            {
+              threadId: state.activeThreadId,
+              threadTitle: threadTitleFor(state.activeThreadId),
+              status: state.status,
+              startedAtMs: state.activeRunSinceMs ?? null,
+            },
+          ]
+        : [],
+    heldAutomations: homeHeldAutomations,
+  }
+  const homeNeedsYou = buildNeedsYou(homeInputs, nowMs)
+  const homeActive = buildActiveRows(homeInputs, nowMs)
+  const homeSelectableTotal = homeNeedsYou.length + homeActive.length + homeRecentThreads.length
+  const homeIndex = homeSelectableTotal > 0 ? wrapIndex(selectedHomeIndex, homeSelectableTotal) : -1
+  const homeSchedulerEnabled = automations.some(
+    (automation) => automation.is_active || automation.state === "active" || automation.state === "scheduled",
+  )
+
   const toggleActivityExpanded = (id: string) => {
     setExpandedActivityIds((current) => {
       const next = new Set(current)
@@ -298,6 +402,7 @@ export function App({ config }: AppProps) {
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
+      clearTitle()
       renderer.destroy()
       return
     }
@@ -305,6 +410,13 @@ export function App({ config }: AppProps) {
       key.preventDefault()
       key.stopPropagation()
       copyTextToClipboard(lastSelectedTextRef.current || textareaRef.current?.plainText || input)
+      return
+    }
+    // ctrl+h toggles the home control room from anywhere (closing any overlay).
+    if (key.ctrl && key.name === "h") {
+      key.preventDefault()
+      key.stopPropagation()
+      toggleHome()
       return
     }
     if (showAutomations) {
@@ -1002,6 +1114,33 @@ export function App({ config }: AppProps) {
       }
       return
     }
+    if (showHome) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        setShowHome(false)
+        return
+      }
+      if (key.name === "up" || key.name === "k") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedHomeIndex((index) => wrapIndex(index - 1, Math.max(1, homeSelectableTotal)))
+        return
+      }
+      if (key.name === "down" || key.name === "j" || key.name === "tab") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedHomeIndex((index) => wrapIndex(index + 1, Math.max(1, homeSelectableTotal)))
+        return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault()
+        key.stopPropagation()
+        void openHomeSelection()
+        return
+      }
+      return
+    }
     if (key.name === "escape") {
       key.preventDefault()
       key.stopPropagation()
@@ -1232,12 +1371,51 @@ export function App({ config }: AppProps) {
     activeThreadIdRef.current = state.activeThreadId
   }, [state.activeThreadId])
 
+  // Mirror render state into refs the SSE / poll effects read.
   useEffect(() => {
-    if (!state.isThinking) return
+    threadsRef.current = state.threads
+  }, [state.threads])
+  useEffect(() => {
+    threadPreviewsRef.current = threadPreviews
+  }, [threadPreviews])
+  useEffect(() => {
+    notifyLevelRef.current = state.notifyLevel
+  }, [state.notifyLevel])
+  useEffect(() => {
+    activeOverlayRef.current = activeOverlay
+    // The conversation is the visible surface only when neither the home surface
+    // nor any overlay is on top of it — drives notification suppression.
+    conversationVisibleRef.current = !showHome && activeOverlay === null
+  }, [activeOverlay, showHome])
+
+  // Load persisted client prefs once and apply the saved notify level.
+  useEffect(() => {
+    const prefs = loadUiPrefs()
+    dispatch({ type: "set_notify_level", level: prefs.notifyLevel })
+  }, [])
+
+  // Keep the terminal (and tmux window) title flagged with the count of things
+  // waiting on the user: pending approvals across threads + the live gate.
+  useEffect(() => {
+    const total = state.approvalCount + (state.pendingGate ? 1 : 0)
+    if (total === titleCountRef.current) return
+    titleCountRef.current = total
+    setPendingTitle(total)
+  }, [state.approvalCount, state.pendingGate])
+
+  // Reset the title when the TUI unmounts (quit).
+  useEffect(() => {
+    return () => clearTitle()
+  }, [])
+
+  useEffect(() => {
+    // Tick the shared clock while a run is thinking (spinner/elapsed) or while
+    // the home surface is up (so its ages stay live). Idle + not-home: no timer.
+    if (!state.isThinking && !showHome) return
     setNowMs(Date.now())
     const timer = setInterval(() => setNowMs(Date.now()), 250)
     return () => clearInterval(timer)
-  }, [state.isThinking])
+  }, [state.isThinking, showHome])
 
   useEffect(() => {
     let cancelled = false
@@ -1292,20 +1470,68 @@ export function App({ config }: AppProps) {
     }
   }, [client, state.connected])
 
-  // Poll the approval inbox for the status-bar badge.
+  // Poll the approval inbox for the status-bar badge, and piggyback a cheap
+  // refresh of the home control-room data (automations + trace credits) on the
+  // same 30s cadence. Each fetch is guarded so an unchanged result never spawns
+  // a re-render, and the automations/credits fetches are skipped while their own
+  // overlays are open so a background poll can't clobber in-overlay state.
   useEffect(() => {
     if (!state.connected) return
     let cancelled = false
     async function pollInbox() {
       try {
         const inbox = await client.approvalInbox()
-        if (!cancelled) dispatch({ type: "approval_count", count: inbox.count })
+        if (cancelled) return
+        // Rising approval count → page the user (level "all" only; suppressed
+        // while a conversation is the visible surface).
+        if (inbox.count > prevApprovalCountRef.current) {
+          const first = inbox.threads.find((thread) => thread.thread_id !== activeThreadIdRef.current) ?? inbox.threads[0]
+          maybeNotify({
+            kind: "inbox",
+            threadId: first?.thread_id ?? "inbox",
+            threadTitle: threadTitleFor(first?.thread_id),
+            summary: `${inbox.count} ${inbox.count === 1 ? "thread needs" : "threads need"} approval`,
+          })
+        }
+        prevApprovalCountRef.current = inbox.count
+        dispatch({ type: "approval_count", count: inbox.count })
       } catch {
         // ignore; badge stays at its last value
       }
     }
+    async function pollHomeData() {
+      if (activeOverlayRef.current !== "automations" && activeOverlayRef.current !== "settings") {
+        try {
+          const response = await client.automations()
+          const list = response.automations ?? []
+          const sig = list.map((a) => `${a.automation_id}:${a.state}:${a.last_status ?? ""}:${a.next_run_at ?? ""}`).join("|")
+          if (!cancelled && sig !== automationsSigRef.current) {
+            automationsSigRef.current = sig
+            setAutomations(list)
+          }
+        } catch {
+          // leave automations at their last value
+        }
+      }
+      if (activeOverlayRef.current !== "traces") {
+        try {
+          const credits = await client.traceCredits()
+          const sig = String(credits.final_credit)
+          if (!cancelled && sig !== homeCreditsSigRef.current) {
+            homeCreditsSigRef.current = sig
+            setHomeCreditsUsd(credits.final_credit)
+          }
+        } catch {
+          // leave credits at their last value
+        }
+      }
+    }
     void pollInbox()
-    const timer = setInterval(() => void pollInbox(), 30_000)
+    void pollHomeData()
+    const timer = setInterval(() => {
+      void pollInbox()
+      void pollHomeData()
+    }, 30_000)
     return () => {
       cancelled = true
       clearInterval(timer)
@@ -1338,6 +1564,7 @@ export function App({ config }: AppProps) {
             if (eventThreadId && eventThreadId !== activeThreadIdRef.current) continue
             if (event.type === "response") applyModelCommandResponse(event.content)
             dispatch({ type: "event", event })
+            maybeNotify(notifyEventForAppEvent(event, eventThreadId))
             if (isTerminalRunStatusEvent(event)) void refreshThreadFromEvent(eventThreadId)
           }
           reconnectDelayMs = SSE_CONSUMER_MIN_MS
@@ -1357,6 +1584,84 @@ export function App({ config }: AppProps) {
     }
   }, [client, state.activeThreadId])
 
+  // Resolve a display title for a thread id from the mirrored refs (usable from
+  // the SSE / poll effects). Falls back to the id, then a generic label.
+  function threadTitleFor(threadId?: string | null): string {
+    if (!threadId) return "New session"
+    const thread = threadsRef.current.find((item) => item.id === threadId)
+    return thread ? threadDisplayTitle(thread, threadPreviewsRef.current) : threadId
+  }
+
+  // Map an SSE frame to a NotifyEvent, or null when the frame is not page-worthy.
+  function notifyEventForAppEvent(event: AppEvent, eventThreadId: string | null): NotifyEvent | null {
+    switch (event.type) {
+      case "gate_required": {
+        const kind: NotifyKind = event.gate_name === "auth" || event.challenge_kind ? "auth" : "gate"
+        return {
+          kind,
+          threadId: eventThreadId ?? "",
+          threadTitle: threadTitleFor(eventThreadId),
+          summary: event.description || event.tool_name || (kind === "auth" ? "authentication required" : "approval required"),
+        }
+      }
+      case "approval_needed":
+        return {
+          kind: "gate",
+          threadId: eventThreadId ?? "",
+          threadTitle: threadTitleFor(eventThreadId),
+          summary: event.description || event.tool_name || "approval required",
+        }
+      case "run_status":
+        if (!isFailedNotifyStatus(event.status)) return null
+        return {
+          kind: "failed",
+          threadId: eventThreadId ?? "",
+          threadTitle: threadTitleFor(eventThreadId),
+          summary: event.failure_category ? `run failed: ${event.failure_category}` : "run failed",
+        }
+      case "response":
+        return {
+          kind: "final_reply",
+          threadId: eventThreadId ?? "",
+          threadTitle: threadTitleFor(eventThreadId),
+          summary: firstLine(event.content) || "reply ready",
+        }
+      default:
+        return null
+    }
+  }
+
+  // Page the user for an event, gated by their notify level, whether they're
+  // already looking at the thread, and the per-run debounce.
+  function maybeNotify(nev: NotifyEvent | null) {
+    if (!nev) return
+    const isActiveThreadVisible =
+      Boolean(nev.threadId) && nev.threadId === activeThreadIdRef.current && conversationVisibleRef.current
+    if (!shouldNotify({ event: nev, level: notifyLevelRef.current, isActiveThreadVisible })) return
+    if (!notifyGateRef.current.seen(`${nev.threadId}|${nev.kind}|${nev.summary}`)) return
+    notify(nev)
+  }
+
+  // Toggle the home control room from anywhere, closing any open overlay.
+  function toggleHome() {
+    setActiveOverlay(null)
+    setSelectedHomeIndex(0)
+    setShowHome((visible) => !visible)
+  }
+
+  // Enter on the flat home selection: open the target thread (or /automations for
+  // a held-automation row).
+  async function openHomeSelection() {
+    const target = resolveHomeTarget(homeInputs, homeRecentThreads.map((thread) => thread.id), nowMs, homeIndex)
+    if (!target) return
+    setShowHome(false)
+    if (target.kind === "automations") {
+      await openAutomationsOverlay()
+      return
+    }
+    await loadThread(target.threadId)
+  }
+
   async function startNewThreadOnConnect(): Promise<string | null> {
     const response = await client.threads()
     const existingThreads = sortThreadsByRecent([response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[])
@@ -1367,6 +1672,10 @@ export function App({ config }: AppProps) {
     dispatch({ type: "threads", threads, activeThreadId: thread.id })
     setSelectedThreadIndex(0)
     await loadThread(thread.id)
+    // Land on the home control room once the session is ready, rather than
+    // dropping straight into the (empty) conversation.
+    setShowHome(true)
+    setSelectedHomeIndex(0)
     return thread.id
   }
 
@@ -1616,9 +1925,20 @@ export function App({ config }: AppProps) {
       case "Outbound":
         await openOutboundOverlay()
         return
+      case "Notifications":
+        cycleNotifyLevel()
+        return
       default:
         return
     }
+  }
+
+  // Cycle the notify level off → blockers → all, persisting the choice.
+  function cycleNotifyLevel() {
+    const order: NotifyLevel[] = ["off", "blockers", "all"]
+    const next = order[(order.indexOf(state.notifyLevel) + 1) % order.length] ?? "blockers"
+    dispatch({ type: "set_notify_level", level: next })
+    saveNotifyLevel(next)
   }
 
   async function setSelectedLlmProviderActive() {
@@ -2175,6 +2495,12 @@ export function App({ config }: AppProps) {
   async function runSlashCommand(command: SlashCommand | undefined, args = "") {
     if (!command) return
     switch (command.action) {
+      case "home":
+        clearComposer()
+        setActiveOverlay(null)
+        setSelectedHomeIndex(0)
+        setShowHome(true)
+        return
       case "threads":
         clearComposer()
         await openThreadPalette()
@@ -2273,6 +2599,7 @@ export function App({ config }: AppProps) {
         }
         break
       case "quit":
+        clearTitle()
         renderer.destroy()
         return
     }
@@ -3259,6 +3586,7 @@ export function App({ config }: AppProps) {
           selectedProvider={providerLabel(config.provider)}
           skillCount={config.mode === "local" ? skillList.configured : remoteSkills.length}
           skillsRemote={config.mode !== "local"}
+          notifyLevel={state.notifyLevel}
           status={state.status}
           width={width}
         />
@@ -3354,6 +3682,19 @@ export function App({ config }: AppProps) {
           message={outboundMessage}
           loading={outboundLoading}
           error={outboundError}
+          width={width}
+          height={height}
+        />
+      ) : showHome ? (
+        <HomeSurface
+          needsYou={homeNeedsYou}
+          active={homeActive}
+          automations={buildAutomationsSummary(automations, homeSchedulerEnabled)}
+          recent={homeRecentThreads}
+          threadPreviews={threadPreviews}
+          vitals={buildVitals(homeInputs)}
+          selectedIndex={homeIndex}
+          focused={homeFocusSection(homeIndex, homeNeedsYou.length, homeActive.length)}
           width={width}
           height={height}
         />
@@ -3610,6 +3951,26 @@ function printableKeyText(key: KeyEvent): string {
 function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, { type: "run_status" }> {
   if (event.type !== "run_status") return false
   return ["completed", "failed", "cancelled", "killed"].includes(event.status)
+}
+
+// Run statuses that page the user as a "failed" notification. Cancelled is a
+// user-initiated stop and never pages.
+function isFailedNotifyStatus(status: string): boolean {
+  return ["failed", "killed", "recovery_required"].includes(status.trim().toLowerCase().replace(/[-\s]+/g, "_"))
+}
+
+// Which home section the flat selection index falls in, for header emphasis.
+function homeFocusSection(index: number, needsYouLen: number, activeLen: number): HomeSection | undefined {
+  if (index < 0) return undefined
+  if (index < needsYouLen) return "needsYou"
+  if (index < needsYouLen + activeLen) return "active"
+  return "recent"
+}
+
+function firstLine(text: string): string {
+  const line = (text ?? "").split("\n").find((part) => part.trim().length > 0) ?? ""
+  const trimmed = line.trim()
+  return trimmed.length > 80 ? `${trimmed.slice(0, 77)}...` : trimmed
 }
 
 function threadIdFromEvent(event: AppEvent): string | null {

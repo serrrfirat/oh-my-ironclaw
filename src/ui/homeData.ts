@@ -180,6 +180,50 @@ export function buildAutomationsSummary(
   }
 }
 
+// Where an Enter on the flat home selection routes. A held-automation NEEDS YOU
+// row (its threadId is an automation id, not a thread) routes to /automations;
+// every other row opens its thread.
+export type HomeTarget = { kind: "thread"; threadId: string } | { kind: "automations" }
+
+// Total number of selectable rows in the flat home list (NEEDS YOU + ACTIVE +
+// RECENT). Section headers and the automations summary line are not selectable.
+export function homeSelectableCount(input: HomeInputs, recentCount: number, nowMs: number): number {
+  return buildNeedsYou(input, nowMs).length + buildActiveRows(input, nowMs).length + Math.max(0, recentCount)
+}
+
+// Resolve the Enter target for a flat selection index over [needsYou…, active…,
+// recent…]. Rebuilds the same ordering HomeSurface renders so the parent can
+// route without duplicating the layout. Held-automation rows (threadId matches a
+// held automation id) route to /automations; all others open their thread.
+// Returns null when the index is out of range.
+export function resolveHomeTarget(
+  input: HomeInputs,
+  recentThreadIds: string[],
+  nowMs: number,
+  selectedIndex: number,
+): HomeTarget | null {
+  const needsYou = buildNeedsYou(input, nowMs)
+  const active = buildActiveRows(input, nowMs)
+  const heldIds = new Set((input.heldAutomations ?? []).map((automation) => automation.automationId))
+  const flat: HomeTarget[] = [
+    ...needsYou.map((row): HomeTarget =>
+      heldIds.has(row.threadId) ? { kind: "automations" } : { kind: "thread", threadId: row.threadId },
+    ),
+    ...active.map((row): HomeTarget => ({ kind: "thread", threadId: row.threadId })),
+    ...recentThreadIds.map((threadId): HomeTarget => ({ kind: "thread", threadId })),
+  ]
+  if (selectedIndex < 0 || selectedIndex >= flat.length) return null
+  return flat[selectedIndex] ?? null
+}
+
+// Format a USD amount as "$X.XX" (four decimals under a cent). Used for the home
+// vitals credits + today's spend. Non-finite input yields null (render nothing).
+export function formatUsd(amount: number | null | undefined): string | null {
+  if (amount === null || amount === undefined || !Number.isFinite(amount)) return null
+  const value = Number(amount)
+  return `$${value.toFixed(Math.abs(value) < 0.01 && value !== 0 ? 4 : 2)}`
+}
+
 // "2m", "1h 04m", "3d". Sub-minute → "Ns"; negative clamps to "0s".
 export function formatAge(deltaMs: number): string {
   const clamped = Math.max(0, Math.floor(deltaMs))
