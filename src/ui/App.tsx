@@ -8,6 +8,7 @@ import type {
   AccountTracesResponse,
   AppEvent,
   AutomationInfo,
+  AutomationMutationResponse,
   ConnectableChannelInfo,
   ExtensionInfo,
   ExtensionRegistryEntry,
@@ -44,7 +45,7 @@ import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type Gat
 import { SettingsSurface, SETTINGS_SECTION_COUNT, settingsSectionAt } from "./SettingsSurface"
 import { SkillsSurface, type SkillDetailView } from "./SkillsSurface"
 import { SkillsRemoteSurface, type RemoteSkillDetail, type SkillInstallState } from "./SkillsRemoteSurface"
-import { LogsSurface } from "./LogsSurface"
+import { LogsSurface, LOG_VISIBLE_LIMIT } from "./LogsSurface"
 import { TracesSurface } from "./TracesSurface"
 import { WorkspaceSurface, type WorkspaceView } from "./WorkspaceSurface"
 import { ProjectsSurface, type ProjectsView } from "./ProjectsSurface"
@@ -60,11 +61,12 @@ import {
   type StagedAttachment,
 } from "./attachments"
 import { buildLogQuery, cycleLogLevel, DEFAULT_LOG_FILTER, type LogFilterState } from "./logFilters"
-import { nextToolPermission, toolPermissionRows, type ToolPermissionRow } from "./toolPermissions"
+import { globalAutoApproveFromEntries, nextToolPermission, toolPermissionRows, type ToolPermissionRow } from "./toolPermissions"
 import {
   filteredSlashCommands,
   isSlashCommandInput,
   localCliCommandForInput,
+  matchSlashCommand,
   slashCommandsForMode,
   type SlashCommand,
 } from "./slashCommands"
@@ -200,6 +202,9 @@ export function App({ config }: AppProps) {
   const [logTargetInput, setLogTargetInput] = useState("")
   const [logsLoading, setLogsLoading] = useState(false)
   const [logsError, setLogsError] = useState<string | null>(null)
+  // Scroll offset (entries above the newest window). Lets fetched older entries
+  // be reached; 0 pins the view to the newest entries.
+  const [logOffset, setLogOffset] = useState(0)
   // --- Traces surface ---
   const [traceCredits, setTraceCredits] = useState<TraceCreditsResponse | null>(null)
   const [traceAccount, setTraceAccount] = useState<AccountTracesResponse | null>(null)
@@ -814,11 +819,15 @@ export function App({ config }: AppProps) {
         if (text) { key.preventDefault(); key.stopPropagation(); setLogTargetInput((v) => v + text); return }
         return
       }
+      if (key.name === "up" || key.name === "k") { key.preventDefault(); key.stopPropagation(); setLogOffset((o) => Math.min(o + 1, Math.max(0, logEntries.length - 1))); return }
+      if (key.name === "down" || key.name === "j") { key.preventDefault(); key.stopPropagation(); setLogOffset((o) => Math.max(0, o - 1)); return }
       const logKey = printableKeyText(key).toLowerCase()
       if (logKey === "l") { key.preventDefault(); key.stopPropagation(); const nextFilter = { ...logFilter, level: cycleLogLevel(logFilter.level, 1) }; setLogFilter(nextFilter); void loadLogs(nextFilter, true); return }
       if (logKey === "t") { key.preventDefault(); key.stopPropagation(); setLogEditingTarget(true); setLogTargetInput(logFilter.target ?? ""); return }
       if (logKey === "f") { key.preventDefault(); key.stopPropagation(); const nextFilter = { ...logFilter, follow: !logFilter.follow }; setLogFilter(nextFilter); void loadLogs(nextFilter, true); return }
-      if (logKey === "o") { key.preventDefault(); key.stopPropagation(); void loadOlderLogs(); return }
+      // Fetch older entries (prepended) and move the window up a page so the
+      // newly-fetched entries become visible.
+      if (logKey === "o") { key.preventDefault(); key.stopPropagation(); setLogOffset((o) => o + LOG_VISIBLE_LIMIT); void loadOlderLogs(); return }
       if (logKey === "r") { key.preventDefault(); key.stopPropagation(); void loadLogs(logFilter, true); return }
       return
     }
@@ -1435,12 +1444,28 @@ export function App({ config }: AppProps) {
     return automations[wrapIndex(selectedAutomationIndex, automations.length)] ?? null
   }
 
-  async function runAutomationMutation(label: string, action: () => Promise<unknown>) {
+  async function runAutomationMutation(
+    label: string,
+    action: () => Promise<AutomationMutationResponse>,
+    options?: { refetch?: boolean },
+  ) {
     setAutomationMessage(null)
     try {
-      await action()
+      const response = await action()
       setAutomationMessage(label)
-      await loadAutomations()
+      // Apply the returned automation record in place when the server echoes it
+      // (pause/resume/rename). Only refetch when the record is absent or the row
+      // is gone (delete).
+      const updated = response.automation
+      if (!options?.refetch && updated) {
+        setAutomations((current) =>
+          current.map((automation) =>
+            automation.automation_id === updated.automation_id ? updated : automation,
+          ),
+        )
+      } else {
+        await loadAutomations()
+      }
     } catch (error) {
       setAutomationsError(errorMessage(error))
     }
@@ -1473,7 +1498,7 @@ export function App({ config }: AppProps) {
     const automation = selectedAutomation()
     if (!automation) return
     setAutomationConfirmDelete(false)
-    await runAutomationMutation("deleted", () => client.deleteAutomation(automation.automation_id))
+    await runAutomationMutation("deleted", () => client.deleteAutomation(automation.automation_id), { refetch: true })
   }
 
   async function openChannelsOverlay() {
@@ -2098,19 +2123,12 @@ export function App({ config }: AppProps) {
     const content = input.trim()
     if (!content) return
     rememberInput(content)
-    if (content.startsWith("/attach ")) {
-      clearComposer()
-      await stageAttachmentFromPath(content.slice("/attach ".length).trim())
-      return
-    }
-    if (content === "/save" || content.startsWith("/save ")) {
-      clearComposer()
-      await saveAttachment(content.slice("/save".length).trim())
-      return
-    }
-    const slashCommand = commandSet.find((command) => command.name === content)
-    if (slashCommand?.action) {
-      await runSlashCommand(slashCommand)
+    // Single routing path: match the first token against the registry. Commands
+    // that declare `takesArgs` (e.g. /attach, /save) carry their arguments through
+    // one channel; everything else must match the whole line exactly.
+    const matched = matchSlashCommand(content, commandSet)
+    if (matched) {
+      await runSlashCommand(matched.command, matched.args)
       return
     }
     const localCommand = localCliCommandForInput(content, config.mode)
@@ -2124,21 +2142,25 @@ export function App({ config }: AppProps) {
   async function submitContent(content: string) {
     const previousAssistantCount = state.transcript.filter((item) => item.role === "assistant").length
     const attachments = stagedAttachments
-    applyOutgoingModelCommand(content)
-    clearComposer()
-    dispatch({ type: "user_sent", content, threadId: state.activeThreadId })
     try {
       const response = await client.send(content, state.activeThreadId, {
         attachments: attachments.length ? attachments.map(toOutgoingAttachment) : undefined,
       })
       const threadId = response.thread_id ?? state.activeThreadId
       if (threadId) activeThreadIdRef.current = threadId
-      // A busy thread already has an active run: surface the notice (not an error)
-      // and keep the composer intact.
+      // A busy thread already has an active run: surface the notice (not an
+      // error) and leave the composer text + staged attachments intact so the
+      // message isn't lost. Nothing was optimistically committed, so there's
+      // nothing to roll back and isThinking is never left stuck true.
       if (response.outcome === "rejected_busy") {
         dispatch({ type: "notice", message: response.notice ?? "A run is already active on this thread." })
         return
       }
+      // Accepted (submitted / already_submitted): now commit the optimistic UI —
+      // record the user turn, clear the composer + staged attachments, start run.
+      applyOutgoingModelCommand(content)
+      dispatch({ type: "user_sent", content, threadId })
+      clearComposer()
       setStagedAttachments([])
       dispatch({ type: "run_started", threadId, runId: response.run_id, status: response.status })
       if (threadId && threadId !== state.activeThreadId) {
@@ -2150,7 +2172,7 @@ export function App({ config }: AppProps) {
     }
   }
 
-  async function runSlashCommand(command: SlashCommand | undefined) {
+  async function runSlashCommand(command: SlashCommand | undefined, args = "") {
     if (!command) return
     switch (command.action) {
       case "threads":
@@ -2208,11 +2230,13 @@ export function App({ config }: AppProps) {
         return
       case "attach":
         clearComposer()
-        dispatch({ type: "notice", message: "usage: /attach <path>" })
+        if (args) await stageAttachmentFromPath(args)
+        else dispatch({ type: "notice", message: "usage: /attach <path>" })
         return
       case "save":
         clearComposer()
-        await saveAttachment("")
+        if (args) await saveAttachment(args)
+        else dispatch({ type: "notice", message: "usage: /save <n>" })
         return
       case "extensions":
         clearComposer("extensions")
@@ -2396,10 +2420,12 @@ export function App({ config }: AppProps) {
     const parsed = Number.parseInt(rawIndex.trim(), 10)
     const index = Number.isFinite(parsed) && parsed > 0 ? parsed : 1
     try {
-      const history = await client.history(threadId)
+      // The badge only needs the latest reply's attachments; a small page is
+      // enough (client.history already filters out the user's own uploads).
+      const history = await client.history(threadId, 20)
       const latest = history.message_attachments?.[history.message_attachments.length - 1]
       if (!latest || latest.refs.length === 0) {
-        dispatch({ type: "notice", message: "No attachments on the latest message." })
+        dispatch({ type: "notice", message: "No attachments on the latest reply." })
         return
       }
       const ref = latest.refs[index - 1]
@@ -2409,8 +2435,11 @@ export function App({ config }: AppProps) {
       }
       const bytes = await client.attachment(threadId, latest.message_id, ref.attachment_id)
       const filename = ref.filename || bytes.filename || `attachment-${index}`
-      await Bun.write(filename, bytes.bytes)
-      dispatch({ type: "notice", message: `saved ${filename}` })
+      // Never clobber an existing file in the working directory: land on a free
+      // numeric-suffixed name (name-1.ext) instead of overwriting.
+      const target = await uniqueFilename(filename)
+      await Bun.write(target, bytes.bytes)
+      dispatch({ type: "notice", message: `saved ${target}` })
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
     }
@@ -2420,7 +2449,10 @@ export function App({ config }: AppProps) {
 
   async function retryLastRun() {
     const threadId = state.activeThreadId
-    const runId = state.activeRunId ?? lastRetryableRunId(state.transcript)
+    // The reducer maintains lastTerminalRunId (set when a run reaches a terminal
+    // state, cleared on run_started). When a run is active it is null, so an
+    // active run correctly yields the "nothing to retry" notice.
+    const runId = state.lastTerminalRunId
     if (!threadId || !runId) {
       dispatch({ type: "notice", message: "No failed or cancelled run to retry." })
       return
@@ -2588,11 +2620,17 @@ export function App({ config }: AppProps) {
   async function toggleSelectedSkillAutoActivate() {
     const skill = selectedRemoteSkill()
     if (!skill) return
+    const nextValue = !skill.auto_activate
     try {
-      await client.setSkillAutoActivate(skill.name, !skill.auto_activate)
-      await loadRemoteSkills()
+      await client.setSkillAutoActivate(skill.name, nextValue)
+      // Flip the flag in place on success (same pattern as the learned toggle);
+      // a full refetch is only needed to recover the true state on error.
+      setRemoteSkills((current) =>
+        current.map((item) => (item.name === skill.name ? { ...item, auto_activate: nextValue } : item)),
+      )
     } catch (error) {
       setRemoteSkillMessage(errorMessage(error))
+      await loadRemoteSkills()
     }
   }
 
@@ -2618,6 +2656,7 @@ export function App({ config }: AppProps) {
   async function loadLogs(filter: LogFilterState, reset: boolean) {
     setLogsLoading(true)
     setLogsError(null)
+    if (reset) setLogOffset(0)
     try {
       const response = await client.logs(buildLogQuery({ ...filter, cursor: reset ? undefined : filter.cursor }))
       setLogEntries(reset ? response.entries : (current) => [...response.entries, ...current])
@@ -2650,14 +2689,16 @@ export function App({ config }: AppProps) {
     setTracesLoading(true)
     setTracesError(null)
     try {
-      const [credits, account] = await Promise.all([
-        client.traceCredits().catch(() => null),
-        client.traceAccount().catch(() => null),
-      ])
+      // No per-endpoint catch: a real failure must surface as an error, not be
+      // silently swallowed into a null that reads as "not enrolled". A genuine
+      // not-enrolled account returns 200 with empty/enrolled=false data.
+      const [credits, account] = await Promise.all([client.traceCredits(), client.traceAccount()])
       setTraceCredits(credits)
       setTraceAccount(account)
     } catch (error) {
-      setTracesError(errorMessage(error))
+      setTraceCredits(null)
+      setTraceAccount(null)
+      setTracesError(`${errorMessage(error)} — press r to retry`)
     } finally {
       setTracesLoading(false)
     }
@@ -2857,8 +2898,12 @@ export function App({ config }: AppProps) {
     setToolsError(null)
     try {
       const response = await client.settingsTools()
-      setToolRows(toolPermissionRows(response.entries ?? []))
-      setToolsGlobalAutoApprove(Boolean(state.session?.features.global_auto_approve))
+      const entries = response.entries ?? []
+      setToolRows(toolPermissionRows(entries))
+      // Seed the toggle from the actual settings/tools entry; only fall back to
+      // the session feature flag when the entry is absent.
+      const globalFromEntries = globalAutoApproveFromEntries(entries)
+      setToolsGlobalAutoApprove(globalFromEntries ?? Boolean(state.session?.features.global_auto_approve))
     } catch (error) {
       setToolsError(errorMessage(error))
     } finally {
@@ -2884,8 +2929,12 @@ export function App({ config }: AppProps) {
     const next = !toolsGlobalAutoApprove
     setToolsGlobalAutoApprove(next)
     try {
-      await client.setSettingsToolsAutoApprove(next)
-      setToolsMessage(`global auto-approve ${next ? "on" : "off"}`)
+      const response = await client.setSettingsToolsAutoApprove(next)
+      // Apply the server's echoed entry rather than assuming our optimistic
+      // value stuck — the server may coerce or reject the change.
+      const applied = globalAutoApproveFromEntries([response.entry]) ?? next
+      setToolsGlobalAutoApprove(applied)
+      setToolsMessage(`global auto-approve ${applied ? "on" : "off"}`)
     } catch (error) {
       setToolsGlobalAutoApprove(!next)
       setToolsError(errorMessage(error))
@@ -3239,6 +3288,7 @@ export function App({ config }: AppProps) {
           tailSupported={logTailSupported}
           followSupported={logFollowSupported}
           hasOlder={Boolean(logCursor)}
+          offset={logOffset}
           loading={logsLoading}
           error={logsError}
           width={width}
@@ -3497,16 +3547,19 @@ function filterRemoteSkills(skills: SkillInfo[], query: string): SkillInfo[] {
   )
 }
 
-// Extract the most recent failed/cancelled run id from failure/cancelled system
-// transcript items (their ids are `run-<id>-<status>`).
-function lastRetryableRunId(transcript: Array<{ id: string; role: string }>): string | null {
-  for (let index = transcript.length - 1; index >= 0; index -= 1) {
-    const item = transcript[index]
-    if (!item) continue
-    const match = item.id.match(/^run-(.+)-(failed|cancelled|killed|recovery_required)$/)
-    if (match?.[1]) return match[1]
+// Find a filename in the working directory that doesn't already exist, adding a
+// numeric suffix before the extension (report.pdf → report-1.pdf) so /save never
+// overwrites a prior file.
+async function uniqueFilename(name: string): Promise<string> {
+  if (!(await Bun.file(name).exists())) return name
+  const dot = name.lastIndexOf(".")
+  const base = dot > 0 ? name.slice(0, dot) : name
+  const ext = dot > 0 ? name.slice(dot) : ""
+  for (let counter = 1; counter < 1000; counter += 1) {
+    const candidate = `${base}-${counter}${ext}`
+    if (!(await Bun.file(candidate).exists())) return candidate
   }
-  return null
+  return `${base}-${Date.now()}${ext}`
 }
 
 function parentPath(path: string): string {

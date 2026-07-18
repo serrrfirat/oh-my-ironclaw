@@ -1,6 +1,6 @@
 import type { AutomationInfo } from "../gateway/types"
 import { theme, statusColor, statusTone } from "./theme"
-import { Field, Hairline, Hint, Tag, truncate, wrapIndex } from "./pixel"
+import { Field, formatDate, Hairline, Hint, Tag, truncate, wrapIndex } from "./pixel"
 
 const AUTOMATION_VISIBLE_LIMIT = 14
 
@@ -206,12 +206,6 @@ function singleNumber(value: string, min: number, max: number): boolean {
 
 function stateLabel(state: string): string {
   return state ? state.replaceAll("_", " ") : "unknown"
-}
-
-function formatDate(value?: string | null, fallback = "Unknown"): string {
-  const timestamp = parseDate(value)
-  if (timestamp === null) return fallback
-  return new Date(timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
 function parseDate(value?: string | null): number | null {

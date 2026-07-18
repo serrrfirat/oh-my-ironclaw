@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { localCliCommandForInput, slashCommandsForMode } from "./slashCommands"
+import { localCliCommandForInput, matchSlashCommand, slashCommandsForMode } from "./slashCommands"
 
 describe("slash commands", () => {
   test("uses product workflow skills command in remote mode", () => {
@@ -124,5 +124,42 @@ describe("slash commands", () => {
         expect(commands.some((command) => command.name === name && command.source === "tui")).toBe(true)
       }
     }
+  })
+})
+
+describe("matchSlashCommand first-token routing", () => {
+  const commands = slashCommandsForMode("remote")
+
+  test("matches a no-argument command on the whole line", () => {
+    const matched = matchSlashCommand("/retry", commands)
+    expect(matched?.command.name).toBe("/retry")
+    expect(matched?.args).toBe("")
+  })
+
+  test("routes an arg command on its first token, passing the rest as args", () => {
+    const attach = matchSlashCommand("/attach ./photo.png", commands)
+    expect(attach?.command.name).toBe("/attach")
+    expect(attach?.args).toBe("./photo.png")
+
+    const save = matchSlashCommand("/save 2", commands)
+    expect(save?.command.name).toBe("/save")
+    expect(save?.args).toBe("2")
+  })
+
+  test("bare arg command matches with empty args (usage-notice path)", () => {
+    const save = matchSlashCommand("/save", commands)
+    expect(save?.command.name).toBe("/save")
+    expect(save?.args).toBe("")
+  })
+
+  test("does not first-token match a command that does not take args", () => {
+    // "/retry now" is not a command invocation — /retry takes no args, so it
+    // falls through to be treated as a plain message.
+    expect(matchSlashCommand("/retry now", commands)).toBeNull()
+  })
+
+  test("ignores non-slash input", () => {
+    expect(matchSlashCommand("hello world", commands)).toBeNull()
+    expect(matchSlashCommand("/unknown-thing", commands)).toBeNull()
   })
 })

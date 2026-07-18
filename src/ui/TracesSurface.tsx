@@ -28,7 +28,7 @@ export function TracesSurface({
   const selectedHold = wrapIndex(selectedHoldIndex, holds.length)
   return (
     <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="traces" meta={loading ? "loading" : credits?.enrolled ? "enrolled" : "not enrolled"} width={contentWidth} />
+      <SurfaceHeader title="traces" meta={loading ? "loading" : error ? "unavailable" : credits?.enrolled ? "enrolled" : "not enrolled"} width={contentWidth} />
       <box style={{ height: 1 }} />
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : null}
       {message ? <text fg={theme.accentText}>{truncate(message, contentWidth)}</text> : null}

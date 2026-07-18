@@ -1355,6 +1355,106 @@ describe("UI state", () => {
     expect(state.activeRunId).toBe("run-1")
     expect(running.isThinking).toBe(false)
   })
+
+  test("keeps a live SSE gate when a post-send history merge carries no gate info", () => {
+    // A gate arrives over SSE mid-run.
+    const gated = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "gate_required",
+        request_id: "run-7:gate:approval-1",
+        thread_id: "thread-1",
+        run_id: "run-7",
+        gate_ref: "gate:approval-1",
+        gate_name: "approval",
+        tool_name: "approval",
+        description: "Shell command approval required",
+        parameters: "",
+        resume_kind: { run_id: "run-7", gate_ref: "gate:approval-1" },
+      },
+    })
+    // The post-send history poll returns a timeline that (like the real
+    // /timeline response) carries neither pending_gate nor in_progress, and shows
+    // no reply after the user's message yet.
+    const refreshed = reduceUiState(gated, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [],
+        has_more: false,
+        messages: [
+          {
+            kind: "user",
+            id: "user-1",
+            thread_id: "thread-1",
+            sequence: 1,
+            status: "sent",
+            content: "run the shell command",
+          },
+        ],
+      },
+    })
+
+    // The gate must survive the merge — it is not wiped just because the timeline
+    // lacked gate/in-progress info.
+    expect(refreshed.pendingGate).toMatchObject({
+      request_id: "run-7:gate:approval-1",
+      gate_ref: "gate:approval-1",
+      run_id: "run-7",
+    })
+    expect(refreshed.activeRunId).toBe("run-7")
+    expect(refreshed.isThinking).toBe(false)
+  })
+
+  test("returns the same state object when approval_count is unchanged", () => {
+    const seeded = reduceUiState(initialUiState, { type: "approval_count", count: 3 })
+    const again = reduceUiState(seeded, { type: "approval_count", count: 3 })
+    expect(again).toBe(seeded)
+    const changed = reduceUiState(seeded, { type: "approval_count", count: 4 })
+    expect(changed).not.toBe(seeded)
+    expect(changed.approvalCount).toBe(4)
+  })
+
+  test("trusts a completed tool status even when the summary mentions 'failed'", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_message_id: "user-1",
+            user_input: "run the tests",
+            state: "completed",
+            started_at: "",
+            tool_calls: [
+              {
+                kind: "capability_display_preview",
+                message_id: "preview-tests",
+                name: "run_tests",
+                has_result: true,
+                has_error: false,
+                call_id: "run-1",
+                capability_id: "builtin.run_tests",
+                status: "completed",
+                input_summary: "suite: unit",
+                output_summary: "214 tests · 0 failed",
+                output_preview: "",
+                output_kind: "text",
+                output_bytes: 0,
+                truncated: false,
+              },
+            ],
+          },
+        ],
+        has_more: false,
+      },
+    })
+
+    const activity = state.transcript.find((item) => item.role === "activity")
+    // "0 failed" in the summary must not flip a structurally-completed tool to failed.
+    expect(activity?.role === "activity" ? activity.activity.status : null).toBe("completed")
+  })
 })
 
 describe("UI state — capability parity", () => {

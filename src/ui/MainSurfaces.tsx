@@ -447,7 +447,7 @@ function Composer({
             {selectedProvider ? <text fg={theme.textMuted}> {selectedProvider}</text> : null}
             {!connected ? <text fg={theme.danger}> · ! disconnected</text> : null}
             {usageCostSummary(usageCost, activeThreadId) ? <text fg={theme.textFaint}> · {usageCostSummary(usageCost, activeThreadId)}</text> : null}
-            {approvalCount > 0 ? <text fg={theme.warn}> · {approvalCount} {approvalCount === 1 ? "approval" : "approvals"}</text> : null}
+            {approvalCount > 0 ? <text fg={theme.warn}> · {formatApprovalCount(approvalCount)} {approvalCount === 1 ? "approval" : "approvals"}</text> : null}
             {typeof turnElapsedMs === "number" ? <text fg={theme.textMuted}> · {formatDuration(turnElapsedMs)}</text> : null}
             {isThinking && showThinkingStatus ? <text fg={railColor}> {spinner} {thinkingLabel}</text> : null}
           </box>
@@ -1033,6 +1033,13 @@ function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`
   if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`
   return `${Math.round(ms / 1000)}s`
+}
+
+// The approval poll caps its page (see client.approvalInbox), so a count at the
+// cap means "at least this many" — render it as "25+".
+const APPROVAL_BADGE_CAP = 25
+function formatApprovalCount(count: number): string {
+  return count >= APPROVAL_BADGE_CAP ? `${APPROVAL_BADGE_CAP}+` : String(count)
 }
 
 // Render usage/cost only when it belongs to the current thread context. A value

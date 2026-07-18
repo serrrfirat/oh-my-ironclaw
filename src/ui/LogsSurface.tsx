@@ -4,7 +4,7 @@ import { logLevelLabel } from "./logFilters"
 import { theme, statusColor } from "./theme"
 import { Hint, SurfaceHeader, truncate } from "./pixel"
 
-const LOG_VISIBLE_LIMIT = 16
+export const LOG_VISIBLE_LIMIT = 16
 
 export function LogsSurface({
   entries,
@@ -15,6 +15,7 @@ export function LogsSurface({
   tailSupported,
   followSupported,
   hasOlder,
+  offset,
   loading,
   error,
   width,
@@ -28,13 +29,21 @@ export function LogsSurface({
   tailSupported: boolean
   followSupported: boolean
   hasOlder: boolean
+  offset: number
   loading: boolean
   error: string | null
   width: number
   height: number
 }) {
   const contentWidth = Math.max(1, width - 4)
-  const visible = entries.slice(-LOG_VISIBLE_LIMIT)
+  // `offset` is how many entries the window is scrolled up from the newest. It
+  // is clamped here so fetched older entries stay reachable without the caller
+  // needing to know the entry count.
+  const maxOffset = Math.max(0, entries.length - LOG_VISIBLE_LIMIT)
+  const clampedOffset = Math.min(Math.max(0, offset), maxOffset)
+  const end = entries.length - clampedOffset
+  const start = Math.max(0, end - LOG_VISIBLE_LIMIT)
+  const visible = entries.slice(start, end)
   return (
     <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
       <SurfaceHeader title="logs" meta={loading ? "loading" : `${entries.length} · ${source || "server"}`} width={contentWidth} />
@@ -50,7 +59,7 @@ export function LogsSurface({
         )}
       </box>
       <Hint
-        text={`l level (${logLevelLabel(filter.level)}) · t target · f follow ${filter.follow ? "on" : "off"}${tailSupported ? " · tail" + (filter.tail ? " on" : " off") : ""}${hasOlder ? " · o older" : ""} · r refresh · esc back${followSupported ? "" : ""}`}
+        text={`l level (${logLevelLabel(filter.level)}) · t target · f follow ${filter.follow ? "on" : "off"}${tailSupported ? " · tail" + (filter.tail ? " on" : " off") : ""}${maxOffset > 0 ? " · ↑/↓ scroll" : ""}${clampedOffset > 0 ? ` (+${clampedOffset} newer below)` : ""}${hasOlder ? " · o older" : ""} · r refresh · esc back${followSupported ? "" : ""}`}
         width={contentWidth}
       />
     </box>

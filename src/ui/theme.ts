@@ -128,7 +128,9 @@ export function statusColor(status: string): string {
   return toneColors(statusTone(status)).fg
 }
 
-// Slash-command source badge colors (remote/local/tui).
+// Slash-command source badge colors (remote/local/tui). The three must read as
+// clearly distinct at a glance, so tui uses the ok green rather than the info
+// blue (which was near-identical to remote's accent blue).
 export function sourceColor(source: "remote" | "local" | "tui"): string {
   switch (source) {
     case "remote":
@@ -136,7 +138,7 @@ export function sourceColor(source: "remote" | "local" | "tui"): string {
     case "local":
       return theme.warn
     case "tui":
-      return theme.info
+      return theme.ok
   }
 }
 

@@ -123,8 +123,14 @@ export class GatewayClient {
       turns: response.messages.flatMap(mapMessageToTurn),
       has_more: Boolean(response.next_cursor),
       next_cursor: response.next_cursor ?? null,
+      // Only non-user messages (assistant/tool replies) carry attachments the
+      // user would want to /save — a user's own uploaded attachments must never
+      // be what /save targets.
       message_attachments: response.messages
-        .filter((message) => Array.isArray(message.attachments) && message.attachments.length > 0)
+        .filter(
+          (message) =>
+            message.kind !== "user" && Array.isArray(message.attachments) && message.attachments.length > 0,
+        )
         .map((message) => ({ message_id: message.message_id, refs: message.attachments ?? [] })),
     }
   }
@@ -162,8 +168,10 @@ export class GatewayClient {
     return this.requestJson<SessionResponse>("/api/webchat/v2/session", { method: "GET" })
   }
 
-  // Count threads waiting on approval, for the approval-inbox badge.
-  async approvalInbox(limit = 100): Promise<{ threads: RebornThreadRecord[]; count: number }> {
+  // Count threads waiting on approval, for the approval-inbox badge. The badge
+  // only renders a count, so cap the page small (the UI shows "25+" at the cap)
+  // rather than paying to enumerate every waiting thread on each poll.
+  async approvalInbox(limit = 25): Promise<{ threads: RebornThreadRecord[]; count: number }> {
     const params = new URLSearchParams({ limit: String(limit), needs_approval: "true" })
     const page = await this.requestJson<RebornListThreadsResponse>(
       `/api/webchat/v2/threads?${params}`,

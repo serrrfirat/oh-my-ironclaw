@@ -153,6 +153,9 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
     case "notice":
       return { ...state, notice: action.message }
     case "approval_count":
+      // The badge polls on an interval; an unchanged count must not spawn a new
+      // state object (and the render it triggers). Return the same reference.
+      if (state.approvalCount === action.count) return state
       return { ...state, approvalCount: action.count }
     case "run_started":
       return {
@@ -456,11 +459,47 @@ function assistantTimingMeta(
 }
 
 function pendingGateFromHistory(state: UiState, history: HistoryResponse): PendingGateInfo | null {
+  // An explicit gate from the timeline always wins.
   if (history.pending_gate) return history.pending_gate
   const existingGate = state.pendingGate
-  if (!existingGate || !history.in_progress) return null
+  if (!existingGate) return null
+  // Never adopt a live gate onto a different thread's history.
   if (existingGate.thread_id !== history.thread_id) return null
+  // A gate delivered by the SSE stream must survive a post-send history poll
+  // that simply doesn't carry gate/in-progress info (the /timeline response
+  // omits both). Clear it only when the timeline explicitly shows the run has
+  // moved past the gate — a reply landed after the user's turn, or the run
+  // reached a terminal state — so an in-flight approval is never wiped.
+  if (historyShowsRunSettled(history)) return null
   return existingGate
+}
+
+// True when the timeline indicates the run tied to a live gate has settled:
+// an assistant/summary reply landed after the latest user turn, or (legacy
+// turns path) the latest turn carries a terminal run state with nothing in
+// progress. The messages path relies on the reply signal, since a user
+// message's own status is not a run-lifecycle state.
+function historyShowsRunSettled(history: HistoryResponse): boolean {
+  if (hasAssistantAfterLatestUser(history)) return true
+  if (history.in_progress) return false
+  if (!history.messages && history.turns.length > 0) {
+    const last = history.turns[history.turns.length - 1]
+    if (last?.state && isTerminalRunState(last.state)) return true
+  }
+  return false
+}
+
+function isTerminalRunState(status: string): boolean {
+  return [
+    "completed",
+    "done",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "canceled",
+    "killed",
+    "recovery_required",
+  ].includes(statusKey(status))
 }
 
 function latestUserSentAtMs(transcript: TranscriptItem[]): number | undefined {

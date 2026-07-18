@@ -303,6 +303,48 @@ describe("WebChat event mapping", () => {
     }
   })
 
+  test("message_attachments only includes non-user (reply) attachments", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          thread: { thread_id: "thread-1" },
+          messages: [
+            {
+              message_id: "user-1",
+              thread_id: "thread-1",
+              sequence: 1,
+              kind: "user",
+              status: "sent",
+              content: "here is my file",
+              attachments: [{ attachment_id: "up-1", filename: "mine.png" }],
+            },
+            {
+              message_id: "assistant-1",
+              thread_id: "thread-1",
+              sequence: 2,
+              kind: "assistant",
+              status: "completed",
+              content: "here is the chart",
+              attachments: [{ attachment_id: "reply-1", filename: "chart.png" }],
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )) as unknown as typeof fetch
+
+    try {
+      const history = await client.history("thread-1")
+      // The user's own upload must not be a /save target; only the reply's is.
+      expect(history.message_attachments).toEqual([
+        { message_id: "assistant-1", refs: [{ attachment_id: "reply-1", filename: "chart.png" }] },
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test("maps durable timeline capability display previews to tool summaries", async () => {
     const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
     const originalFetch = globalThis.fetch

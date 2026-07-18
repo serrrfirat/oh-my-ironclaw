@@ -1,4 +1,9 @@
 import type { OutgoingAttachment, SessionResponse } from "../gateway/types"
+import { formatBytes } from "../transcript"
+
+// Re-export the shared byte formatter so existing importers of
+// `./attachments` keep working while the implementation lives in one place.
+export { formatBytes }
 
 // One locally-staged attachment, ready to send as an OutgoingAttachment.
 export type StagedAttachment = {
@@ -58,13 +63,6 @@ export function basename(path: string): string {
 
 export function attachmentBudget(session?: SessionResponse | null): AttachmentBudget {
   return session?.attachments ?? DEFAULT_BUDGET
-}
-
-// Human-readable size.
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function mimeAccepted(mime: string, accept: string[]): boolean {

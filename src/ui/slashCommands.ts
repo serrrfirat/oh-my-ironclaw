@@ -32,6 +32,10 @@ export type SlashCommand = {
   source: SlashCommandSource
   action?: SlashCommandAction
   localArgs?: string[]
+  // When true, the command accepts trailing arguments after its name, so
+  // `submit()` matches it on the first token (e.g. `/attach <path>`) rather than
+  // requiring the whole input to equal the command name.
+  takesArgs?: boolean
 }
 
 const REMOTE_PRODUCT_COMMANDS: SlashCommand[] = [
@@ -111,8 +115,8 @@ const TUI_CONTROL_COMMANDS: SlashCommand[] = [
   { name: "/inbox", description: "Jump to the next thread needing approval", source: "tui", action: "inbox" },
   { name: "/retry", description: "Retry the last failed or cancelled run", source: "tui", action: "retry" },
   { name: "/delete-thread", description: "Delete the active thread", source: "tui", action: "delete-thread" },
-  { name: "/attach", description: "Stage a local file: /attach <path>", source: "tui", action: "attach" },
-  { name: "/save", description: "Save the nth attachment of the latest reply: /save <n>", source: "tui", action: "save" },
+  { name: "/attach", description: "Stage a local file: /attach <path>", source: "tui", action: "attach", takesArgs: true },
+  { name: "/save", description: "Save the nth attachment of the latest reply: /save <n>", source: "tui", action: "save", takesArgs: true },
   { name: "/history", description: "Load older timeline messages", source: "tui", action: "load-older" },
   { name: "/run-cancel", description: "Cancel the active WebChat run", source: "tui", action: "cancel-run" },
   { name: "/quit", description: "Quit this TUI", source: "tui", action: "quit" },
@@ -146,6 +150,28 @@ export function filteredSlashCommands(input: string, commands: SlashCommand[]): 
     const haystack = `${command.name} ${command.source} ${command.description}`.toLowerCase()
     return haystack.includes(query)
   })
+}
+
+// Route a submitted composer line to a slash command. An exact whole-line match
+// wins (no-argument commands). Otherwise, if there are trailing arguments, the
+// first token is matched against commands that declare `takesArgs`, and the rest
+// is returned as the argument string. Returns null when nothing matches (the
+// caller then treats the line as a plain message).
+export function matchSlashCommand(
+  input: string,
+  commands: SlashCommand[],
+): { command: SlashCommand; args: string } | null {
+  const trimmed = input.trim()
+  if (!trimmed.startsWith("/")) return null
+  const exact = commands.find((command) => command.name === trimmed)
+  if (exact) return { command: exact, args: "" }
+  const spaceIndex = trimmed.indexOf(" ")
+  if (spaceIndex === -1) return null
+  const firstToken = trimmed.slice(0, spaceIndex)
+  const args = trimmed.slice(spaceIndex + 1).trim()
+  const withArgs = commands.find((command) => command.name === firstToken && command.takesArgs)
+  if (withArgs) return { command: withArgs, args }
+  return null
 }
 
 export function isSlashCommandInput(input: string): boolean {

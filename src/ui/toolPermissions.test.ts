@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { SettingsToolEntry } from "../gateway/types"
 import {
+  globalAutoApproveFromEntries,
   nextToolPermission,
   toolCapabilityId,
   toolPermissionLabel,
@@ -57,5 +58,24 @@ describe("tool permission rows", () => {
     expect(rows).toHaveLength(2)
     expect(rows[0]).toMatchObject({ capabilityId: "shell", permission: "always_allow", mutable: true })
     expect(rows[1]).toMatchObject({ capabilityId: "fs_write", permission: "disabled", mutable: false })
+  })
+})
+
+describe("global auto-approve extraction", () => {
+  test("reads the actual global_auto_approve entry value", () => {
+    const entries: SettingsToolEntry[] = [
+      { key: "tools.shell.permission", value: "always_allow", source: "user", redacted: false, mutable: true },
+      { key: "global_auto_approve", value: true, source: "user", redacted: false, mutable: true },
+    ]
+    expect(globalAutoApproveFromEntries(entries)).toBe(true)
+  })
+
+  test("coerces string and object shapes", () => {
+    expect(globalAutoApproveFromEntries([{ key: "global_auto_approve", value: "false", source: "d", redacted: false, mutable: true }])).toBe(false)
+    expect(globalAutoApproveFromEntries([{ key: "auto_approve", value: { enabled: true }, source: "d", redacted: false, mutable: true }])).toBe(true)
+  })
+
+  test("returns undefined when no entry is present (caller falls back)", () => {
+    expect(globalAutoApproveFromEntries([{ key: "tools.shell.permission", value: "default", source: "d", redacted: false, mutable: true }])).toBeUndefined()
   })
 })

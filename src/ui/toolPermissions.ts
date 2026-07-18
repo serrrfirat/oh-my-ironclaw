@@ -88,6 +88,33 @@ export function toolPermissionRows(entries: SettingsToolEntry[]): ToolPermission
   return rows
 }
 
+// The global auto-approve flag is a settings/tools entry (key `global_auto_approve`
+// or `auto_approve`) rather than a per-tool row, so it is skipped by
+// toolPermissionRows. Read its actual value here — the GET /settings/tools
+// response is the source of truth for the toggle, not the session snapshot.
+// Returns undefined when no such entry is present (caller falls back).
+export function globalAutoApproveFromEntries(entries: SettingsToolEntry[]): boolean | undefined {
+  const entry = entries.find((candidate) => candidate.key === "global_auto_approve" || candidate.key === "auto_approve")
+  if (!entry) return undefined
+  return coerceBoolean(entry.value)
+}
+
+function coerceBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (["true", "1", "on", "enabled", "yes"].includes(normalized)) return true
+    if (["false", "0", "off", "disabled", "no"].includes(normalized)) return false
+    return undefined
+  }
+  if (value && typeof value === "object") {
+    const nested = value as { enabled?: unknown; value?: unknown }
+    if (typeof nested.enabled === "boolean") return nested.enabled
+    if (typeof nested.value === "boolean") return nested.value
+  }
+  return undefined
+}
+
 // Recognizes keys shaped like "tools.<id>.permission" or "tool_permission.<id>"
 // or a bare capability id, returning the capability id or null.
 export function toolCapabilityId(key: string): string | null {

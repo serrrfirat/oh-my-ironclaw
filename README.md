@@ -150,7 +150,7 @@ The settings surface is functional: the **Tools** section cycles per-tool permis
 - `w`: approve-always on a gate that allows it
 - `ctrl+c`: quit
 
-Surface-local keys are shown in each surface's footer hint (e.g. logs: `l` level · `t` target · `f` follow · `o` older; tools: `enter` cycle · `g` global auto-approve; automations: `p`/`r`/`n`/`d`; workspace: `enter` descend · `backspace` up).
+Surface-local keys are shown in each surface's footer hint (e.g. logs: `l` level · `t` target · `f` follow · `↑`/`↓` scroll · `o` older; tools: `enter` cycle · `g` global auto-approve; automations: `p` pause / `r` resume / `n` rename / `d` delete / `g` refresh; workspace: `enter` descend · `backspace` up). In automations, `d` (delete) asks for a `y`/`n` confirm; `p`/`r`/`n` apply immediately.
 
 ## Design
 
