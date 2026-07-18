@@ -37,6 +37,14 @@ export type RebornThreadRecord = {
   metadata_json?: string | null
 }
 
+// Reference to a landed attachment on a timeline message.
+export type RebornAttachmentRef = {
+  attachment_id: string
+  filename?: string | null
+  mime_type?: string | null
+  size_bytes?: number | null
+}
+
 export type RebornMessageRecord = {
   message_id: string
   thread_id: string
@@ -54,6 +62,7 @@ export type RebornMessageRecord = {
   tool_result_ref?: string | null
   turn_id?: string | null
   turn_run_id?: string | null
+  attachments?: RebornAttachmentRef[] | null
 }
 
 export type RebornCreateThreadResponse = {
@@ -215,6 +224,8 @@ export type RebornWebChatEventFrame = {
     expires_at?: string | null
     headline?: string
     body?: string
+    allow_always?: boolean
+    approval_context?: ApprovalContext
   }
   run_state?: {
     run_id?: string | null
@@ -335,6 +346,15 @@ export type TurnInfo = {
   narrative?: string | null
 }
 
+// Structured details for an approval gate (WebChat v2 gate prompt).
+export type ApprovalContext = {
+  tool_name?: string | null
+  action?: string | null
+  scope?: string | null
+  destination?: string | null
+  details?: string[]
+}
+
 export type PendingGateInfo = {
   request_id: string
   thread_id: string
@@ -350,6 +370,8 @@ export type PendingGateInfo = {
   challenge_kind?: string | null
   authorization_url?: string | null
   expires_at?: string | null
+  allow_always?: boolean
+  approval_context?: ApprovalContext | null
   resume_kind: unknown
 }
 
@@ -359,6 +381,11 @@ export type InProgressInfo = {
   state: string
   user_input: string
   started_at: string
+}
+
+export type MessageAttachments = {
+  message_id: string
+  refs: RebornAttachmentRef[]
 }
 
 export type HistoryResponse = {
@@ -371,6 +398,8 @@ export type HistoryResponse = {
   channel?: string | null
   pending_gate?: PendingGateInfo | null
   in_progress?: InProgressInfo | null
+  // Attachment refs per timeline message (for /save), newest last.
+  message_attachments?: MessageAttachments[]
 }
 
 export type GateResolveRequest =
@@ -948,7 +977,7 @@ export type AppEvent =
   | { type: "stream_chunk"; content: string; thread_id?: string | null }
   | { type: "status"; message: string; thread_id?: string | null }
   | { type: "approval_needed"; request_id: string; tool_name: string; description: string; parameters: string; thread_id?: string | null; allow_always: boolean }
-  | { type: "gate_required"; request_id: string; gate_name: string; tool_name: string; description: string; parameters: string; extension_name?: string | null; provider?: string | null; account_label?: string | null; challenge_kind?: string | null; authorization_url?: string | null; expires_at?: string | null; resume_kind: unknown; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null }
+  | { type: "gate_required"; request_id: string; gate_name: string; tool_name: string; description: string; parameters: string; extension_name?: string | null; provider?: string | null; account_label?: string | null; challenge_kind?: string | null; authorization_url?: string | null; expires_at?: string | null; allow_always?: boolean; approval_context?: ApprovalContext | null; resume_kind: unknown; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null }
   | { type: "gate_resolved"; request_id: string; gate_name: string; tool_name: string; resolution: string; message: string; thread_id?: string | null }
   | { type: "onboarding_state"; extension_name: string; state: "setup_required" | "auth_required" | "pairing_required" | "ready" | "failed"; request_id?: string | null; message?: string | null; instructions?: string | null; auth_url?: string | null; setup_url?: string | null; onboarding?: unknown; thread_id?: string | null }
   | { type: "reasoning_update"; narrative: string; decisions: ToolDecisionDto[]; thread_id?: string | null }

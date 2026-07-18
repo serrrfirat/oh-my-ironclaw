@@ -102,4 +102,27 @@ describe("slash commands", () => {
   test("does not intercept extension in remote mode", () => {
     expect(localCliCommandForInput("/extension", "remote")).toBeNull()
   })
+
+  test("remote mode exposes observability + files surfaces", () => {
+    const commands = slashCommandsForMode("remote")
+    expect(commands).toContainEqual(expect.objectContaining({ name: "/logs", source: "remote", action: "logs" }))
+    expect(commands).toContainEqual(expect.objectContaining({ name: "/traces", source: "remote", action: "traces" }))
+    expect(commands).toContainEqual(expect.objectContaining({ name: "/projects", source: "remote", action: "projects" }))
+    expect(commands).toContainEqual(expect.objectContaining({ name: "/skills", source: "remote", action: "skills" }))
+  })
+
+  test("local mode keeps /logs as a CLI passthrough, not the remote surface", () => {
+    expect(localCliCommandForInput("/logs", "local")).toEqual(["logs"])
+    const commands = slashCommandsForMode("local")
+    expect(commands.some((command) => command.name === "/logs" && command.action === "logs")).toBe(false)
+  })
+
+  test("exposes new TUI control commands in every mode", () => {
+    for (const mode of ["remote", "local"] as const) {
+      const commands = slashCommandsForMode(mode)
+      for (const name of ["/inbox", "/retry", "/delete-thread", "/workspace", "/outbound", "/tools", "/attach", "/save"]) {
+        expect(commands.some((command) => command.name === name && command.source === "tui")).toBe(true)
+      }
+    }
+  })
 })

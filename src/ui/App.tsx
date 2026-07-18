@@ -5,19 +5,30 @@ import { useEffect, useMemo, useReducer, useRef, useState } from "react"
 import type { ClientConfig } from "../config"
 import { GatewayClient } from "../gateway/client"
 import type {
+  AccountTracesResponse,
   AppEvent,
   AutomationInfo,
   ConnectableChannelInfo,
   ExtensionInfo,
   ExtensionRegistryEntry,
   ExtensionSetupResponse,
+  FsMountInfo,
   HistoryResponse,
   LlmConfigSnapshot,
   LlmProviderView,
+  LogEntry,
   NearAiAuthProvider,
   NearAiWalletLoginRequest,
+  OutboundDeliveryTargetOption,
+  OutboundPreferencesResponse,
   PendingGateInfo,
+  ProjectFsEntry,
+  ProjectFsStat,
+  ProjectInfo,
+  ProjectMemberInfo,
+  SkillInfo,
   ThreadInfo,
+  TraceCreditsResponse,
 } from "../gateway/types"
 import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedModel } from "../modelCommands"
 import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebornProfile"
@@ -32,6 +43,24 @@ import { LlmProvidersSurface, type LlmProviderFormView } from "./LlmProvidersSur
 import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
 import { SettingsSurface, SETTINGS_SECTION_COUNT, settingsSectionAt } from "./SettingsSurface"
 import { SkillsSurface, type SkillDetailView } from "./SkillsSurface"
+import { SkillsRemoteSurface, type RemoteSkillDetail, type SkillInstallState } from "./SkillsRemoteSurface"
+import { LogsSurface } from "./LogsSurface"
+import { TracesSurface } from "./TracesSurface"
+import { WorkspaceSurface, type WorkspaceView } from "./WorkspaceSurface"
+import { ProjectsSurface, type ProjectsView } from "./ProjectsSurface"
+import { ToolsSurface } from "./ToolsSurface"
+import { OutboundSurface } from "./OutboundSurface"
+import { theme, accentRamp } from "./theme"
+import {
+  attachmentBudget,
+  basename,
+  mimeFromExtension,
+  toOutgoingAttachment,
+  validateStagedAttachment,
+  type StagedAttachment,
+} from "./attachments"
+import { buildLogQuery, cycleLogLevel, DEFAULT_LOG_FILTER, type LogFilterState } from "./logFilters"
+import { nextToolPermission, toolPermissionRows, type ToolPermissionRow } from "./toolPermissions"
 import {
   filteredSlashCommands,
   isSlashCommandInput,
@@ -44,7 +73,24 @@ type AppProps = {
   config: ClientConfig
 }
 
-type ActiveOverlay = "automations" | "channels" | "commands" | "extensions" | "threads" | "models" | "providers" | "settings" | "skills" | null
+type ActiveOverlay =
+  | "automations"
+  | "channels"
+  | "commands"
+  | "extensions"
+  | "threads"
+  | "models"
+  | "providers"
+  | "settings"
+  | "skills"
+  | "skills-remote"
+  | "logs"
+  | "traces"
+  | "workspace"
+  | "projects"
+  | "tools"
+  | "outbound"
+  | null
 type LlmProviderFormMode = "create" | "edit"
 type LlmProviderFormField = "name" | "id" | "adapter" | "baseUrl" | "model" | "apiKey"
 type LlmProviderFormState = {
@@ -82,6 +128,7 @@ export function App({ config }: AppProps) {
   const [activeOverlay, setActiveOverlay] = useState<ActiveOverlay>(null)
   const [paletteThreads, setPaletteThreads] = useState<ThreadInfo[]>([])
   const [threadSearch, setThreadSearch] = useState("")
+  const [threadDeleteConfirm, setThreadDeleteConfirm] = useState(false)
   const [threadPreviews, setThreadPreviews] = useState<ThreadPreviewMap>({})
   const [selectedSettingsIndex, setSelectedSettingsIndex] = useState(0)
   const [activeRebornProfile, setActiveRebornProfile] = useState<string | null>(null)
@@ -99,6 +146,10 @@ export function App({ config }: AppProps) {
   const [automationsLoading, setAutomationsLoading] = useState(false)
   const [automationsError, setAutomationsError] = useState<string | null>(null)
   const [selectedAutomationIndex, setSelectedAutomationIndex] = useState(0)
+  const [automationRenameActive, setAutomationRenameActive] = useState(false)
+  const [automationRenameInput, setAutomationRenameInput] = useState("")
+  const [automationConfirmDelete, setAutomationConfirmDelete] = useState(false)
+  const [automationMessage, setAutomationMessage] = useState<string | null>(null)
   const [channels, setChannels] = useState<ConnectableChannelInfo[]>([])
   const [channelsLoading, setChannelsLoading] = useState(false)
   const [channelsError, setChannelsError] = useState<string | null>(null)
@@ -124,6 +175,73 @@ export function App({ config }: AppProps) {
   const [llmProviderForm, setLlmProviderForm] = useState<LlmProviderFormState | null>(null)
   const [selectedLlmProviderIndex, setSelectedLlmProviderIndex] = useState(0)
   const [nowMs, setNowMs] = useState(() => Date.now())
+  // --- Attachments staged for the next send ---
+  const [stagedAttachments, setStagedAttachments] = useState<StagedAttachment[]>([])
+  // --- Remote skills surface ---
+  const [remoteSkills, setRemoteSkills] = useState<SkillInfo[]>([])
+  const [remoteSkillQuery, setRemoteSkillQuery] = useState("")
+  const [remoteSkillSearching, setRemoteSkillSearching] = useState(false)
+  const [remoteSkillIndex, setRemoteSkillIndex] = useState(0)
+  const [remoteSkillDetail, setRemoteSkillDetail] = useState<RemoteSkillDetail | null>(null)
+  const [skillInstall, setSkillInstall] = useState<SkillInstallState | null>(null)
+  const [remoteSkillConfirmRemove, setRemoteSkillConfirmRemove] = useState(false)
+  const [remoteSkillsLoading, setRemoteSkillsLoading] = useState(false)
+  const [remoteSkillsError, setRemoteSkillsError] = useState<string | null>(null)
+  const [remoteSkillMessage, setRemoteSkillMessage] = useState<string | null>(null)
+  const [autoActivateLearned, setAutoActivateLearned] = useState(false)
+  // --- Logs surface ---
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([])
+  const [logFilter, setLogFilter] = useState<LogFilterState>(DEFAULT_LOG_FILTER)
+  const [logSource, setLogSource] = useState("")
+  const [logTailSupported, setLogTailSupported] = useState(false)
+  const [logFollowSupported, setLogFollowSupported] = useState(false)
+  const [logCursor, setLogCursor] = useState<string | null>(null)
+  const [logEditingTarget, setLogEditingTarget] = useState(false)
+  const [logTargetInput, setLogTargetInput] = useState("")
+  const [logsLoading, setLogsLoading] = useState(false)
+  const [logsError, setLogsError] = useState<string | null>(null)
+  // --- Traces surface ---
+  const [traceCredits, setTraceCredits] = useState<TraceCreditsResponse | null>(null)
+  const [traceAccount, setTraceAccount] = useState<AccountTracesResponse | null>(null)
+  const [traceLoginLink, setTraceLoginLink] = useState<string | null>(null)
+  const [selectedHoldIndex, setSelectedHoldIndex] = useState(0)
+  const [tracesLoading, setTracesLoading] = useState(false)
+  const [tracesError, setTracesError] = useState<string | null>(null)
+  const [traceMessage, setTraceMessage] = useState<string | null>(null)
+  // --- Workspace surface ---
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>({ kind: "mounts" })
+  const [fsMounts, setFsMounts] = useState<FsMountInfo[]>([])
+  const [fsEntries, setFsEntries] = useState<ProjectFsEntry[]>([])
+  const [fsStat, setFsStat] = useState<ProjectFsStat | null>(null)
+  const [fsFileContent, setFsFileContent] = useState<string | null>(null)
+  const [fsFileOffset, setFsFileOffset] = useState(0)
+  const [fsSelectedIndex, setFsSelectedIndex] = useState(0)
+  const [workspaceLoading, setWorkspaceLoading] = useState(false)
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null)
+  // --- Projects surface ---
+  const [projects, setProjects] = useState<ProjectInfo[]>([])
+  const [projectMembers, setProjectMembers] = useState<ProjectMemberInfo[]>([])
+  const [projectsView, setProjectsView] = useState<ProjectsView>("list")
+  const [selectedProjectIndex, setSelectedProjectIndex] = useState(0)
+  const [projectCreateInput, setProjectCreateInput] = useState("")
+  const [projectConfirmDelete, setProjectConfirmDelete] = useState(false)
+  const [projectsLoading, setProjectsLoading] = useState(false)
+  const [projectsError, setProjectsError] = useState<string | null>(null)
+  const [projectMessage, setProjectMessage] = useState<string | null>(null)
+  // --- Tools (settings/tools) surface ---
+  const [toolRows, setToolRows] = useState<ToolPermissionRow[]>([])
+  const [toolsGlobalAutoApprove, setToolsGlobalAutoApprove] = useState(false)
+  const [selectedToolIndex, setSelectedToolIndex] = useState(0)
+  const [toolsLoading, setToolsLoading] = useState(false)
+  const [toolsError, setToolsError] = useState<string | null>(null)
+  const [toolsMessage, setToolsMessage] = useState<string | null>(null)
+  // --- Outbound surface ---
+  const [outboundPrefs, setOutboundPrefs] = useState<OutboundPreferencesResponse | null>(null)
+  const [outboundTargets, setOutboundTargets] = useState<OutboundDeliveryTargetOption[]>([])
+  const [selectedOutboundIndex, setSelectedOutboundIndex] = useState(0)
+  const [outboundLoading, setOutboundLoading] = useState(false)
+  const [outboundError, setOutboundError] = useState<string | null>(null)
+  const [outboundMessage, setOutboundMessage] = useState<string | null>(null)
   const activityFrame = useActivityFrame(state.isThinking)
   const thinkingLabel = thinkingLabelForActivity(state.activity, state.status, state.isThinking)
   const showCommandPalette = activeOverlay === "commands"
@@ -135,6 +253,19 @@ export function App({ config }: AppProps) {
   const showLlmProviders = activeOverlay === "providers"
   const showSettings = activeOverlay === "settings"
   const showSkills = activeOverlay === "skills"
+  const showRemoteSkills = activeOverlay === "skills-remote"
+  const showLogs = activeOverlay === "logs"
+  const showTraces = activeOverlay === "traces"
+  const showWorkspace = activeOverlay === "workspace"
+  const showProjects = activeOverlay === "projects"
+  const showTools = activeOverlay === "tools"
+  const showOutbound = activeOverlay === "outbound"
+  const operatorOnly = state.session ? !state.session.capabilities.operator_webui_config : false
+  const projectsEnabled = Boolean(state.session?.features.reborn_projects)
+  const filteredRemoteSkills = useMemo(
+    () => filterRemoteSkills(remoteSkills, remoteSkillQuery),
+    [remoteSkills, remoteSkillQuery],
+  )
   const commandSet = useMemo(() => slashCommandsForMode(config.mode), [config.mode])
   const slashCommands = showCommandPalette ? commandSet : filteredSlashCommands(input, commandSet)
   const filteredThreadList = useMemo(() => filterThreads(paletteThreads, threadSearch, threadPreviews), [paletteThreads, threadSearch, threadPreviews])
@@ -175,7 +306,23 @@ export function App({ config }: AppProps) {
       if (key.name === "escape") {
         key.preventDefault()
         key.stopPropagation()
-        setActiveOverlay(null)
+        if (automationRenameActive) setAutomationRenameActive(false)
+        else if (automationConfirmDelete) setAutomationConfirmDelete(false)
+        else setActiveOverlay(null)
+        return
+      }
+      if (automationRenameActive) {
+        if (key.name === "backspace" || key.name === "delete") { key.preventDefault(); key.stopPropagation(); setAutomationRenameInput((v) => v.slice(0, -1)); return }
+        if (key.ctrl && key.name === "u") { key.preventDefault(); key.stopPropagation(); setAutomationRenameInput(""); return }
+        if (isPlainEnter(key)) { key.preventDefault(); key.stopPropagation(); void submitAutomationRename(); return }
+        const text = printableKeyText(key)
+        if (text) { key.preventDefault(); key.stopPropagation(); setAutomationRenameInput((v) => v + text); return }
+        return
+      }
+      if (automationConfirmDelete) {
+        const answer = printableKeyText(key).toLowerCase()
+        if (answer === "y") { key.preventDefault(); key.stopPropagation(); void deleteSelectedAutomation(); return }
+        if (answer === "n") { key.preventDefault(); key.stopPropagation(); setAutomationConfirmDelete(false); return }
         return
       }
       if (key.name === "up" || key.name === "k") {
@@ -190,12 +337,12 @@ export function App({ config }: AppProps) {
         setSelectedAutomationIndex((index) => wrapIndex(index + 1, automations.length))
         return
       }
-      if (printableKeyText(key).toLowerCase() === "r") {
-        key.preventDefault()
-        key.stopPropagation()
-        void loadAutomations()
-        return
-      }
+      const automationKey = printableKeyText(key).toLowerCase()
+      if (automationKey === "p") { key.preventDefault(); key.stopPropagation(); void pauseSelectedAutomation(); return }
+      if (automationKey === "r") { key.preventDefault(); key.stopPropagation(); void resumeSelectedAutomation(); return }
+      if (automationKey === "n") { key.preventDefault(); key.stopPropagation(); setAutomationRenameInput(selectedAutomation()?.name ?? ""); setAutomationRenameActive(true); return }
+      if (automationKey === "d") { key.preventDefault(); key.stopPropagation(); if (automations.length) setAutomationConfirmDelete(true); return }
+      if (automationKey === "g") { key.preventDefault(); key.stopPropagation(); void loadAutomations(); return }
       return
     }
     if (showChannels) {
@@ -590,6 +737,175 @@ export function App({ config }: AppProps) {
       }
       return
     }
+    if (showRemoteSkills) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        if (remoteSkillSearching) setRemoteSkillSearching(false)
+        else if (skillInstall) setSkillInstall(null)
+        else if (remoteSkillDetail) setRemoteSkillDetail(null)
+        else if (remoteSkillConfirmRemove) setRemoteSkillConfirmRemove(false)
+        else setActiveOverlay(null)
+        return
+      }
+      if (skillInstall) {
+        if (key.name === "backspace" || key.name === "delete") {
+          key.preventDefault(); key.stopPropagation()
+          setSkillInstall((s) => (s ? { ...s, [s.step]: s[s.step].slice(0, -1) } : s))
+          return
+        }
+        if (key.ctrl && key.name === "u") {
+          key.preventDefault(); key.stopPropagation()
+          setSkillInstall((s) => (s ? { ...s, [s.step]: "" } : s))
+          return
+        }
+        if (isPlainEnter(key)) { key.preventDefault(); key.stopPropagation(); void submitSkillInstallStep(); return }
+        const text = printableKeyText(key)
+        if (text) { key.preventDefault(); key.stopPropagation(); setSkillInstall((s) => (s ? { ...s, [s.step]: s[s.step] + text } : s)); return }
+        return
+      }
+      if (remoteSkillDetail) {
+        if (key.name === "up" || key.name === "k") { key.preventDefault(); key.stopPropagation(); setRemoteSkillDetail((d) => (d ? { ...d, offset: Math.max(0, d.offset - 1) } : d)); return }
+        if (key.name === "down" || key.name === "j") { key.preventDefault(); key.stopPropagation(); setRemoteSkillDetail((d) => (d ? { ...d, offset: d.offset + 1 } : d)); return }
+        return
+      }
+      if (remoteSkillSearching) {
+        if (key.name === "backspace" || key.name === "delete") { key.preventDefault(); key.stopPropagation(); setRemoteSkillQuery((q) => q.slice(0, -1)); setRemoteSkillIndex(0); return }
+        if (key.ctrl && key.name === "u") { key.preventDefault(); key.stopPropagation(); setRemoteSkillQuery(""); setRemoteSkillIndex(0); return }
+        if (isPlainEnter(key)) { key.preventDefault(); key.stopPropagation(); void searchRemoteSkills(remoteSkillQuery); setRemoteSkillSearching(false); return }
+        const text = printableKeyText(key)
+        if (text) { key.preventDefault(); key.stopPropagation(); setRemoteSkillQuery((q) => q + text); setRemoteSkillIndex(0); return }
+        return
+      }
+      if (remoteSkillConfirmRemove) {
+        const answer = printableKeyText(key).toLowerCase()
+        if (answer === "y") { key.preventDefault(); key.stopPropagation(); void removeSelectedRemoteSkill(); return }
+        if (answer === "n") { key.preventDefault(); key.stopPropagation(); setRemoteSkillConfirmRemove(false); return }
+        return
+      }
+      if (key.name === "up" || key.name === "k") { key.preventDefault(); key.stopPropagation(); setRemoteSkillIndex((i) => wrapIndex(i - 1, filteredRemoteSkills.length)); return }
+      if (key.name === "down" || key.name === "j" || key.name === "tab") { key.preventDefault(); key.stopPropagation(); setRemoteSkillIndex((i) => wrapIndex(i + 1, filteredRemoteSkills.length)); return }
+      if (isPlainEnter(key)) { key.preventDefault(); key.stopPropagation(); void openRemoteSkillDetail(); return }
+      const skillKey = printableKeyText(key)
+      if (skillKey === "/") { key.preventDefault(); key.stopPropagation(); setRemoteSkillSearching(true); return }
+      if (skillKey === "i") { key.preventDefault(); key.stopPropagation(); setSkillInstall({ step: "name", name: "", content: "" }); return }
+      if (skillKey === "x") { key.preventDefault(); key.stopPropagation(); setRemoteSkillConfirmRemove(true); return }
+      if (skillKey === "a") { key.preventDefault(); key.stopPropagation(); void toggleSelectedSkillAutoActivate(); return }
+      if (skillKey === "L") { key.preventDefault(); key.stopPropagation(); void toggleLearnedAutoActivate(); return }
+      return
+    }
+    if (showLogs) {
+      if (key.name === "escape") {
+        key.preventDefault(); key.stopPropagation()
+        if (logEditingTarget) { setLogEditingTarget(false); setLogTargetInput("") } else setActiveOverlay(null)
+        return
+      }
+      if (logEditingTarget) {
+        if (key.name === "backspace" || key.name === "delete") { key.preventDefault(); key.stopPropagation(); setLogTargetInput((v) => v.slice(0, -1)); return }
+        if (key.ctrl && key.name === "u") { key.preventDefault(); key.stopPropagation(); setLogTargetInput(""); return }
+        if (isPlainEnter(key)) {
+          key.preventDefault(); key.stopPropagation()
+          const nextFilter = { ...logFilter, target: logTargetInput }
+          setLogFilter(nextFilter); setLogEditingTarget(false)
+          void loadLogs(nextFilter, true)
+          return
+        }
+        const text = printableKeyText(key)
+        if (text) { key.preventDefault(); key.stopPropagation(); setLogTargetInput((v) => v + text); return }
+        return
+      }
+      const logKey = printableKeyText(key).toLowerCase()
+      if (logKey === "l") { key.preventDefault(); key.stopPropagation(); const nextFilter = { ...logFilter, level: cycleLogLevel(logFilter.level, 1) }; setLogFilter(nextFilter); void loadLogs(nextFilter, true); return }
+      if (logKey === "t") { key.preventDefault(); key.stopPropagation(); setLogEditingTarget(true); setLogTargetInput(logFilter.target ?? ""); return }
+      if (logKey === "f") { key.preventDefault(); key.stopPropagation(); const nextFilter = { ...logFilter, follow: !logFilter.follow }; setLogFilter(nextFilter); void loadLogs(nextFilter, true); return }
+      if (logKey === "o") { key.preventDefault(); key.stopPropagation(); void loadOlderLogs(); return }
+      if (logKey === "r") { key.preventDefault(); key.stopPropagation(); void loadLogs(logFilter, true); return }
+      return
+    }
+    if (showTraces) {
+      if (key.name === "escape") { key.preventDefault(); key.stopPropagation(); setActiveOverlay(null); return }
+      if (key.name === "up" || key.name === "k") { key.preventDefault(); key.stopPropagation(); setSelectedHoldIndex((i) => wrapIndex(i - 1, traceCredits?.holds.length ?? 0)); return }
+      if (key.name === "down" || key.name === "j") { key.preventDefault(); key.stopPropagation(); setSelectedHoldIndex((i) => wrapIndex(i + 1, traceCredits?.holds.length ?? 0)); return }
+      const traceKey = printableKeyText(key)
+      if (traceKey === "a") { key.preventDefault(); key.stopPropagation(); void authorizeSelectedHold(); return }
+      if (traceKey === "L") { key.preventDefault(); key.stopPropagation(); void fetchAccountLoginLink(); return }
+      if (traceKey.toLowerCase() === "r") { key.preventDefault(); key.stopPropagation(); void loadTraces(); return }
+      return
+    }
+    if (showWorkspace) {
+      if (key.name === "escape") { key.preventDefault(); key.stopPropagation(); setActiveOverlay(null); return }
+      if (workspaceView.kind === "file") {
+        if (key.name === "up" || key.name === "k") { key.preventDefault(); key.stopPropagation(); setFsFileOffset((o) => Math.max(0, o - 1)); return }
+        if (key.name === "down" || key.name === "j") { key.preventDefault(); key.stopPropagation(); setFsFileOffset((o) => o + 1); return }
+        if (key.name === "backspace") { key.preventDefault(); key.stopPropagation(); void fsGoUp(); return }
+        return
+      }
+      const listLength = workspaceView.kind === "mounts" ? fsMounts.length : fsEntries.length
+      if (key.name === "up" || key.name === "k") { key.preventDefault(); key.stopPropagation(); setFsSelectedIndex((i) => wrapIndex(i - 1, listLength)); return }
+      if (key.name === "down" || key.name === "j" || key.name === "tab") { key.preventDefault(); key.stopPropagation(); setFsSelectedIndex((i) => wrapIndex(i + 1, listLength)); return }
+      if (key.name === "backspace") { key.preventDefault(); key.stopPropagation(); void fsGoUp(); return }
+      if (isPlainEnter(key)) {
+        key.preventDefault(); key.stopPropagation()
+        if (workspaceView.kind === "mounts") {
+          const mount = fsMounts[wrapIndex(fsSelectedIndex, fsMounts.length)]
+          if (mount) void browseFs(mount.mount, "")
+        } else {
+          void openFsEntry()
+        }
+        return
+      }
+      return
+    }
+    if (showProjects) {
+      if (key.name === "escape") {
+        key.preventDefault(); key.stopPropagation()
+        if (projectsView !== "list") { setProjectsView("list"); setProjectConfirmDelete(false) } else setActiveOverlay(null)
+        return
+      }
+      if (projectsView === "create") {
+        if (key.name === "backspace" || key.name === "delete") { key.preventDefault(); key.stopPropagation(); setProjectCreateInput((v) => v.slice(0, -1)); return }
+        if (key.ctrl && key.name === "u") { key.preventDefault(); key.stopPropagation(); setProjectCreateInput(""); return }
+        if (isPlainEnter(key)) { key.preventDefault(); key.stopPropagation(); void createProjectFromInput(); return }
+        const text = printableKeyText(key)
+        if (text) { key.preventDefault(); key.stopPropagation(); setProjectCreateInput((v) => v + text); return }
+        return
+      }
+      if (projectsView === "members") return
+      if (projectConfirmDelete) {
+        const answer = printableKeyText(key).toLowerCase()
+        if (answer === "y") { key.preventDefault(); key.stopPropagation(); void deleteSelectedProject(); return }
+        if (answer === "n") { key.preventDefault(); key.stopPropagation(); setProjectConfirmDelete(false); return }
+        return
+      }
+      if (key.name === "up" || key.name === "k") { key.preventDefault(); key.stopPropagation(); setSelectedProjectIndex((i) => wrapIndex(i - 1, projects.length)); return }
+      if (key.name === "down" || key.name === "j" || key.name === "tab") { key.preventDefault(); key.stopPropagation(); setSelectedProjectIndex((i) => wrapIndex(i + 1, projects.length)); return }
+      const projectKey = printableKeyText(key).toLowerCase()
+      if (projectKey === "n") { key.preventDefault(); key.stopPropagation(); setProjectsView("create"); setProjectCreateInput(""); return }
+      if (projectKey === "m") { key.preventDefault(); key.stopPropagation(); void openProjectMembersView(); return }
+      if (projectKey === "d") { key.preventDefault(); key.stopPropagation(); setProjectConfirmDelete(true); return }
+      if (projectKey === "r") { key.preventDefault(); key.stopPropagation(); void loadProjects(); return }
+      return
+    }
+    if (showTools) {
+      if (key.name === "escape") { key.preventDefault(); key.stopPropagation(); setActiveOverlay(null); return }
+      if (key.name === "up" || key.name === "k") { key.preventDefault(); key.stopPropagation(); setSelectedToolIndex((i) => wrapIndex(i - 1, toolRows.length)); return }
+      if (key.name === "down" || key.name === "j" || key.name === "tab") { key.preventDefault(); key.stopPropagation(); setSelectedToolIndex((i) => wrapIndex(i + 1, toolRows.length)); return }
+      if (isPlainEnter(key)) { key.preventDefault(); key.stopPropagation(); void cycleSelectedToolPermission(); return }
+      const toolKey = printableKeyText(key).toLowerCase()
+      if (toolKey === "g") { key.preventDefault(); key.stopPropagation(); void toggleGlobalAutoApprove(); return }
+      if (toolKey === "r") { key.preventDefault(); key.stopPropagation(); void loadTools(); return }
+      return
+    }
+    if (showOutbound) {
+      if (key.name === "escape") { key.preventDefault(); key.stopPropagation(); setActiveOverlay(null); return }
+      if (key.name === "up" || key.name === "k") { key.preventDefault(); key.stopPropagation(); setSelectedOutboundIndex((i) => wrapIndex(i - 1, outboundTargets.length)); return }
+      if (key.name === "down" || key.name === "j" || key.name === "tab") { key.preventDefault(); key.stopPropagation(); setSelectedOutboundIndex((i) => wrapIndex(i + 1, outboundTargets.length)); return }
+      if (isPlainEnter(key)) { key.preventDefault(); key.stopPropagation(); void setSelectedOutboundTarget(); return }
+      const outKey = printableKeyText(key).toLowerCase()
+      if (outKey === "c") { key.preventDefault(); key.stopPropagation(); void clearOutboundTarget(); return }
+      if (outKey === "r") { key.preventDefault(); key.stopPropagation(); void loadOutbound(); return }
+      return
+    }
     if (showModelPalette) {
       if (key.name === "escape") {
         key.preventDefault()
@@ -620,7 +936,19 @@ export function App({ config }: AppProps) {
       if (key.name === "escape") {
         key.preventDefault()
         key.stopPropagation()
-        setActiveOverlay(null)
+        if (threadDeleteConfirm) setThreadDeleteConfirm(false)
+        else setActiveOverlay(null)
+        return
+      }
+      if (threadDeleteConfirm) {
+        const answer = printableKeyText(key).toLowerCase()
+        if (answer === "y") { key.preventDefault(); key.stopPropagation(); setThreadDeleteConfirm(false); void deleteSelectedThread(); return }
+        if (answer === "n") { key.preventDefault(); key.stopPropagation(); setThreadDeleteConfirm(false); return }
+        return
+      }
+      if (key.ctrl && key.name === "d") {
+        key.preventDefault(); key.stopPropagation()
+        if (filteredThreadList.length) setThreadDeleteConfirm(true)
         return
       }
       if (key.name === "up" || key.name === "k") {
@@ -765,15 +1093,34 @@ export function App({ config }: AppProps) {
       void resolveGate("denied")
       return
     }
-    if (state.pendingGate) {
+    if (state.pendingGate && !isAuthGate(state.pendingGate)) {
+      if (printableKeyText(key).toLowerCase() === "w" && state.pendingGate.allow_always) {
+        key.preventDefault()
+        key.stopPropagation()
+        void resolveGate("always")
+        return
+      }
       if (key.name === "left" || key.name === "right" || key.name === "tab") {
-        setSelectedGateAction((action) => (action === "approved" ? "denied" : "approved"))
+        const cycle: GateAction[] = state.pendingGate.allow_always ? ["approved", "always", "denied"] : ["approved", "denied"]
+        setSelectedGateAction((action) => cycle[wrapIndex(cycle.indexOf(action) + 1, cycle.length)] ?? "approved")
         return
       }
       if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
         void resolveGate(selectedGateAction)
         return
       }
+    }
+    if (key.ctrl && key.name === "r") {
+      key.preventDefault()
+      key.stopPropagation()
+      void retryLastRun()
+      return
+    }
+    if (key.ctrl && key.name === "g") {
+      key.preventDefault()
+      key.stopPropagation()
+      void jumpToApprovalInbox()
+      return
     }
     if (showSlashCommands) {
       if (key.name === "up") {
@@ -892,6 +1239,12 @@ export function App({ config }: AppProps) {
           await client.health()
           if (cancelled) return
           dispatch({ type: "connected", connected: true, status: "connected" })
+          void client.session().then(
+            (session) => {
+              if (!cancelled) dispatch({ type: "session", session })
+            },
+            () => {},
+          )
           await startNewThreadOnConnect()
           return
         } catch (error) {
@@ -924,6 +1277,26 @@ export function App({ config }: AppProps) {
 
     void checkConnection()
     const timer = setInterval(() => void checkConnection(), 3000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [client, state.connected])
+
+  // Poll the approval inbox for the status-bar badge.
+  useEffect(() => {
+    if (!state.connected) return
+    let cancelled = false
+    async function pollInbox() {
+      try {
+        const inbox = await client.approvalInbox()
+        if (!cancelled) dispatch({ type: "approval_count", count: inbox.count })
+      } catch {
+        // ignore; badge stays at its last value
+      }
+    }
+    void pollInbox()
+    const timer = setInterval(() => void pollInbox(), 30_000)
     return () => {
       cancelled = true
       clearInterval(timer)
@@ -1023,6 +1396,9 @@ export function App({ config }: AppProps) {
 
   async function openAutomationsOverlay() {
     setActiveOverlay("automations")
+    setAutomationRenameActive(false)
+    setAutomationConfirmDelete(false)
+    setAutomationMessage(null)
     await loadAutomations()
   }
 
@@ -1039,6 +1415,51 @@ export function App({ config }: AppProps) {
     } finally {
       setAutomationsLoading(false)
     }
+  }
+
+  function selectedAutomation(): AutomationInfo | null {
+    return automations[wrapIndex(selectedAutomationIndex, automations.length)] ?? null
+  }
+
+  async function runAutomationMutation(label: string, action: () => Promise<unknown>) {
+    setAutomationMessage(null)
+    try {
+      await action()
+      setAutomationMessage(label)
+      await loadAutomations()
+    } catch (error) {
+      setAutomationsError(errorMessage(error))
+    }
+  }
+
+  async function pauseSelectedAutomation() {
+    const automation = selectedAutomation()
+    if (!automation) return
+    await runAutomationMutation("paused", () => client.pauseAutomation(automation.automation_id))
+  }
+
+  async function resumeSelectedAutomation() {
+    const automation = selectedAutomation()
+    if (!automation) return
+    await runAutomationMutation("resumed", () => client.resumeAutomation(automation.automation_id))
+  }
+
+  async function submitAutomationRename() {
+    const automation = selectedAutomation()
+    const name = automationRenameInput.trim()
+    if (!automation || !name) {
+      setAutomationRenameActive(false)
+      return
+    }
+    setAutomationRenameActive(false)
+    await runAutomationMutation("renamed", () => client.renameAutomation(automation.automation_id, name))
+  }
+
+  async function deleteSelectedAutomation() {
+    const automation = selectedAutomation()
+    if (!automation) return
+    setAutomationConfirmDelete(false)
+    await runAutomationMutation("deleted", () => client.deleteAutomation(automation.automation_id))
   }
 
   async function openChannelsOverlay() {
@@ -1131,6 +1552,10 @@ export function App({ config }: AppProps) {
   async function openSelectedSettingsSection() {
     switch (settingsSectionAt(selectedSettingsIndex)) {
       case "Providers":
+        if (operatorOnly) {
+          dispatch({ type: "notice", message: "LLM providers require the operator capability." })
+          return
+        }
         await openLlmProvidersOverlay()
         return
       case "Extensions":
@@ -1140,14 +1565,17 @@ export function App({ config }: AppProps) {
         await openChannelsOverlay()
         return
       case "Skills":
-        if (config.mode === "local") {
-          await openSkillsPalette()
-          return
-        }
-        dispatch({ type: "error", message: "WebUI v2 skills setup endpoint is not available yet." })
+        if (config.mode === "local") await openSkillsPalette()
+        else await openRemoteSkillsOverlay()
         return
       case "Automations":
         await openAutomationsOverlay()
+        return
+      case "Tools":
+        await openToolsOverlay()
+        return
+      case "Outbound":
+        await openOutboundOverlay()
         return
       default:
         return
@@ -1656,6 +2084,16 @@ export function App({ config }: AppProps) {
     const content = input.trim()
     if (!content) return
     rememberInput(content)
+    if (content.startsWith("/attach ")) {
+      clearComposer()
+      await stageAttachmentFromPath(content.slice("/attach ".length).trim())
+      return
+    }
+    if (content === "/save" || content.startsWith("/save ")) {
+      clearComposer()
+      await saveAttachment(content.slice("/save".length).trim())
+      return
+    }
     const slashCommand = commandSet.find((command) => command.name === content)
     if (slashCommand?.action) {
       await runSlashCommand(slashCommand)
@@ -1671,13 +2109,23 @@ export function App({ config }: AppProps) {
 
   async function submitContent(content: string) {
     const previousAssistantCount = state.transcript.filter((item) => item.role === "assistant").length
+    const attachments = stagedAttachments
     applyOutgoingModelCommand(content)
     clearComposer()
     dispatch({ type: "user_sent", content, threadId: state.activeThreadId })
     try {
-      const response = await client.send(content, state.activeThreadId)
+      const response = await client.send(content, state.activeThreadId, {
+        attachments: attachments.length ? attachments.map(toOutgoingAttachment) : undefined,
+      })
       const threadId = response.thread_id ?? state.activeThreadId
       if (threadId) activeThreadIdRef.current = threadId
+      // A busy thread already has an active run: surface the notice (not an error)
+      // and keep the composer intact.
+      if (response.outcome === "rejected_busy") {
+        dispatch({ type: "notice", message: response.notice ?? "A run is already active on this thread." })
+        return
+      }
+      setStagedAttachments([])
       dispatch({ type: "run_started", threadId, runId: response.run_id, status: response.status })
       if (threadId && threadId !== state.activeThreadId) {
         dispatch({ type: "threads", threads: state.threads, activeThreadId: threadId })
@@ -1700,8 +2148,57 @@ export function App({ config }: AppProps) {
         await openModelPalette()
         return
       case "skills":
-        clearComposer("skills")
-        await openSkillsPalette()
+        if (config.mode === "local") {
+          clearComposer("skills")
+          await openSkillsPalette()
+        } else {
+          clearComposer("skills-remote")
+          await openRemoteSkillsOverlay()
+        }
+        return
+      case "logs":
+        clearComposer("logs")
+        await openLogsOverlay()
+        return
+      case "traces":
+        clearComposer("traces")
+        await openTracesOverlay()
+        return
+      case "workspace":
+        clearComposer("workspace")
+        await openWorkspaceOverlay()
+        return
+      case "projects":
+        clearComposer()
+        await openProjectsOverlay()
+        return
+      case "tools":
+        clearComposer("tools")
+        await openToolsOverlay()
+        return
+      case "outbound":
+        clearComposer("outbound")
+        await openOutboundOverlay()
+        return
+      case "inbox":
+        clearComposer()
+        await jumpToApprovalInbox()
+        return
+      case "retry":
+        clearComposer()
+        await retryLastRun()
+        return
+      case "delete-thread":
+        clearComposer()
+        await deleteActiveThread()
+        return
+      case "attach":
+        clearComposer()
+        dispatch({ type: "notice", message: "usage: /attach <path>" })
+        return
+      case "save":
+        clearComposer()
+        await saveAttachment("")
         return
       case "extensions":
         clearComposer("extensions")
@@ -1846,6 +2343,586 @@ export function App({ config }: AppProps) {
     }
   }
 
+  // ---- Attachments ----
+
+  async function stageAttachmentFromPath(rawPath: string) {
+    const path = rawPath.replace(/^['"]|['"]$/g, "").trim()
+    if (!path) {
+      dispatch({ type: "notice", message: "usage: /attach <path>" })
+      return
+    }
+    try {
+      const file = Bun.file(path)
+      if (!(await file.exists())) {
+        dispatch({ type: "error", message: `File not found: ${path}` })
+        return
+      }
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      const filename = basename(path)
+      const candidate = { filename, mime_type: mimeFromExtension(filename), size_bytes: bytes.byteLength }
+      const validation = validateStagedAttachment(candidate, stagedAttachments, attachmentBudget(state.session))
+      if (!validation.ok) {
+        dispatch({ type: "notice", message: validation.error })
+        return
+      }
+      const staged: StagedAttachment = { ...candidate, data_base64: Buffer.from(bytes).toString("base64") }
+      setStagedAttachments((current) => [...current, staged])
+      dispatch({ type: "notice", message: `staged ${filename}` })
+    } catch (error) {
+      dispatch({ type: "error", message: errorMessage(error) })
+    }
+  }
+
+  async function saveAttachment(rawIndex: string) {
+    const threadId = state.activeThreadId
+    if (!threadId) {
+      dispatch({ type: "error", message: "No active thread." })
+      return
+    }
+    const parsed = Number.parseInt(rawIndex.trim(), 10)
+    const index = Number.isFinite(parsed) && parsed > 0 ? parsed : 1
+    try {
+      const history = await client.history(threadId)
+      const latest = history.message_attachments?.[history.message_attachments.length - 1]
+      if (!latest || latest.refs.length === 0) {
+        dispatch({ type: "notice", message: "No attachments on the latest message." })
+        return
+      }
+      const ref = latest.refs[index - 1]
+      if (!ref) {
+        dispatch({ type: "notice", message: `Attachment ${index} not found (have ${latest.refs.length}).` })
+        return
+      }
+      const bytes = await client.attachment(threadId, latest.message_id, ref.attachment_id)
+      const filename = ref.filename || bytes.filename || `attachment-${index}`
+      await Bun.write(filename, bytes.bytes)
+      dispatch({ type: "notice", message: `saved ${filename}` })
+    } catch (error) {
+      dispatch({ type: "error", message: errorMessage(error) })
+    }
+  }
+
+  // ---- Retry / inbox / delete thread ----
+
+  async function retryLastRun() {
+    const threadId = state.activeThreadId
+    const runId = state.activeRunId ?? lastRetryableRunId(state.transcript)
+    if (!threadId || !runId) {
+      dispatch({ type: "notice", message: "No failed or cancelled run to retry." })
+      return
+    }
+    try {
+      const response = await client.retryRun(threadId, runId)
+      dispatch({ type: "run_started", threadId, runId: response.run_id, status: response.status })
+      void pollThreadForReply(threadId, state.transcript.filter((item) => item.role === "assistant").length)
+    } catch (error) {
+      dispatch({ type: "error", message: errorMessage(error) })
+    }
+  }
+
+  async function jumpToApprovalInbox() {
+    try {
+      const inbox = await client.approvalInbox()
+      dispatch({ type: "approval_count", count: inbox.count })
+      const next = inbox.threads.find((thread) => thread.thread_id !== state.activeThreadId) ?? inbox.threads[0]
+      if (!next) {
+        dispatch({ type: "notice", message: "No threads need approval." })
+        return
+      }
+      await loadThread(next.thread_id)
+    } catch (error) {
+      dispatch({ type: "error", message: errorMessage(error) })
+    }
+  }
+
+  async function deleteActiveThread() {
+    const threadId = state.activeThreadId
+    if (!threadId) return
+    try {
+      await client.deleteThread(threadId)
+      const remaining = state.threads.filter((thread) => thread.id !== threadId)
+      dispatch({ type: "threads", threads: remaining, activeThreadId: remaining[0]?.id ?? null })
+      if (remaining[0]) await loadThread(remaining[0].id)
+      else await createThread()
+      dispatch({ type: "notice", message: "thread deleted" })
+    } catch (error) {
+      dispatch({ type: "error", message: errorMessage(error) })
+    }
+  }
+
+  async function deleteSelectedThread() {
+    const thread = filteredThreadList[wrapIndex(selectedThreadIndex, filteredThreadList.length)]
+    if (!thread) return
+    try {
+      await client.deleteThread(thread.id)
+      const remaining = paletteThreads.filter((item) => item.id !== thread.id)
+      setPaletteThreads(remaining)
+      dispatch({ type: "threads", threads: state.threads.filter((item) => item.id !== thread.id), activeThreadId: state.activeThreadId })
+      setSelectedThreadIndex((index) => wrapIndex(index, remaining.length))
+      if (thread.id === state.activeThreadId) {
+        if (remaining[0]) await loadThread(remaining[0].id)
+        else await createThread()
+      }
+    } catch (error) {
+      dispatch({ type: "error", message: errorMessage(error) })
+    }
+  }
+
+  // ---- Remote skills ----
+
+  async function openRemoteSkillsOverlay() {
+    setActiveOverlay("skills-remote")
+    setRemoteSkillDetail(null)
+    setSkillInstall(null)
+    setRemoteSkillConfirmRemove(false)
+    setRemoteSkillMessage(null)
+    setRemoteSkillQuery("")
+    setRemoteSkillIndex(0)
+    await loadRemoteSkills()
+  }
+
+  async function loadRemoteSkills() {
+    setRemoteSkillsLoading(true)
+    setRemoteSkillsError(null)
+    try {
+      const response = await client.skills()
+      setRemoteSkills(response.skills ?? [])
+      setAutoActivateLearned(Boolean(response.auto_activate_learned))
+    } catch (error) {
+      setRemoteSkills([])
+      setRemoteSkillsError(errorMessage(error))
+    } finally {
+      setRemoteSkillsLoading(false)
+    }
+  }
+
+  async function searchRemoteSkills(query: string) {
+    if (!query.trim()) {
+      await loadRemoteSkills()
+      return
+    }
+    setRemoteSkillsLoading(true)
+    setRemoteSkillsError(null)
+    try {
+      const response = await client.searchSkills(query.trim())
+      setRemoteSkills(response.installed ?? [])
+    } catch (error) {
+      setRemoteSkillsError(errorMessage(error))
+    } finally {
+      setRemoteSkillsLoading(false)
+    }
+  }
+
+  function selectedRemoteSkill(): SkillInfo | null {
+    return filteredRemoteSkills[wrapIndex(remoteSkillIndex, filteredRemoteSkills.length)] ?? null
+  }
+
+  async function openRemoteSkillDetail() {
+    const skill = selectedRemoteSkill()
+    if (!skill) return
+    setRemoteSkillDetail({ name: skill.name, content: "", loading: true, error: null, offset: 0 })
+    try {
+      const response = await client.skillContent(skill.name)
+      setRemoteSkillDetail({ name: skill.name, content: response.content, loading: false, error: null, offset: 0 })
+    } catch (error) {
+      setRemoteSkillDetail({ name: skill.name, content: "", loading: false, error: errorMessage(error), offset: 0 })
+    }
+  }
+
+  async function submitSkillInstallStep() {
+    const install = skillInstall
+    if (!install) return
+    if (install.step === "name") {
+      const name = install.name.trim()
+      if (!name) {
+        setRemoteSkillMessage("Skill name is required.")
+        return
+      }
+      setSkillInstall({ ...install, step: "content" })
+      return
+    }
+    setRemoteSkillsLoading(true)
+    setRemoteSkillMessage(null)
+    try {
+      const response = await client.installSkill(install.name.trim(), install.content.trim() || null)
+      setSkillInstall(null)
+      setRemoteSkillMessage(response.message || "Skill installed.")
+      await loadRemoteSkills()
+    } catch (error) {
+      setRemoteSkillMessage(errorMessage(error))
+    } finally {
+      setRemoteSkillsLoading(false)
+    }
+  }
+
+  async function removeSelectedRemoteSkill() {
+    const skill = selectedRemoteSkill()
+    if (!skill) return
+    setRemoteSkillsLoading(true)
+    try {
+      const response = await client.removeSkill(skill.name)
+      setRemoteSkillMessage(response.message || "Skill removed.")
+      setRemoteSkillConfirmRemove(false)
+      await loadRemoteSkills()
+    } catch (error) {
+      setRemoteSkillMessage(errorMessage(error))
+    } finally {
+      setRemoteSkillsLoading(false)
+    }
+  }
+
+  async function toggleSelectedSkillAutoActivate() {
+    const skill = selectedRemoteSkill()
+    if (!skill) return
+    try {
+      await client.setSkillAutoActivate(skill.name, !skill.auto_activate)
+      await loadRemoteSkills()
+    } catch (error) {
+      setRemoteSkillMessage(errorMessage(error))
+    }
+  }
+
+  async function toggleLearnedAutoActivate() {
+    try {
+      const response = await client.setAutoActivateLearned(!autoActivateLearned)
+      setAutoActivateLearned(!autoActivateLearned)
+      setRemoteSkillMessage(response.message || `Learned auto-activate ${!autoActivateLearned ? "on" : "off"}.`)
+    } catch (error) {
+      setRemoteSkillMessage(errorMessage(error))
+    }
+  }
+
+  // ---- Logs ----
+
+  async function openLogsOverlay() {
+    setActiveOverlay("logs")
+    setLogEditingTarget(false)
+    setLogTargetInput("")
+    await loadLogs(logFilter, true)
+  }
+
+  async function loadLogs(filter: LogFilterState, reset: boolean) {
+    setLogsLoading(true)
+    setLogsError(null)
+    try {
+      const response = await client.logs(buildLogQuery({ ...filter, cursor: reset ? undefined : filter.cursor }))
+      setLogEntries(reset ? response.entries : (current) => [...response.entries, ...current])
+      setLogSource(response.source)
+      setLogTailSupported(response.tail_supported)
+      setLogFollowSupported(response.follow_supported)
+      setLogCursor(response.next_cursor ?? null)
+    } catch (error) {
+      setLogsError(errorMessage(error))
+    } finally {
+      setLogsLoading(false)
+    }
+  }
+
+  async function loadOlderLogs() {
+    if (!logCursor) return
+    await loadLogs({ ...logFilter, cursor: logCursor }, false)
+  }
+
+  // ---- Traces ----
+
+  async function openTracesOverlay() {
+    setActiveOverlay("traces")
+    setTraceMessage(null)
+    setSelectedHoldIndex(0)
+    await loadTraces()
+  }
+
+  async function loadTraces() {
+    setTracesLoading(true)
+    setTracesError(null)
+    try {
+      const [credits, account] = await Promise.all([
+        client.traceCredits().catch(() => null),
+        client.traceAccount().catch(() => null),
+      ])
+      setTraceCredits(credits)
+      setTraceAccount(account)
+    } catch (error) {
+      setTracesError(errorMessage(error))
+    } finally {
+      setTracesLoading(false)
+    }
+  }
+
+  async function authorizeSelectedHold() {
+    const holds = traceCredits?.holds ?? []
+    const hold = holds[wrapIndex(selectedHoldIndex, holds.length)]
+    if (!hold) return
+    try {
+      const response = await client.authorizeTraceHold(hold.submission_id)
+      setTraceMessage(response.authorized ? "Hold authorized." : "Authorization not applied.")
+      await loadTraces()
+    } catch (error) {
+      setTracesError(errorMessage(error))
+    }
+  }
+
+  async function fetchAccountLoginLink() {
+    try {
+      const response = await client.traceAccountLoginLink()
+      setTraceLoginLink(response.url ?? null)
+      setTraceMessage(response.url ? "Account login link ready." : "No login link available.")
+    } catch (error) {
+      setTracesError(errorMessage(error))
+    }
+  }
+
+  // ---- Workspace (filesystem) ----
+
+  async function openWorkspaceOverlay() {
+    setActiveOverlay("workspace")
+    setWorkspaceView({ kind: "mounts" })
+    setFsSelectedIndex(0)
+    setFsFileContent(null)
+    setFsStat(null)
+    await loadFsMounts()
+  }
+
+  async function loadFsMounts() {
+    setWorkspaceLoading(true)
+    setWorkspaceError(null)
+    try {
+      const response = await client.fsMounts()
+      setFsMounts(response.mounts ?? [])
+    } catch (error) {
+      setWorkspaceError(errorMessage(error))
+    } finally {
+      setWorkspaceLoading(false)
+    }
+  }
+
+  async function browseFs(mount: string, path: string) {
+    setWorkspaceLoading(true)
+    setWorkspaceError(null)
+    try {
+      const response = await client.fsList(mount, path || undefined)
+      setFsEntries(response.entries ?? [])
+      setWorkspaceView({ kind: "browse", mount, path: response.path ?? path })
+      setFsSelectedIndex(0)
+    } catch (error) {
+      setWorkspaceError(errorMessage(error))
+    } finally {
+      setWorkspaceLoading(false)
+    }
+  }
+
+  async function openFsEntry() {
+    if (workspaceView.kind !== "browse") return
+    const entry = fsEntries[wrapIndex(fsSelectedIndex, fsEntries.length)]
+    if (!entry) return
+    if (entry.kind === "directory") {
+      await browseFs(workspaceView.mount, entry.path)
+      return
+    }
+    setWorkspaceView({ kind: "file", mount: workspaceView.mount, path: entry.path })
+    setFsFileContent(null)
+    setFsFileOffset(0)
+    setWorkspaceLoading(true)
+    try {
+      const [stat, content] = await Promise.all([
+        client.fsStat(workspaceView.mount, entry.path).then((response) => response.stat).catch(() => null),
+        client.fsContent(workspaceView.mount, entry.path),
+      ])
+      setFsStat(stat)
+      setFsFileContent(new TextDecoder().decode(content.bytes))
+    } catch (error) {
+      setWorkspaceError(errorMessage(error))
+      setFsFileContent("")
+    } finally {
+      setWorkspaceLoading(false)
+    }
+  }
+
+  async function fsGoUp() {
+    if (workspaceView.kind === "file") {
+      setWorkspaceView({ kind: "browse", mount: workspaceView.mount, path: parentPath(workspaceView.path) })
+      await browseFs(workspaceView.mount, parentPath(workspaceView.path))
+      return
+    }
+    if (workspaceView.kind === "browse") {
+      if (!workspaceView.path) {
+        setWorkspaceView({ kind: "mounts" })
+        return
+      }
+      await browseFs(workspaceView.mount, parentPath(workspaceView.path))
+    }
+  }
+
+  // ---- Projects ----
+
+  async function openProjectsOverlay() {
+    if (!projectsEnabled) {
+      dispatch({ type: "notice", message: "Projects are not enabled (reborn_projects feature off)." })
+      return
+    }
+    setActiveOverlay("projects")
+    setProjectsView("list")
+    setProjectConfirmDelete(false)
+    setProjectMessage(null)
+    setSelectedProjectIndex(0)
+    await loadProjects()
+  }
+
+  async function loadProjects() {
+    setProjectsLoading(true)
+    setProjectsError(null)
+    try {
+      const response = await client.projects()
+      setProjects(response.projects ?? [])
+    } catch (error) {
+      setProjectsError(errorMessage(error))
+    } finally {
+      setProjectsLoading(false)
+    }
+  }
+
+  async function createProjectFromInput() {
+    const name = projectCreateInput.trim()
+    if (!name) {
+      setProjectMessage("Project name is required.")
+      return
+    }
+    setProjectsLoading(true)
+    try {
+      await client.createProject({ name })
+      setProjectCreateInput("")
+      setProjectsView("list")
+      setProjectMessage("Project created.")
+      await loadProjects()
+    } catch (error) {
+      setProjectMessage(errorMessage(error))
+    } finally {
+      setProjectsLoading(false)
+    }
+  }
+
+  async function openProjectMembersView() {
+    const project = projects[wrapIndex(selectedProjectIndex, projects.length)]
+    if (!project) return
+    setProjectsView("members")
+    setProjectsLoading(true)
+    try {
+      const response = await client.projectMembers(project.project_id)
+      setProjectMembers(response.members ?? [])
+    } catch (error) {
+      setProjectsError(errorMessage(error))
+    } finally {
+      setProjectsLoading(false)
+    }
+  }
+
+  async function deleteSelectedProject() {
+    const project = projects[wrapIndex(selectedProjectIndex, projects.length)]
+    if (!project) return
+    try {
+      await client.deleteProject(project.project_id)
+      setProjectConfirmDelete(false)
+      setProjectMessage("Project deleted.")
+      await loadProjects()
+    } catch (error) {
+      setProjectsError(errorMessage(error))
+    }
+  }
+
+  // ---- Tools (settings/tools) ----
+
+  async function openToolsOverlay() {
+    setActiveOverlay("tools")
+    setToolsMessage(null)
+    setSelectedToolIndex(0)
+    await loadTools()
+  }
+
+  async function loadTools() {
+    setToolsLoading(true)
+    setToolsError(null)
+    try {
+      const response = await client.settingsTools()
+      setToolRows(toolPermissionRows(response.entries ?? []))
+      setToolsGlobalAutoApprove(Boolean(state.session?.features.global_auto_approve))
+    } catch (error) {
+      setToolsError(errorMessage(error))
+    } finally {
+      setToolsLoading(false)
+    }
+  }
+
+  async function cycleSelectedToolPermission() {
+    const row = toolRows[wrapIndex(selectedToolIndex, toolRows.length)]
+    if (!row || !row.mutable) return
+    const next = nextToolPermission(row.permission)
+    setToolRows((rows) => rows.map((item) => (item.capabilityId === row.capabilityId ? { ...item, permission: next } : item)))
+    try {
+      await client.setSettingsToolPermission(row.capabilityId, next)
+      setToolsMessage(`${row.label} → ${next}`)
+    } catch (error) {
+      setToolsError(errorMessage(error))
+      await loadTools()
+    }
+  }
+
+  async function toggleGlobalAutoApprove() {
+    const next = !toolsGlobalAutoApprove
+    setToolsGlobalAutoApprove(next)
+    try {
+      await client.setSettingsToolsAutoApprove(next)
+      setToolsMessage(`global auto-approve ${next ? "on" : "off"}`)
+    } catch (error) {
+      setToolsGlobalAutoApprove(!next)
+      setToolsError(errorMessage(error))
+    }
+  }
+
+  // ---- Outbound ----
+
+  async function openOutboundOverlay() {
+    setActiveOverlay("outbound")
+    setOutboundMessage(null)
+    setSelectedOutboundIndex(0)
+    await loadOutbound()
+  }
+
+  async function loadOutbound() {
+    setOutboundLoading(true)
+    setOutboundError(null)
+    try {
+      const [prefs, targets] = await Promise.all([client.outboundPreferences(), client.outboundTargets()])
+      setOutboundPrefs(prefs)
+      setOutboundTargets(targets.targets ?? [])
+    } catch (error) {
+      setOutboundError(errorMessage(error))
+    } finally {
+      setOutboundLoading(false)
+    }
+  }
+
+  async function setSelectedOutboundTarget() {
+    const option = outboundTargets[wrapIndex(selectedOutboundIndex, outboundTargets.length)]
+    if (!option) return
+    try {
+      const prefs = await client.setOutboundPreferences(option.target.target_id)
+      setOutboundPrefs(prefs)
+      setOutboundMessage(`final reply → ${option.target.display_name}`)
+    } catch (error) {
+      setOutboundError(errorMessage(error))
+    }
+  }
+
+  async function clearOutboundTarget() {
+    try {
+      const prefs = await client.setOutboundPreferences(null)
+      setOutboundPrefs(prefs)
+      setOutboundMessage("final-reply target cleared")
+    } catch (error) {
+      setOutboundError(errorMessage(error))
+    }
+  }
+
   async function pollThreadForReply(threadId: string, previousAssistantCount: number) {
     for (const delay of [750, 1250, 2000, 3000, 5000, 8000, 12000]) {
       await sleep(delay)
@@ -1902,16 +2979,24 @@ export function App({ config }: AppProps) {
     return true
   }
 
-  async function resolveGate(resolution: "approved" | "denied" | "cancelled") {
+  async function resolveGate(action: GateAction | "cancelled") {
     if (!state.pendingGate) return
+    const base = {
+      request_id: state.pendingGate.request_id,
+      thread_id: state.pendingGate.thread_id,
+      run_id: state.pendingGate.run_id,
+      gate_ref: state.pendingGate.gate_ref,
+    }
     try {
-      await client.resolveGate({
-        request_id: state.pendingGate.request_id,
-        thread_id: state.pendingGate.thread_id,
-        run_id: state.pendingGate.run_id,
-        gate_ref: state.pendingGate.gate_ref,
-        resolution,
-      })
+      if (action === "always") {
+        await client.resolveGate({ ...base, resolution: "approved", always: true })
+      } else if (action === "approved") {
+        await client.resolveGate({ ...base, resolution: "approved" })
+      } else if (action === "denied") {
+        await client.resolveGate({ ...base, resolution: "denied" })
+      } else {
+        await client.resolveGate({ ...base, resolution: "cancelled" })
+      }
       dispatch({ type: "gate_cleared" })
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
@@ -2017,12 +3102,17 @@ export function App({ config }: AppProps) {
     activeThreadId: state.activeThreadId,
     models: availableModels,
     threads: showThreadPalette ? filteredThreadList : state.threads,
+    approvalCount: state.approvalCount,
+    usageCost: state.runUsageCost,
+    notice: state.notice,
+    stagedAttachments,
+    threadDeleteConfirm,
     onInputChange: handleInputChange,
     onSubmit: submit,
   }
 
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505" }}>
+    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg }}>
       {showAutomations ? (
         <AutomationsSurface
           automations={automations}
@@ -2030,6 +3120,10 @@ export function App({ config }: AppProps) {
           height={height}
           loading={automationsLoading}
           selectedIndex={wrapIndex(selectedAutomationIndex, automations.length)}
+          renaming={automationRenameActive}
+          renameInput={automationRenameInput}
+          confirmingDelete={automationConfirmDelete}
+          message={automationMessage}
           width={width}
         />
       ) : showChannels ? (
@@ -2095,13 +3189,109 @@ export function App({ config }: AppProps) {
           height={height}
           llmConfig={llmConfig}
           llmConfigError={llmConfigError}
+          session={state.session}
+          operatorOnly={operatorOnly}
           selectedIndex={selectedSettingsIndex}
           selectedModel={selectedModel}
           selectedProvider={providerLabel(config.provider)}
-          skillCount={skillList.configured}
-          skillsAvailable={config.mode === "local"}
+          skillCount={config.mode === "local" ? skillList.configured : remoteSkills.length}
+          skillsRemote={config.mode !== "local"}
           status={state.status}
           width={width}
+        />
+      ) : showRemoteSkills ? (
+        <SkillsRemoteSurface
+          skills={filteredRemoteSkills}
+          query={remoteSkillQuery}
+          autoActivateLearned={autoActivateLearned}
+          selectedIndex={wrapIndex(remoteSkillIndex, filteredRemoteSkills.length)}
+          detail={remoteSkillDetail}
+          install={skillInstall}
+          confirmingRemove={remoteSkillConfirmRemove}
+          message={remoteSkillMessage}
+          loading={remoteSkillsLoading}
+          error={remoteSkillsError}
+          markdownStyle={markdownStyle}
+          width={width}
+          height={height}
+        />
+      ) : showLogs ? (
+        <LogsSurface
+          entries={logEntries}
+          filter={logFilter}
+          editingTarget={logEditingTarget}
+          targetInput={logTargetInput}
+          source={logSource}
+          tailSupported={logTailSupported}
+          followSupported={logFollowSupported}
+          hasOlder={Boolean(logCursor)}
+          loading={logsLoading}
+          error={logsError}
+          width={width}
+          height={height}
+        />
+      ) : showTraces ? (
+        <TracesSurface
+          credits={traceCredits}
+          account={traceAccount}
+          loginLink={traceLoginLink}
+          selectedHoldIndex={wrapIndex(selectedHoldIndex, traceCredits?.holds.length ?? 0)}
+          message={traceMessage}
+          loading={tracesLoading}
+          error={tracesError}
+          width={width}
+          height={height}
+        />
+      ) : showWorkspace ? (
+        <WorkspaceSurface
+          view={workspaceView}
+          mounts={fsMounts}
+          entries={fsEntries}
+          stat={fsStat}
+          fileContent={fsFileContent}
+          fileOffset={fsFileOffset}
+          selectedIndex={fsSelectedIndex}
+          loading={workspaceLoading}
+          error={workspaceError}
+          width={width}
+          height={height}
+        />
+      ) : showProjects ? (
+        <ProjectsSurface
+          view={projectsView}
+          projects={projects}
+          members={projectMembers}
+          selectedIndex={selectedProjectIndex}
+          createInput={projectCreateInput}
+          confirmingDelete={projectConfirmDelete}
+          message={projectMessage}
+          loading={projectsLoading}
+          error={projectsError}
+          width={width}
+          height={height}
+        />
+      ) : showTools ? (
+        <ToolsSurface
+          rows={toolRows}
+          globalAutoApprove={toolsGlobalAutoApprove}
+          session={state.session ?? null}
+          selectedIndex={wrapIndex(selectedToolIndex, toolRows.length)}
+          message={toolsMessage}
+          loading={toolsLoading}
+          error={toolsError}
+          width={width}
+          height={height}
+        />
+      ) : showOutbound ? (
+        <OutboundSurface
+          preferences={outboundPrefs}
+          targets={outboundTargets}
+          selectedIndex={wrapIndex(selectedOutboundIndex, outboundTargets.length)}
+          message={outboundMessage}
+          loading={outboundLoading}
+          error={outboundError}
+          width={width}
+          height={height}
         />
       ) : hasConversation ? (
         <ConversationSurface
@@ -2285,6 +3475,32 @@ function wrapIndex(index: number, length: number): number {
   return ((index % length) + length) % length
 }
 
+function filterRemoteSkills(skills: SkillInfo[], query: string): SkillInfo[] {
+  const trimmed = query.trim().toLowerCase()
+  if (!trimmed) return skills
+  return skills.filter((skill) =>
+    `${skill.name} ${skill.description} ${skill.keywords.join(" ")}`.toLowerCase().includes(trimmed),
+  )
+}
+
+// Extract the most recent failed/cancelled run id from failure/cancelled system
+// transcript items (their ids are `run-<id>-<status>`).
+function lastRetryableRunId(transcript: Array<{ id: string; role: string }>): string | null {
+  for (let index = transcript.length - 1; index >= 0; index -= 1) {
+    const item = transcript[index]
+    if (!item) continue
+    const match = item.id.match(/^run-(.+)-(failed|cancelled|killed|recovery_required)$/)
+    if (match?.[1]) return match[1]
+  }
+  return null
+}
+
+function parentPath(path: string): string {
+  const normalized = path.replace(/\/+$/, "")
+  const index = normalized.lastIndexOf("/")
+  return index > 0 ? normalized.slice(0, index) : ""
+}
+
 function isPlainEnter(key: {
   name: string
   ctrl: boolean
@@ -2430,7 +3646,7 @@ function useActivityFrame(active: boolean): { spinner: string; railColor: string
   }, [active])
 
   const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-  const railColors = ["#165f32", "#1f8f46", "#2ee66b", "#8cffb0", "#2ee66b", "#1f8f46"]
+  const railColors = accentRamp
 
   return {
     spinner: spinnerFrames[frame % spinnerFrames.length],

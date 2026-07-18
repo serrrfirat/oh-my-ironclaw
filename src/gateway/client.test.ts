@@ -610,6 +610,8 @@ describe("WebChat event mapping", () => {
       challenge_kind: "oauth_url",
       authorization_url: "https://github.com/login/oauth/authorize",
       expires_at: "2026-05-31T20:00:00Z",
+      allow_always: false,
+      approval_context: null,
       run_id: "run-1",
       gate_ref: "gate:auth-github",
       resume_kind: { run_id: "run-1", gate_ref: "gate:auth-github" },

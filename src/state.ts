@@ -295,6 +295,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
           challenge_kind: event.challenge_kind,
           authorization_url: event.authorization_url,
           expires_at: event.expires_at,
+          allow_always: "allow_always" in event ? event.allow_always ?? false : false,
+          approval_context: "approval_context" in event ? event.approval_context ?? null : null,
           resume_kind: event.resume_kind,
         },
       }
@@ -310,6 +312,8 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
           tool_name: event.tool_name,
           description: event.description,
           parameters: event.parameters,
+          allow_always: event.allow_always,
+          approval_context: null,
           resume_kind: { kind: "approval", allow_always: event.allow_always },
         },
       }

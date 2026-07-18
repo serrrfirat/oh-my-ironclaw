@@ -1,4 +1,5 @@
 import type { LlmConfigSnapshot, LlmProviderView } from "../gateway/types"
+import { theme } from "./theme"
 
 const PROVIDER_VISIBLE_LIMIT = 14
 
@@ -47,10 +48,10 @@ export function LlmProvidersSurface({
   const listWidth = Math.min(58, Math.max(36, Math.floor(contentWidth * 0.46)))
   const narrow = width < 94
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
+    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
       <SurfaceHeader title="providers" meta={loading ? "loading" : `${configured}/${providers.length} configured`} width={contentWidth} />
       <box style={{ height: 1 }} />
-      {error ? <text fg="#f08a8a">{truncate(error, contentWidth)}</text> : actionMessage ? <text fg="#8cffb0">{truncate(actionMessage, contentWidth)}</text> : null}
+      {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : actionMessage ? <text fg={theme.accentText}>{truncate(actionMessage, contentWidth)}</text> : null}
       {narrow ? (
         <box style={{ flexDirection: "column" }}>
           <ProviderList providers={providers} selectedIndex={selectedIndex} width={contentWidth} />
@@ -65,7 +66,7 @@ export function LlmProvidersSurface({
         </box>
       )}
       <box style={{ flexGrow: 1 }} />
-      <text fg="#777777">{truncate("up/down select · n new · e edit · enter active · s key · l github · g google · w wallet · t test · m models · x delete · r refresh · esc back", contentWidth)}</text>
+      <text fg={theme.textMuted}>{truncate("up/down select · n new · e edit · enter active · s key · l github · g google · w wallet · t test · m models · x delete · r refresh · esc back", contentWidth)}</text>
     </box>
   )
 }
@@ -84,8 +85,8 @@ function ProviderList({ providers, selectedIndex, width }: { providers: LlmProvi
           width={width}
         />
       )) : (
-        <box style={{ height: 3, backgroundColor: "#101010", paddingLeft: 2, paddingTop: 1 }}>
-          <text fg="#777777">No providers</text>
+        <box style={{ height: 3, backgroundColor: theme.bgCode, paddingLeft: 2, paddingTop: 1 }}>
+          <text fg={theme.textMuted}>No providers</text>
         </box>
       )}
     </box>
@@ -96,10 +97,10 @@ function ProviderRow({ provider, selected, width }: { provider: LlmProviderView;
   const marker = selected ? ">" : provider.active ? "*" : " "
   const suffix = provider.active ? "active" : providerConfigured(provider) ? "ready" : "setup"
   return (
-    <box style={{ height: 1, flexDirection: "row", backgroundColor: selected ? "#1b1b1b" : "#101010", paddingLeft: 2, paddingRight: 2 }}>
-      <text fg={selected || provider.active ? "#2ee66b" : "#707070"}>{marker} </text>
-      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{truncate(provider.description || provider.id, Math.max(8, width - suffix.length - 10))}</text>
-      <text fg={provider.active || providerConfigured(provider) ? "#8cffb0" : "#ffb887"}> {truncate(suffix, 12)}</text>
+    <box style={{ height: 1, flexDirection: "row", backgroundColor: selected ? theme.bgSoft : theme.bgCode, paddingLeft: 2, paddingRight: 2 }}>
+      <text fg={selected || provider.active ? theme.accent : theme.textMuted}>{marker} </text>
+      <text fg={selected ? theme.textStrong : theme.text}>{truncate(provider.description || provider.id, Math.max(8, width - suffix.length - 10))}</text>
+      <text fg={provider.active || providerConfigured(provider) ? theme.accentText : theme.warn}> {truncate(suffix, 12)}</text>
     </box>
   )
 }
@@ -125,16 +126,16 @@ function ProviderDetail({
 }) {
   if (!provider) {
     return (
-      <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-        <text fg="#777777">Select a provider</text>
+      <box style={{ width, flexDirection: "column", backgroundColor: theme.bgCode, paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
+        <text fg={theme.textMuted}>Select a provider</text>
       </box>
     )
   }
   const model = provider.active_model || provider.default_model || "unknown"
   return (
-    <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-      <text fg="#f2f2f2">{truncate(provider.description || provider.id, Math.max(1, width - 4))}</text>
-      <text fg="#777777">{truncate(provider.id, Math.max(1, width - 4))}</text>
+    <box style={{ width, flexDirection: "column", backgroundColor: theme.bgCode, paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
+      <text fg={theme.textStrong}>{truncate(provider.description || provider.id, Math.max(1, width - 4))}</text>
+      <text fg={theme.textMuted}>{truncate(provider.id, Math.max(1, width - 4))}</text>
       <box style={{ height: 1 }} />
       <Field label="adapter" value={provider.adapter || "unknown"} width={width - 4} />
       <Field label="model" value={model} width={width - 4} />
@@ -143,22 +144,22 @@ function ProviderDetail({
       <Field label="kind" value={provider.builtin ? "built-in" : "custom"} width={width - 4} />
       <Field label="models" value={provider.can_list_models ? "listable" : "fixed/default"} width={width - 4} />
       <box style={{ height: 1 }} />
-      <text fg="#8a8a8a">{truncate(actionHint(provider), Math.max(1, width - 4))}</text>
+      <text fg={theme.textMuted}>{truncate(actionHint(provider), Math.max(1, width - 4))}</text>
       {setupInputLabel ? (
-        <box style={{ height: 3, flexDirection: "column", backgroundColor: "#0b1118", paddingLeft: 1, paddingRight: 1, marginTop: 1 }}>
-          <text fg="#8a8a8a">{truncate(setupInputLabel, width - 6)}</text>
-          <text fg="#f2f2f2">{truncate(setupInput ? "*".repeat(setupInput.length) : "type API key, enter submit", width - 6)}</text>
+        <box style={{ height: 3, flexDirection: "column", backgroundColor: theme.accentSoftBg, paddingLeft: 1, paddingRight: 1, marginTop: 1 }}>
+          <text fg={theme.textMuted}>{truncate(setupInputLabel, width - 6)}</text>
+          <text fg={theme.textStrong}>{truncate(setupInput ? "*".repeat(setupInput.length) : "type API key, enter submit", width - 6)}</text>
         </box>
       ) : null}
       {form ? <ProviderFormPreview form={form} width={width - 4} /> : null}
       {nearAiWalletInputActive ? <WalletLoginPreview input={nearAiWalletInput ?? ""} width={width - 4} /> : null}
       {availableModels.length ? (
         <box style={{ flexDirection: "column", marginTop: 1 }}>
-          <text fg="#f0b45f">available models</text>
+          <text fg={theme.warn}>available models</text>
           {availableModels.slice(0, 5).map((availableModel) => (
-            <text key={availableModel} fg="#d0d0d0">{truncate(availableModel, Math.max(1, width - 4))}</text>
+            <text key={availableModel} fg={theme.text}>{truncate(availableModel, Math.max(1, width - 4))}</text>
           ))}
-          {availableModels.length > 5 ? <text fg="#777777">{`${availableModels.length - 5} more`}</text> : null}
+          {availableModels.length > 5 ? <text fg={theme.textMuted}>{`${availableModels.length - 5} more`}</text> : null}
         </box>
       ) : null}
     </box>
@@ -168,21 +169,21 @@ function ProviderDetail({
 function ProviderFormPreview({ form, width }: { form: LlmProviderFormView; width: number }) {
   const current = form.currentValue ? `current: ${form.currentValue}` : "blank keeps default when available"
   return (
-    <box style={{ height: 5, flexDirection: "column", backgroundColor: "#0b1118", paddingLeft: 1, paddingRight: 1, marginTop: 1 }}>
-      <text fg="#f0b45f">{truncate(`${form.title} ${form.fieldIndex + 1}/${form.fieldCount}`, width - 2)}</text>
-      <text fg="#8a8a8a">{truncate(form.fieldLabel, width - 2)}</text>
-      <text fg="#777777">{truncate(current, width - 2)}</text>
-      <text fg="#f2f2f2">{truncate(form.fieldLabel === "api key" && form.input ? "*".repeat(form.input.length) : form.input || "type value, enter next", width - 2)}</text>
+    <box style={{ height: 5, flexDirection: "column", backgroundColor: theme.accentSoftBg, paddingLeft: 1, paddingRight: 1, marginTop: 1 }}>
+      <text fg={theme.warn}>{truncate(`${form.title} ${form.fieldIndex + 1}/${form.fieldCount}`, width - 2)}</text>
+      <text fg={theme.textMuted}>{truncate(form.fieldLabel, width - 2)}</text>
+      <text fg={theme.textMuted}>{truncate(current, width - 2)}</text>
+      <text fg={theme.textStrong}>{truncate(form.fieldLabel === "api key" && form.input ? "*".repeat(form.input.length) : form.input || "type value, enter next", width - 2)}</text>
     </box>
   )
 }
 
 function WalletLoginPreview({ input, width }: { input: string; width: number }) {
   return (
-    <box style={{ height: 4, flexDirection: "column", backgroundColor: "#0b1118", paddingLeft: 1, paddingRight: 1, marginTop: 1 }}>
-      <text fg="#f0b45f">{truncate("near ai wallet login", width - 2)}</text>
-      <text fg="#8a8a8a">{truncate("paste signed JSON payload, enter submit", width - 2)}</text>
-      <text fg="#f2f2f2">{truncate(input || "{}", width - 2)}</text>
+    <box style={{ height: 4, flexDirection: "column", backgroundColor: theme.accentSoftBg, paddingLeft: 1, paddingRight: 1, marginTop: 1 }}>
+      <text fg={theme.warn}>{truncate("near ai wallet login", width - 2)}</text>
+      <text fg={theme.textMuted}>{truncate("paste signed JSON payload, enter submit", width - 2)}</text>
+      <text fg={theme.textStrong}>{truncate(input || "{}", width - 2)}</text>
     </box>
   )
 }
@@ -191,12 +192,12 @@ function SurfaceHeader({ title, meta, width }: { title: string; meta: string; wi
   return (
     <box style={{ width, height: 2, flexDirection: "column" }}>
       <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg="#8cffb0">ironclaw</text>
-        <text fg="#777777">{padEnd("", Math.max(1, width - title.length - meta.length - 12))}</text>
-        <text fg="#d0d0d0">{title}</text>
-        <text fg="#777777"> · {meta}</text>
+        <text fg={theme.accentText}>ironclaw</text>
+        <text fg={theme.textMuted}>{padEnd("", Math.max(1, width - title.length - meta.length - 12))}</text>
+        <text fg={theme.text}>{title}</text>
+        <text fg={theme.textMuted}> · {meta}</text>
       </box>
-      <text fg="#1f1f1f">{padEnd("", width).replaceAll(" ", "-")}</text>
+      <text fg={theme.border}>{padEnd("", width).replaceAll(" ", "-")}</text>
     </box>
   )
 }
@@ -205,8 +206,8 @@ function Field({ label, value, width }: { label: string; value: string; width: n
   const labelWidth = 14
   return (
     <box style={{ width, height: 1, flexDirection: "row" }}>
-      <text fg="#8a8a8a">{padEnd(label, labelWidth)}</text>
-      <text fg="#d0d0d0">{truncate(value, Math.max(1, width - labelWidth))}</text>
+      <text fg={theme.textMuted}>{padEnd(label, labelWidth)}</text>
+      <text fg={theme.text}>{truncate(value, Math.max(1, width - labelWidth))}</text>
     </box>
   )
 }

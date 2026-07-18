@@ -1,5 +1,6 @@
 import type { SyntaxStyle } from "@opentui/core"
 import type { SkillListItem } from "../skillList"
+import { theme } from "./theme"
 
 export type SkillDetailView = {
   skill: SkillListItem
@@ -40,10 +41,10 @@ export function SkillsSurface({
   const top = Math.max(1, Math.floor((height - modalHeight) / 2))
   const selected = wrapIndex(selectedIndex, filteredSkills.length)
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505" }}>
+    <box style={{ width, height, flexDirection: "column", backgroundColor: theme.bg }}>
       <box style={{ height: top }} />
       <box style={{ width, flexDirection: "row", justifyContent: "center" }}>
-        <box style={{ width: modalWidth, height: modalHeight, flexDirection: "column", backgroundColor: "#171717", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
+        <box style={{ width: modalWidth, height: modalHeight, flexDirection: "column", backgroundColor: theme.bgCode, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
           {detail ? (
             <SkillDetail
               detail={detail}
@@ -97,22 +98,22 @@ function SkillList({
   return (
     <>
       <box style={{ height: 2, flexDirection: "row" }}>
-        <text fg="#e8e8e8">Skills</text>
-        <text fg="#777777"> {loading ? "loading" : `${filteredSkills.length}/${totalCount}`}</text>
-        {source ? <text fg="#777777"> · {source}</text> : null}
-        <text fg="#777777">{padLeft("esc", Math.max(1, width - 18 - source.length))}</text>
+        <text fg={theme.textStrong}>Skills</text>
+        <text fg={theme.textMuted}> {loading ? "loading" : `${filteredSkills.length}/${totalCount}`}</text>
+        {source ? <text fg={theme.textMuted}> · {source}</text> : null}
+        <text fg={theme.textMuted}>{padLeft("esc", Math.max(1, width - 18 - source.length))}</text>
       </box>
       <box style={{ height: 2, flexDirection: "row" }}>
-        <text fg="#ffb887">{query ? "" : " "}</text>
-        <text fg={query ? "#f0f0f0" : "#8a8a8a"}>{truncate(query || "Search skills...", width - 2)}</text>
+        <text fg={theme.warn}>{query ? "" : " "}</text>
+        <text fg={query ? theme.textStrong : theme.textMuted}>{truncate(query || "Search skills...", width - 2)}</text>
       </box>
       <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg="#a78bfa">Skills</text>
+        <text fg={theme.accentText}>Skills</text>
       </box>
       {error ? (
-        <text fg="#f08a8a">{truncate(error, width)}</text>
+        <text fg={theme.danger}>{truncate(error, width)}</text>
       ) : loading ? (
-        <text fg="#777777">Loading skills from Reborn CLI...</text>
+        <text fg={theme.textMuted}>Loading skills from Reborn CLI...</text>
       ) : visibleSkills.length ? (
         visibleSkills.map((skill, index) => (
           <SkillRow
@@ -123,10 +124,10 @@ function SkillList({
           />
         ))
       ) : (
-        <text fg="#777777">{query ? "No skills match your search." : "No skills configured."}</text>
+        <text fg={theme.textMuted}>{query ? "No skills match your search." : "No skills configured."}</text>
       )}
       <box style={{ height: 1, flexDirection: "row", marginTop: 1 }}>
-        <text fg="#606060">{truncate("type to search · up/down select · enter open SKILL.md · esc close", width)}</text>
+        <text fg={theme.textFaint}>{truncate("type to search · up/down select · enter open SKILL.md · esc close", width)}</text>
       </box>
     </>
   )
@@ -136,10 +137,10 @@ function SkillRow({ selected, skill, width }: { selected: boolean; skill: SkillL
   const nameWidth = clamp(Math.floor(width * 0.38), 18, 40)
   const descriptionWidth = Math.max(10, width - nameWidth - 4)
   return (
-    <box style={{ height: 1, flexDirection: "row", backgroundColor: selected ? "#ffb887" : "#171717" }}>
-      <text fg={selected ? "#101010" : "#dcdcdc"}>{selected ? " " : "  "}</text>
-      <text fg={selected ? "#101010" : "#f0f0f0"}>{padEnd(skill.name, nameWidth)}</text>
-      <text fg={selected ? "#101010" : "#777777"}>{truncate(skill.description || skill.source || "No description.", descriptionWidth)}</text>
+    <box style={{ height: 1, flexDirection: "row", backgroundColor: selected ? theme.accentSoftBg : theme.bgCode }}>
+      <text fg={selected ? theme.accentText : theme.text}>{selected ? " " : "  "}</text>
+      <text fg={selected ? theme.accentText : theme.textStrong}>{padEnd(skill.name, nameWidth)}</text>
+      <text fg={selected ? theme.accentText : theme.textMuted}>{truncate(skill.description || skill.source || "No description.", descriptionWidth)}</text>
     </box>
   )
 }
@@ -160,16 +161,16 @@ function SkillDetail({
   return (
     <>
       <box style={{ height: 2, flexDirection: "row" }}>
-        <text fg="#e8e8e8">{truncate(detail.skill.name, width - 14)}</text>
-        <text fg="#777777">{padLeft("esc", 12)}</text>
+        <text fg={theme.textStrong}>{truncate(detail.skill.name, width - 14)}</text>
+        <text fg={theme.textMuted}>{padLeft("esc", 12)}</text>
       </box>
-      <text fg="#777777">{truncate(detail.path ?? "SKILL.md path unavailable from CLI metadata", width)}</text>
+      <text fg={theme.textMuted}>{truncate(detail.path ?? "SKILL.md path unavailable from CLI metadata", width)}</text>
       <box style={{ height: 1 }} />
       <box style={{ height: contentHeight, flexDirection: "column" }}>
         <markdown content={content || " "} syntaxStyle={markdownStyle} />
       </box>
       <box style={{ height: 1 }}>
-        <text fg="#606060">{truncate("up/down scroll · esc close", width)}</text>
+        <text fg={theme.textFaint}>{truncate("up/down scroll · esc close", width)}</text>
       </box>
     </>
   )

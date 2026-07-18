@@ -1,6 +1,7 @@
 import { SyntaxStyle } from "@opentui/core"
 import { transcriptActivityLines, type TranscriptItem } from "../transcript"
 import { diffPreviewLineColor, isUnifiedDiffKind } from "./diffPreview"
+import { theme } from "./theme"
 
 const ACTIVITY_DETAIL_LINE_LIMIT = 48
 
@@ -23,7 +24,7 @@ export function TranscriptMessage({
 }) {
   if (item.role === "user") {
     return (
-      <box style={{ width, flexDirection: "row", backgroundColor: "#141414", marginBottom: 2 }}>
+      <box style={{ width, flexDirection: "row", backgroundColor: theme.bgSoft, marginBottom: 2 }}>
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 3, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
           <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
         </box>
@@ -45,14 +46,14 @@ export function TranscriptMessage({
     const [firstLine, ...rest] = lines.length > 0 ? lines : ["thinking"]
     return (
       <box style={{ width, flexDirection: "row", marginBottom: 1 }}>
-        <box style={{ width: 1, backgroundColor: "#3a3a3a" }} />
+        <box style={{ width: 1, backgroundColor: theme.border }} />
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
           <box style={{ height: 1, flexDirection: "row" }}>
-            <text fg="#777777">{spinner}</text>
-            <text fg="#8a8a8a"> {truncate(firstLine, Math.max(1, width - 7))}</text>
+            <text fg={theme.textMuted}>{spinner}</text>
+            <text fg={theme.textMuted}> {truncate(firstLine, Math.max(1, width - 7))}</text>
           </box>
           {activityDetailLines(rest).map((line, index) => (
-            <text key={`${item.id}-thinking-${index}`} fg="#686868">
+            <text key={`${item.id}-thinking-${index}`} fg={theme.textFaint}>
               {truncate(line || " ", Math.max(1, width - 5))}
             </text>
           ))}
@@ -67,7 +68,7 @@ export function TranscriptMessage({
     const status = item.activity.status
     const failed = status === "failed" || status === "killed"
     const running = status === "started" || status === "running"
-    const activityColor = failed ? "#ff6b6b" : running ? "#a8a8a8" : "#d0d0d0"
+    const activityColor = failed ? theme.danger : running ? theme.textMuted : theme.text
     const title = activityTitle(headline)
     const icon = running ? spinner : failed ? "!" : "✓"
     const unifiedDiff = isUnifiedDiffKind(item.activity.outputKind)
@@ -77,15 +78,15 @@ export function TranscriptMessage({
     return (
       <box
         onMouseDown={() => onToggleActivityExpanded(item.id)}
-        style={{ width, flexDirection: "row", backgroundColor: "#0d0d0d", marginBottom: 1 }}
+        style={{ width, flexDirection: "row", backgroundColor: theme.bgCode, marginBottom: 1 }}
       >
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 3, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
           <box style={{ height: 1, flexDirection: "row" }}>
-            <text fg="#555555">{expanded ? "▾ " : "▸ "}</text>
+            <text fg={theme.textFaint}>{expanded ? "▾ " : "▸ "}</text>
             <text fg={activityColor}>{icon}</text>
             <text fg={activityColor}> {truncate(title || "tool", Math.max(1, width - 10))}</text>
           </box>
-          <text fg={failed ? "#f08a8a" : "#686868"}>
+          <text fg={failed ? theme.danger : theme.textFaint}>
             {truncate(`${hint}${summary ? ` · ${summary}` : ""}`, Math.max(1, width - 5))}
           </text>
           {detailLines.map((line, index) => (
@@ -104,7 +105,7 @@ export function TranscriptMessage({
 
   return (
     <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
-      <text fg="#d29922">{item.text || " "}</text>
+      <text fg={theme.warn}>{item.text || " "}</text>
     </box>
   )
 }
@@ -113,20 +114,20 @@ function ActivityDetailLine({ failed, line, unifiedDiff, width }: { failed: bool
   const max = Math.max(1, width - 5)
   if (line.startsWith("input: ")) {
     return (
-      <text fg={failed ? "#f08a8a" : "#b8b08a"}>
+      <text fg={failed ? theme.danger : theme.text}>
         {truncate(line, max)}
       </text>
     )
   }
   if (line.startsWith("output: ")) {
     return (
-      <text fg={failed ? "#f08a8a" : "#8a8a8a"}>
+      <text fg={failed ? theme.danger : theme.textMuted}>
         {truncate(line, max)}
       </text>
     )
   }
   if (line === "truncated") {
-    return <text fg="#777777">{truncate("... truncated", max)}</text>
+    return <text fg={theme.textMuted}>{truncate("... truncated", max)}</text>
   }
   if (unifiedDiff) {
     return (
@@ -136,7 +137,7 @@ function ActivityDetailLine({ failed, line, unifiedDiff, width }: { failed: bool
     )
   }
   return (
-    <text fg={failed ? "#f08a8a" : "#d8cfaa"}>
+    <text fg={failed ? theme.danger : theme.text}>
       {truncate(line || " ", max)}
     </text>
   )
@@ -145,11 +146,11 @@ function ActivityDetailLine({ failed, line, unifiedDiff, width }: { failed: bool
 function BuildLine({ durationMs, selectedModel }: { durationMs?: number; selectedModel: string }) {
   return (
     <box style={{ height: 1, flexDirection: "row", marginTop: 1 }}>
-      <text fg="#2ee66b">▣</text>
-      <text fg="#2ee66b"> Build</text>
-      <text fg="#777777"> · </text>
-      <text fg="#d0d0d0">{selectedModel}</text>
-      {typeof durationMs === "number" ? <text fg="#777777"> · {formatDuration(durationMs)}</text> : null}
+      <text fg={theme.accent}>▣</text>
+      <text fg={theme.accent}> Build</text>
+      <text fg={theme.textMuted}> · </text>
+      <text fg={theme.text}>{selectedModel}</text>
+      {typeof durationMs === "number" ? <text fg={theme.textMuted}> · {formatDuration(durationMs)}</text> : null}
     </box>
   )
 }

@@ -123,6 +123,9 @@ export class GatewayClient {
       turns: response.messages.flatMap(mapMessageToTurn),
       has_more: Boolean(response.next_cursor),
       next_cursor: response.next_cursor ?? null,
+      message_attachments: response.messages
+        .filter((message) => Array.isArray(message.attachments) && message.attachments.length > 0)
+        .map((message) => ({ message_id: message.message_id, refs: message.attachments ?? [] })),
     }
   }
 
@@ -1189,6 +1192,8 @@ function gateRequiredEvent(
     challenge_kind: gateName === "auth" ? frame.prompt?.challenge_kind ?? "manual_token" : null,
     authorization_url: gateName === "auth" ? frame.prompt?.authorization_url ?? null : null,
     expires_at: gateName === "auth" ? frame.prompt?.expires_at ?? null : null,
+    allow_always: gateName === "approval" ? frame.prompt?.allow_always ?? false : false,
+    approval_context: gateName === "approval" ? frame.prompt?.approval_context ?? null : null,
     resume_kind: { run_id: runId, gate_ref: ref },
     thread_id: threadId,
   }
