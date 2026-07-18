@@ -177,16 +177,9 @@ export class GatewayClient {
 
   // Raw bytes of one landed attachment (image/pdf/etc.), for save-to-file.
   async attachment(threadId: string, messageId: string, attachmentId: string): Promise<AttachmentBytes> {
-    const response = await this.request(
+    return this.requestBytes(
       `/api/webchat/v2/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
-      { method: "GET" },
     )
-    const bytes = new Uint8Array(await response.arrayBuffer())
-    return {
-      mime_type: response.headers.get("Content-Type") ?? "application/octet-stream",
-      filename: filenameFromContentDisposition(response.headers.get("Content-Disposition")),
-      bytes,
-    }
   }
 
   async retryRun(threadId: string, runId: string): Promise<RebornRetryRunResponse> {
@@ -557,16 +550,9 @@ export class GatewayClient {
 
   async threadFileContent(threadId: string, path: string): Promise<AttachmentBytes> {
     const params = new URLSearchParams({ path })
-    const response = await this.request(
+    return this.requestBytes(
       `/api/webchat/v2/threads/${encodeURIComponent(threadId)}/files/content?${params}`,
-      { method: "GET" },
     )
-    const bytes = new Uint8Array(await response.arrayBuffer())
-    return {
-      mime_type: response.headers.get("Content-Type") ?? "application/octet-stream",
-      filename: filenameFromContentDisposition(response.headers.get("Content-Disposition")),
-      bytes,
-    }
   }
 
   // ---- Global filesystem mounts ----
@@ -591,13 +577,7 @@ export class GatewayClient {
   async fsContent(mount: string, path: string, projectId?: string): Promise<AttachmentBytes> {
     const params = new URLSearchParams({ mount, path })
     if (projectId) params.set("project_id", projectId)
-    const response = await this.request(`/api/webchat/v2/fs/content?${params}`, { method: "GET" })
-    const bytes = new Uint8Array(await response.arrayBuffer())
-    return {
-      mime_type: response.headers.get("Content-Type") ?? "application/octet-stream",
-      filename: filenameFromContentDisposition(response.headers.get("Content-Disposition")),
-      bytes,
-    }
+    return this.requestBytes(`/api/webchat/v2/fs/content?${params}`)
   }
 
   // ---- Projects (feature-gated by features.reborn_projects) ----
@@ -662,14 +642,33 @@ export class GatewayClient {
   // Long-lived SSE subscription with automatic resume. On a keep-alive-closed
   // stream (server forces a reconnect at max lifetime), a retryable error frame,
   // or a retryable HTTP status (429 busy / 503), the loop reconnects with
-  // `?after_cursor=<last SSE id>` (Last-Event-ID semantics) after an exponential
-  // backoff. A non-retryable error surfaces an `error` AppEvent and stops.
-  async *events(threadId?: string | null, lastEventId?: string): AsyncGenerator<AppEvent> {
+  // `?after_cursor=<last SSE id>` (Last-Event-ID semantics) after a jittered
+  // backoff (with a hard minimum delay on every reconnect). A non-retryable error
+  // surfaces an `error` AppEvent and then throws SseTerminalError so the consumer
+  // stops/backs off instead of re-invoking immediately. Pass `signal` to cancel a
+  // suspended generator promptly (aborts the in-flight fetch/read and wakes sleeps)
+  // — without it, cancellation only takes effect at the next yield, leaking streams.
+  async *events(threadId?: string | null, lastEventId?: string, signal?: AbortSignal): AsyncGenerator<AppEvent> {
     if (!threadId) return
     let cursor = lastEventId
-    let backoffMs = SSE_BASE_BACKOFF_MS
+    let backoffMs = SSE_MIN_RECONNECT_MS
+    let firstAttempt = true
 
     while (true) {
+      if (signal?.aborted) return
+
+      // Every reconnect (not the first) waits at least the floor; backoffMs is
+      // always >= SSE_MIN_RECONNECT_MS, so the loop can never spin with zero delay.
+      if (!firstAttempt) {
+        try {
+          await sleep(backoffMs, signal)
+        } catch (error) {
+          if (isAbortError(error)) return
+          throw error
+        }
+      }
+      firstAttempt = false
+
       const params = new URLSearchParams({ token: this.config.token })
       if (cursor) params.set("after_cursor", cursor)
 
@@ -677,11 +676,12 @@ export class GatewayClient {
       try {
         response = await fetch(
           `${this.config.baseUrl}/api/webchat/v2/threads/${encodeURIComponent(threadId)}/events?${params}`,
+          { signal },
         )
       } catch (error) {
+        if (signal?.aborted || isAbortError(error)) return
         // Transport error (connection reset, DNS, etc.) — treat as retryable.
         yield { type: "warning", source: "sse", message: `stream disconnected: ${String(error)}`, thread_id: threadId }
-        await sleep(backoffMs)
         backoffMs = nextBackoff(backoffMs)
         continue
       }
@@ -695,25 +695,27 @@ export class GatewayClient {
             message: `stream unavailable (HTTP ${response.status}${body?.kind ? `, ${body.kind}` : ""}); retrying`,
             thread_id: threadId,
           }
-          await sleep(backoffMs)
           backoffMs = nextBackoff(backoffMs)
           continue
         }
         yield { type: "error", message: `SSE failed: HTTP ${response.status}${body?.error ? ` ${body.error}` : ""}`, thread_id: threadId }
-        return
+        throw new SseTerminalError(`SSE failed: HTTP ${response.status}${body?.error ? ` ${body.error}` : ""}`)
       }
 
-      // Connected: reset backoff so the next transient blip starts small again.
-      backoffMs = SSE_BASE_BACKOFF_MS
-      let closedCleanly = true
+      // Connected. Only reset backoff once this connection proves itself healthy
+      // (yielded a frame, or stayed open a few seconds); a connection that opens
+      // and closes instantly keeps escalating backoff instead of hammering.
+      const connectedAt = Date.now()
+      let framesSeen = 0
       try {
         for await (const frame of parseSse(response)) {
+          if (signal?.aborted) return
           if (frame.id) cursor = frame.id
           if (frame.event === "error") {
             const errorFrame = parseSseErrorFrame(frame.data)
             if (errorFrame && !errorFrame.retryable) {
               yield { type: "error", message: `stream error: ${errorFrame.error}`, thread_id: threadId }
-              return
+              throw new SseTerminalError(`stream error: ${errorFrame.error}`)
             }
             yield {
               type: "warning",
@@ -721,24 +723,24 @@ export class GatewayClient {
               message: `stream error: ${errorFrame?.error ?? "unknown"}; reconnecting`,
               thread_id: threadId,
             }
-            closedCleanly = false
             break
           }
           for (const event of mapWebChatEvents(parseWebChatEvent(frame.data), threadId)) {
+            framesSeen += 1
             yield event
           }
         }
       } catch (error) {
+        if (error instanceof SseTerminalError) throw error
+        if (signal?.aborted || isAbortError(error)) return
         yield { type: "warning", source: "sse", message: `stream read failed: ${String(error)}`, thread_id: threadId }
-        closedCleanly = false
       }
 
-      // Stream ended (max-lifetime close or a retryable error frame). Reconnect
-      // from the last cursor after a short backoff.
-      if (!closedCleanly) {
-        await sleep(backoffMs)
-        backoffMs = nextBackoff(backoffMs)
-      }
+      // Stream ended (max-lifetime close, a retryable error frame, or a read
+      // error). Reconnect from the last cursor; the delay is applied at the top
+      // of the next iteration.
+      const healthy = framesSeen > 0 || Date.now() - connectedAt >= SSE_HEALTHY_MS
+      backoffMs = healthy ? SSE_MIN_RECONNECT_MS : nextBackoff(backoffMs)
     }
   }
 
@@ -793,6 +795,18 @@ export class GatewayClient {
     }
 
     return response
+  }
+
+  // Fetch a binary body (attachment / file content) and decode it into the
+  // AttachmentBytes shape the UI's save-to-file paths consume.
+  private async requestBytes(path: string): Promise<AttachmentBytes> {
+    const response = await this.request(path, { method: "GET" })
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    return {
+      mime_type: response.headers.get("Content-Type") ?? "application/octet-stream",
+      filename: filenameFromContentDisposition(response.headers.get("Content-Disposition")),
+      bytes,
+    }
   }
 }
 
@@ -874,15 +888,56 @@ async function parseGatewayErrorBody(response: Response): Promise<GatewayErrorBo
   }
 }
 
-const SSE_BASE_BACKOFF_MS = 500
-const SSE_MAX_BACKOFF_MS = 15_000
+// Minimum delay before *any* reconnect, so a server that closes streams
+// instantly (or a flapping connection) can never spin the loop with zero delay.
+export const SSE_MIN_RECONNECT_MS = 750
+export const SSE_MAX_BACKOFF_MS = 15_000
+// A connection only counts as "healthy" (backoff reset to the floor) once it has
+// yielded a frame or stayed open at least this long; otherwise backoff keeps
+// escalating so open→immediate-close flapping backs off instead of hammering.
+const SSE_HEALTHY_MS = 3_000
 
-function nextBackoff(current: number): number {
-  return Math.min(current * 2, SSE_MAX_BACKOFF_MS)
+// Exponential backoff with equal jitter: result lands in [target/2, target] where
+// target = min(current*2, max). The jitter de-synchronizes many clients retrying
+// at once, and the lower bound stays at/above the reconnect floor.
+export function nextBackoff(current: number): number {
+  const target = Math.min(Math.max(current, SSE_MIN_RECONNECT_MS) * 2, SSE_MAX_BACKOFF_MS)
+  const half = target / 2
+  return half + Math.random() * half
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+// Terminal, non-retryable stream failure. Thrown after the `error` AppEvent is
+// yielded so the consumer's catch path runs (reconnect with a long backoff)
+// instead of the generator returning and the consumer re-invoking with no delay.
+export class SseTerminalError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "SseTerminalError"
+  }
+}
+
+// Abort-aware sleep: resolves after `ms`, or rejects promptly if `signal` aborts
+// (so a suspended generator wakes on cancellation instead of after the full delay).
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"))
+      return
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    function onAbort() {
+      clearTimeout(timer)
+      reject(new DOMException("Aborted", "AbortError"))
+    }
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError"
 }
 
 // Retryable transports: 429 busy (over SSE stream cap) and 503 service_unavailable.
@@ -1483,12 +1538,35 @@ function submitTurnToSendResponse(response: RebornSubmitTurnResponse): SendMessa
       notice: response.notice,
     }
   }
+  if (response.outcome === "submitted" || response.outcome === "already_submitted") {
+    return {
+      message_id: response.accepted_message_ref,
+      status: response.status,
+      thread_id: response.thread_id,
+      run_id: response.run_id,
+      outcome: response.outcome,
+    }
+  }
+  // Unknown outcome from an older/newer gateway (e.g. `deferred_busy`). Do NOT
+  // fall into the submitted mapping — that would emit run_id: undefined with a
+  // submitted-looking shape and start a phantom run. Treat it like a busy/notice:
+  // surface any active run id, keep the composer intact, never fabricate a run_id.
+  const unknown = response as {
+    accepted_message_ref: string
+    thread_id: string
+    outcome?: string | null
+    status?: string | null
+    active_run_id?: string | null
+    run_id?: string | null
+    notice?: string | null
+  }
   return {
-    message_id: response.accepted_message_ref,
-    status: response.status,
-    thread_id: response.thread_id,
-    run_id: response.run_id,
-    outcome: response.outcome,
+    message_id: unknown.accepted_message_ref,
+    status: unknown.status ?? unknown.outcome ?? "rejected_busy",
+    thread_id: unknown.thread_id,
+    run_id: unknown.active_run_id ?? unknown.run_id ?? null,
+    outcome: "rejected_busy",
+    notice: unknown.notice ?? null,
   }
 }
 

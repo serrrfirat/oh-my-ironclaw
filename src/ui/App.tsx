@@ -1307,11 +1307,23 @@ export function App({ config }: AppProps) {
     const threadId = state.activeThreadId
     if (!threadId) return
     let cancelled = false
+    // Abort the in-flight fetch/read and wake the generator's sleeps on cleanup,
+    // so a thread switch closes the old stream promptly instead of leaking it
+    // against the server's per-user stream cap until the next yield.
+    const controller = new AbortController()
 
     void (async () => {
+      // Consumer-side backoff for a *fatal* stream error (client.events re-throws
+      // SseTerminalError immediately each reconnect). Escalate so a persistent
+      // 401/404 backs off long instead of a fixed-interval request storm. A
+      // clean stream end (generator returns) resets it — the generator already
+      // paced its own reconnect.
+      const SSE_CONSUMER_MIN_MS = 1500
+      const SSE_CONSUMER_MAX_MS = 30_000
+      let reconnectDelayMs = SSE_CONSUMER_MIN_MS
       while (!cancelled && activeThreadIdRef.current === threadId) {
         try {
-          for await (const event of client.events(threadId)) {
+          for await (const event of client.events(threadId, undefined, controller.signal)) {
             if (cancelled || activeThreadIdRef.current !== threadId) break
             const eventThreadId = threadIdFromEvent(event)
             if (eventThreadId && eventThreadId !== activeThreadIdRef.current) continue
@@ -1319,18 +1331,20 @@ export function App({ config }: AppProps) {
             dispatch({ type: "event", event })
             if (isTerminalRunStatusEvent(event)) void refreshThreadFromEvent(eventThreadId)
           }
+          reconnectDelayMs = SSE_CONSUMER_MIN_MS
         } catch (error) {
-          if (!cancelled && activeThreadIdRef.current === threadId) {
-            dispatch({ type: "connected", connected: false, status: "reconnecting" })
-            dispatch({ type: "error", message: errorMessage(error) })
-            await sleep(1500)
-          }
+          if (cancelled || activeThreadIdRef.current !== threadId) break
+          dispatch({ type: "connected", connected: false, status: "reconnecting" })
+          dispatch({ type: "error", message: errorMessage(error) })
+          await sleep(reconnectDelayMs)
+          reconnectDelayMs = Math.min(reconnectDelayMs * 2, SSE_CONSUMER_MAX_MS)
         }
       }
     })()
 
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [client, state.activeThreadId])
 

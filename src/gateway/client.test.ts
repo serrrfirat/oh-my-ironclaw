@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { GatewayClient, GatewayError, mapWebChatEvent, mapWebChatEvents } from "./client"
+import {
+  GatewayClient,
+  GatewayError,
+  SseTerminalError,
+  SSE_MAX_BACKOFF_MS,
+  SSE_MIN_RECONNECT_MS,
+  mapWebChatEvent,
+  mapWebChatEvents,
+  nextBackoff,
+} from "./client"
 
 describe("Gateway client", () => {
   test("loads every paginated thread page", async () => {
@@ -1161,7 +1170,7 @@ describe("SSE robustness", () => {
     }
   })
 
-  test("surfaces a non-retryable error frame and stops", async () => {
+  test("surfaces a non-retryable error frame then throws to stop the consumer", async () => {
     const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async () =>
@@ -1171,10 +1180,109 @@ describe("SSE robustness", () => {
 
     try {
       const events = []
-      for await (const event of client.events("thread-1")) {
-        events.push(event)
+      let thrown: unknown
+      try {
+        for await (const event of client.events("thread-1")) {
+          events.push(event)
+        }
+      } catch (error) {
+        thrown = error
       }
+      // The error AppEvent is still surfaced so the UI can show it...
       expect(events.at(-1)).toEqual({ type: "error", message: "stream error: replay unavailable", thread_id: "thread-1" })
+      // ...but the generator then throws so the consumer's catch/backoff runs
+      // instead of the outer loop re-invoking events() with zero delay.
+      expect(thrown).toBeInstanceOf(SseTerminalError)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("yields an error then throws SseTerminalError on a non-retryable HTTP status", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    let calls = 0
+    globalThis.fetch = (async () => {
+      calls += 1
+      return new Response(JSON.stringify({ error: "unauthorized", kind: "auth", retryable: false }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      })
+    }) as unknown as typeof fetch
+
+    try {
+      const events = []
+      let thrown: unknown
+      try {
+        for await (const event of client.events("thread-1")) {
+          events.push(event)
+        }
+      } catch (error) {
+        thrown = error
+      }
+      expect(events).toEqual([{ type: "error", message: "SSE failed: HTTP 401 unauthorized", thread_id: "thread-1" }])
+      expect(thrown).toBeInstanceOf(SseTerminalError)
+      // A persistent 401 must not spin the loop: exactly one request per invocation.
+      expect(calls).toBe(1)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("releasing the generator cancels the underlying stream reader", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    const encoder = new TextEncoder()
+    let readerCancelled = false
+    globalThis.fetch = (async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode('id: 1\nevent: final_reply\ndata: {"type":"final_reply","cursor":1,"reply":{"text":"hi"}}\n\n'),
+          )
+          // Intentionally left open so the reader is still active when we break.
+        },
+        cancel() {
+          readerCancelled = true
+        },
+      })
+      return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } })
+    }) as unknown as typeof fetch
+
+    try {
+      for await (const event of client.events("thread-1", undefined, new AbortController().signal)) {
+        if (event.type === "response") break
+      }
+      // Breaking the for-await drives the generator's .return(), whose finally
+      // cancels the reader and closes the connection.
+      expect(readerCancelled).toBe(true)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("aborting the signal stops the generator without reconnecting", async () => {
+    const client = new GatewayClient({ baseUrl: "http://example.test", token: "token" } as never)
+    const originalFetch = globalThis.fetch
+    const controller = new AbortController()
+    let calls = 0
+    globalThis.fetch = (async () => {
+      calls += 1
+      return new Response(JSON.stringify({ error: "unavailable", kind: "service_unavailable", retryable: true }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      })
+    }) as unknown as typeof fetch
+
+    try {
+      const gen = client.events("thread-1", undefined, controller.signal)
+      const first = await gen.next()
+      expect(first.value?.type).toBe("warning")
+      controller.abort()
+      const second = await gen.next()
+      expect(second.done).toBe(true)
+      // Aborting before the reconnect fires means no second fetch.
+      expect(calls).toBe(1)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1207,6 +1315,115 @@ describe("SSE robustness", () => {
       expect(events).toEqual(["ok"])
     } finally {
       globalThis.fetch = originalFetch
+    }
+  })
+})
+
+describe("SSE reconnect backoff", () => {
+  test("stays within jittered bounds and never drops below the reconnect floor", () => {
+    let current = SSE_MIN_RECONNECT_MS
+    for (let i = 0; i < 200; i += 1) {
+      const next = nextBackoff(current)
+      const target = Math.min(Math.max(current, SSE_MIN_RECONNECT_MS) * 2, SSE_MAX_BACKOFF_MS)
+      expect(next).toBeGreaterThanOrEqual(target / 2)
+      expect(next).toBeLessThanOrEqual(target)
+      expect(next).toBeGreaterThanOrEqual(SSE_MIN_RECONNECT_MS)
+      expect(next).toBeLessThanOrEqual(SSE_MAX_BACKOFF_MS)
+      current = next
+    }
+  })
+
+  test("escalates and caps at the maximum backoff", () => {
+    let current = SSE_MIN_RECONNECT_MS
+    for (let i = 0; i < 100; i += 1) current = nextBackoff(current)
+    expect(current).toBeGreaterThanOrEqual(SSE_MAX_BACKOFF_MS / 2)
+    expect(current).toBeLessThanOrEqual(SSE_MAX_BACKOFF_MS)
+  })
+
+  test("applies jitter so retries do not synchronize", () => {
+    const values = new Set<number>()
+    for (let i = 0; i < 25; i += 1) values.add(nextBackoff(SSE_MIN_RECONNECT_MS))
+    expect(values.size).toBeGreaterThan(1)
+  })
+})
+
+describe("submit turn outcome folding", () => {
+  test("folds an unknown outcome into a safe busy notice, mapping active_run_id", async () => {
+    const { client, restore } = recordingClient(() => ({
+      outcome: "deferred_busy",
+      thread_id: "thread-1",
+      accepted_message_ref: "msg-1",
+      active_run_id: "run-7",
+      notice: "Deferred while another run finishes.",
+    }))
+    try {
+      const response = await client.send("hi", "thread-1")
+      expect(response.outcome).toBe("rejected_busy")
+      expect(response.run_id).toBe("run-7")
+      expect(response.status).toBe("deferred_busy")
+      expect(response.notice).toBe("Deferred while another run finishes.")
+      expect(response.message_id).toBe("msg-1")
+    } finally {
+      restore()
+    }
+  })
+
+  test("never emits an undefined run_id for an unknown outcome without a run", async () => {
+    const { client, restore } = recordingClient(() => ({
+      outcome: "queued_elsewhere",
+      thread_id: "thread-1",
+      accepted_message_ref: "msg-2",
+    }))
+    try {
+      const response = await client.send("hi", "thread-1")
+      expect(response.run_id).toBeNull()
+      expect(response.run_id).not.toBeUndefined()
+      expect(response.outcome).toBe("rejected_busy")
+      expect(response.status).toBe("queued_elsewhere")
+      expect(response.notice).toBeNull()
+    } finally {
+      restore()
+    }
+  })
+})
+
+describe("binary content decoding parity", () => {
+  test("decodes thread file and fs content identically to attachment bytes", async () => {
+    const { client, requests, restore } = recordingClient(
+      () =>
+        new Response(new Uint8Array([9, 8, 7]), {
+          status: 200,
+          headers: {
+            "Content-Type": "text/plain",
+            "Content-Disposition": 'attachment; filename="notes.txt"',
+          },
+        }),
+    )
+    try {
+      const threadFile = await client.threadFileContent("thread-1", "/notes.txt")
+      const fsFile = await client.fsContent("workspace", "/notes.txt", "project-1")
+      for (const file of [threadFile, fsFile]) {
+        expect(file.mime_type).toBe("text/plain")
+        expect(file.filename).toBe("notes.txt")
+        expect(Array.from(file.bytes)).toEqual([9, 8, 7])
+      }
+      expect(requests.map((r) => r.method)).toEqual(["GET", "GET"])
+    } finally {
+      restore()
+    }
+  })
+
+  test("falls back to octet-stream when Content-Type is absent", async () => {
+    const { client, restore } = recordingClient(
+      () => new Response(new Uint8Array([1]), { status: 200 }),
+    )
+    try {
+      const file = await client.fsContent("workspace", "/blob.bin")
+      expect(file.mime_type).toBe("application/octet-stream")
+      expect(file.filename).toBeNull()
+      expect(Array.from(file.bytes)).toEqual([1])
+    } finally {
+      restore()
     }
   })
 })

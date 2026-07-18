@@ -15,22 +15,30 @@ export async function* parseSse(response: Response): AsyncGenerator<SseMessage> 
   const decoder = new TextDecoder()
   let buffer = ""
 
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
+  // Release the reader in `finally` so that when the consumer breaks out of the
+  // for-await (thread switch / abort) — which drives this generator's `.return()`
+  // — the underlying stream is cancelled and the connection closes promptly
+  // instead of leaking against the server's per-user stream cap.
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
 
-    let splitAt: number
-    while ((splitAt = findFrameBoundary(buffer)) >= 0) {
-      const raw = buffer.slice(0, splitAt)
-      buffer = buffer.slice(splitAt + frameBoundaryLength(buffer, splitAt))
-      const message = parseFrame(raw)
-      if (message) yield message
+      let splitAt: number
+      while ((splitAt = findFrameBoundary(buffer)) >= 0) {
+        const raw = buffer.slice(0, splitAt)
+        buffer = buffer.slice(splitAt + frameBoundaryLength(buffer, splitAt))
+        const message = parseFrame(raw)
+        if (message) yield message
+      }
     }
-  }
 
-  const trailing = parseFrame(buffer)
-  if (trailing) yield trailing
+    const trailing = parseFrame(buffer)
+    if (trailing) yield trailing
+  } finally {
+    await reader.cancel().catch(() => {})
+  }
 }
 
 export function parseAppEvent(message: SseMessage): AppEvent | null {
