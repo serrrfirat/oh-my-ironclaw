@@ -78,14 +78,31 @@ The command palette opens with `ctrl+p`. Typing `/` also opens filtered slash co
 
 Remote/Product Workflow commands:
 
-- `/model`
+- `/model` — show or switch the active model; `/model set-provider <p> [--model m]` is passed through to the server
 - `/models`
-- `/skills`
+- `/skills` — opens the WebChat v2 skills surface (install / search / view / remove, per-skill and learned auto-activate)
 - `/extension`
 - `/status`
 - `/progress`
 
-In local mode, `/skills` opens a searchable TUI skill catalog backed by `ironclaw-reborn skills list --json --verbose`, and `/extension` searches local Reborn extensions. In remote mode, both commands are sent through the product workflow.
+Remote observability, files, and delivery surfaces:
+
+- `/logs` — remote log viewer with level/target/thread filters, follow toggle, and pagination
+- `/traces` — trace credit, holds (authorize), and account login link
+- `/workspace` (alias `/files`) — read-only filesystem mount browser
+- `/projects` — projects list/create/members/delete (requires the `reborn_projects` feature)
+- `/tools` — per-tool permission cycling + global auto-approve, plus session info
+- `/outbound` — delivery defaults (final-reply target, default modality)
+
+Chat/run controls:
+
+- `/inbox` — jump to the next thread needing approval
+- `/retry` — retry the last failed or cancelled run
+- `/delete-thread` — delete the active thread
+- `/attach <path>` — stage a local file as an attachment for the next message
+- `/save <n>` — save the nth attachment of the latest message to the working directory
+
+In local mode, `/skills` opens a searchable TUI skill catalog backed by `ironclaw-reborn skills list --json --verbose`, and `/extension` searches local Reborn extensions. In remote mode, `/skills` opens the HTTP-backed skills surface and server slash names such as `/skill_*` and `/extension_*` are passed through as messages.
 
 Local mode adds read-only CLI commands:
 
@@ -94,7 +111,7 @@ Local mode adds read-only CLI commands:
 - `/channels`
 - `/hooks`
 - `/model-status`
-- `/logs`
+- `/logs` (local CLI; remote mode opens the log surface instead)
 - `/logs-json`
 - `/config-path`
 - `/traces-status`
@@ -105,6 +122,8 @@ TUI-only controls:
 
 - `/new`
 - `/settings`
+- `/automations` — pause / resume / rename / delete schedules
+- `/channels`
 - `/threads`
 - `/history`
 - `/run-cancel`
@@ -112,21 +131,30 @@ TUI-only controls:
 
 `/model`, `/models`, and `ctrl+m` open the model picker. The picker is seeded from config, then updated from the server response. Selecting a model sends `/model <name>` through WebChat v2 so the server-side command applies the choice.
 
-The settings surface is currently a menu-style UI shell. It shows connection, model, secret, tool, and approval sections but does not persist edits yet.
+The settings surface is functional: the **Tools** section cycles per-tool permissions (`default → always_allow → ask_each_time → disabled`) and toggles global auto-approve, persisting each change via `/settings/tools`; the **Outbound** section selects the final-reply delivery target; **Skills**, **Automations**, **Extensions**, **Channels**, and **Providers** open their live surfaces. LLM providers are gated on the operator capability from `GET /session`.
 
 ## Keys
 
 - `enter`: send the current message or run the selected palette item
-- `esc`: close an open palette; otherwise cancel the active run when one exists
+- `esc`: close an open palette / back out a sub-mode; otherwise cancel the active run
 - `ctrl+p`: command palette
-- `ctrl+t`: thread picker
+- `ctrl+t`: thread picker (`ctrl+d` deletes the selected thread with a `y`/`n` confirm)
 - `ctrl+m`: model picker
 - `ctrl+n`: new thread
 - `ctrl+x`: cancel active run
+- `ctrl+r`: retry the last failed/cancelled run
+- `ctrl+g`: jump to the next thread awaiting approval
 - `pageup` or `/history`: load older timeline messages
 - `ctrl+a`: approve a pending gate
 - `ctrl+d`: deny a pending gate
+- `w`: approve-always on a gate that allows it
 - `ctrl+c`: quit
+
+Surface-local keys are shown in each surface's footer hint (e.g. logs: `l` level · `t` target · `f` follow · `↑`/`↓` scroll · `o` older; tools: `enter` cycle · `g` global auto-approve; automations: `p` pause / `r` resume / `n` rename / `d` delete / `g` refresh; workspace: `enter` descend · `backspace` up). In automations, `d` (delete) asks for a `y`/`n` confirm; `p`/`r`/`n` apply immediately.
+
+## Design
+
+The UI uses the **IronClaw DS (PR #5563) "Pixel" theme** — a flat `#09090b` canvas with hairline separators, square uppercase tag chips, a signal-blue accent ramp (`#2882c8 → #4ca7e6 → #6bb8ec`), and a strict status canon (running = info blue, success = ok green, approval/attention = warn amber, failure/cancelled = danger red, paused/idle = muted). All tokens live in `src/ui/theme.ts`; surfaces import from it rather than hard-coding colors. The LocalDevYolo rainbow splash variant is preserved.
 
 ## Configuration
 
@@ -162,15 +190,18 @@ bun run dev -- \
 
 The client currently uses:
 
-- `POST /api/webchat/v2/threads`
-- `GET /api/webchat/v2/threads`
-- `POST /api/webchat/v2/threads/{thread_id}/messages`
-- `GET /api/webchat/v2/threads/{thread_id}/timeline`
-- `GET /api/webchat/v2/threads/{thread_id}/events`
-- `POST /api/webchat/v2/threads/{thread_id}/runs/{run_id}/cancel`
-- `POST /api/webchat/v2/threads/{thread_id}/runs/{run_id}/gates/{gate_ref}/resolve`
+- `GET /api/webchat/v2/session` (features, attachment budgets, operator capability)
+- `POST` / `GET` / `DELETE /api/webchat/v2/threads` (and `?needs_approval=true` for the approval-inbox badge)
+- `POST /api/webchat/v2/threads/{thread_id}/messages` (with `attachments`)
+- `GET .../threads/{thread_id}/timeline`, `GET .../events` (SSE with resume + `cancelled`)
+- `POST .../runs/{run_id}/cancel`, `POST .../runs/{run_id}/retry`
+- `POST .../runs/{run_id}/gates/{gate_ref}/resolve` (approve / deny / always / credential)
+- `GET .../messages/{message_id}/attachments/{attachment_id}` (save-to-file)
+- `GET/POST /skills*`, `GET/POST /settings/tools`, `POST /automations/{id}/{pause,resume}` + rename/delete
+- `GET/POST /outbound/preferences`, `GET /outbound/targets`
+- `GET /logs`, `GET /traces/*`, `GET /fs/*`, `GET/POST/DELETE /projects*`
 
-Mapped SSE events include `running`, `capability_progress`, `capability_activity`, `gate`, `final_reply`, `failed`, `projection_snapshot`, and `projection_update`.
+Mapped SSE events include `running`, `capability_progress`, `capability_activity`, `gate`, `auth_required`, `final_reply`, `failed`, `cancelled`, `projection_snapshot`, and `projection_update`. `rejected_busy` message submissions surface a dim notice (not an error), and per-run token usage/cost appears in the status bar.
 
 `capability_activity` is rendered as a tool/activity row, but it is metadata-only: invocation id, capability id, status, provider/runtime/process metadata, output byte count, and safe error kind. Full tool input/output previews require a separate server-side display-preview event before the TUI can render expandable tool output.
 

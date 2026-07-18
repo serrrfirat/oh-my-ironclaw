@@ -1,4 +1,6 @@
 import type { AutomationInfo } from "../gateway/types"
+import { theme, statusColor, statusTone } from "./theme"
+import { Field, formatDate, Hint, Surface, Tag, truncate, wrapIndex } from "./pixel"
 
 const AUTOMATION_VISIBLE_LIMIT = 14
 
@@ -8,6 +10,11 @@ export function AutomationsSurface({
   height,
   loading,
   selectedIndex,
+  schedulerEnabled,
+  renaming,
+  renameInput,
+  confirmingDelete,
+  message,
   width,
 }: {
   automations: AutomationInfo[]
@@ -15,6 +22,11 @@ export function AutomationsSurface({
   height: number
   loading: boolean
   selectedIndex: number
+  schedulerEnabled?: boolean | null
+  renaming?: boolean
+  renameInput?: string
+  confirmingDelete?: boolean
+  message?: string | null
   width: number
 }) {
   const contentWidth = Math.max(1, width - 4)
@@ -22,109 +34,99 @@ export function AutomationsSurface({
   const summary = automationSummary(automations)
   const narrow = width < 90
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SurfaceHeader title="automations" meta={loading ? "loading" : `${automations.length} schedules`} width={contentWidth} />
-      <box style={{ height: 1 }} />
+    <Surface title="automations" meta={loading ? "loading" : `${automations.length} schedules`} width={width} height={height}>
+      {typeof schedulerEnabled === "boolean" ? (
+        <box style={{ height: 1, flexDirection: "row" }}>
+          <text fg={theme.textMuted}>scheduler </text>
+          {/* Banner is about the global scheduler being off (suppresses every */}
+          {/* automation), a deliberate degraded state → warn. Per-automation */}
+          {/* paused stays muted (see SummaryStrip / AutomationRow). */}
+          <Tag label={schedulerEnabled ? "enabled" : "disabled"} tone={schedulerEnabled ? "ok" : "warn"} />
+        </box>
+      ) : null}
       <SummaryStrip summary={summary} width={contentWidth} />
       <box style={{ height: 1 }} />
-      {error ? <text fg="#f08a8a">{truncate(error, contentWidth)}</text> : null}
+      {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : null}
+      {message ? <text fg={theme.accentText}>{truncate(message, contentWidth)}</text> : null}
+      {renaming ? (
+        <box style={{ width: contentWidth, height: 1, flexDirection: "row", backgroundColor: theme.bgCode, paddingLeft: 1 }}>
+          <text fg={theme.accent}>rename › </text>
+          <text fg={theme.textStrong}>{`${renameInput ?? ""}▏`}</text>
+        </box>
+      ) : null}
       {narrow ? (
         <box style={{ flexDirection: "column" }}>
           <AutomationList automations={automations} selectedIndex={selectedIndex} width={contentWidth} />
           <box style={{ height: 1 }} />
-          <AutomationDetail automation={selected} width={contentWidth} />
+          <AutomationDetail automation={selected} confirmingDelete={confirmingDelete} width={contentWidth} />
         </box>
       ) : (
         <box style={{ flexDirection: "row", width: contentWidth }}>
           <AutomationList automations={automations} selectedIndex={selectedIndex} width={Math.min(56, Math.max(34, Math.floor(contentWidth * 0.46)))} />
           <box style={{ width: 2 }} />
-          <AutomationDetail automation={selected} width={Math.max(1, contentWidth - Math.min(56, Math.max(34, Math.floor(contentWidth * 0.46))) - 2)} />
+          <AutomationDetail automation={selected} confirmingDelete={confirmingDelete} width={Math.max(1, contentWidth - Math.min(56, Math.max(34, Math.floor(contentWidth * 0.46))) - 2)} />
         </box>
       )}
       <box style={{ flexGrow: 1 }} />
-      <text fg="#777777">{truncate("up/down select · r refresh · esc back", contentWidth)}</text>
-    </box>
+      <Hint text={confirmingDelete ? "delete automation? y confirm · n cancel" : "up/down select · p pause · r resume · n rename · d delete · g refresh · esc back"} width={contentWidth} />
+    </Surface>
   )
 }
 
-function SummaryStrip({
-  summary,
-  width,
-}: {
-  summary: { scheduled: number; active: number; paused: number; nextRun: string | null }
-  width: number
-}) {
+function SummaryStrip({ summary, width }: { summary: { scheduled: number; active: number; paused: number; nextRun: string | null }; width: number }) {
   return (
     <box style={{ width, height: 1, flexDirection: "row" }}>
-      <text fg="#8cffb0">active {summary.active}</text>
-      <text fg="#777777"> · </text>
-      <text fg="#d0d0d0">scheduled {summary.scheduled}</text>
-      <text fg="#777777"> · </text>
-      <text fg="#ffb887">paused {summary.paused}</text>
-      <text fg="#777777"> · next {truncate(summary.nextRun || "none", Math.max(1, width - 42))}</text>
+      <text fg={theme.ok}>active {summary.active}</text>
+      <text fg={theme.textFaint}> · </text>
+      <text fg={theme.text}>scheduled {summary.scheduled}</text>
+      <text fg={theme.textFaint}> · </text>
+      <text fg={statusColor("paused")}>paused {summary.paused}</text>
+      <text fg={theme.textFaint}> · next {truncate(summary.nextRun || "none", Math.max(1, width - 42))}</text>
     </box>
   )
 }
 
-function AutomationList({
-  automations,
-  selectedIndex,
-  width,
-}: {
-  automations: AutomationInfo[]
-  selectedIndex: number
-  width: number
-}) {
+function AutomationList({ automations, selectedIndex, width }: { automations: AutomationInfo[]; selectedIndex: number; width: number }) {
   const selected = wrapIndex(selectedIndex, automations.length)
-  const start = clamp(selected - AUTOMATION_VISIBLE_LIMIT + 1, 0, Math.max(0, automations.length - AUTOMATION_VISIBLE_LIMIT))
+  const start = Math.min(Math.max(0, selected - AUTOMATION_VISIBLE_LIMIT + 1), Math.max(0, automations.length - AUTOMATION_VISIBLE_LIMIT))
   const visible = automations.slice(start, start + AUTOMATION_VISIBLE_LIMIT)
   return (
     <box style={{ width, flexDirection: "column" }}>
-      {visible.length ? visible.map((automation, index) => (
-        <AutomationRow
-          key={automation.automation_id}
-          automation={automation}
-          selected={start + index === selected}
-          width={width}
-        />
-      )) : (
-        <box style={{ height: 3, backgroundColor: "#101010", paddingLeft: 2, paddingTop: 1 }}>
-          <text fg="#777777">No automations</text>
+      {visible.length ? (
+        visible.map((automation, index) => (
+          <AutomationRow key={automation.automation_id} automation={automation} selected={start + index === selected} width={width} />
+        ))
+      ) : (
+        <box style={{ height: 1, paddingLeft: 2 }}>
+          <text fg={theme.textMuted}>No automations</text>
         </box>
       )}
     </box>
   )
 }
 
-function AutomationRow({
-  automation,
-  selected,
-  width,
-}: {
-  automation: AutomationInfo
-  selected: boolean
-  width: number
-}) {
-  const marker = selected ? ">" : " "
+function AutomationRow({ automation, selected, width }: { automation: AutomationInfo; selected: boolean; width: number }) {
   const state = stateLabel(automation.state)
   return (
-    <box style={{ height: 1, flexDirection: "row", backgroundColor: selected ? "#1b1b1b" : "#101010", paddingLeft: 2, paddingRight: 2 }}>
-      <text fg={selected ? "#2ee66b" : "#707070"}>{marker} </text>
-      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{truncate(automation.name || "Untitled automation", Math.max(8, width - 18))}</text>
-      <text fg={stateColor(automation.state)}> {truncate(state, 10)}</text>
+    <box style={{ width, height: 1, flexDirection: "row", backgroundColor: selected ? theme.accentSoftBg : theme.bg }}>
+      <box style={{ width: 1, backgroundColor: selected ? theme.accent : theme.border }} />
+      <text fg={selected ? theme.accent : theme.textMuted}> {selected ? "›" : " "} </text>
+      <text fg={selected ? theme.accentText : theme.text}>{truncate(automation.name || "Untitled automation", Math.max(8, width - 18))}</text>
+      <box style={{ flexGrow: 1 }} />
+      <text fg={statusColor(automation.state)}>{truncate(state, 10)}</text>
     </box>
   )
 }
 
-function AutomationDetail({ automation, width }: { automation: AutomationInfo | null; width: number }) {
+function AutomationDetail({ automation, confirmingDelete, width }: { automation: AutomationInfo | null; confirmingDelete?: boolean; width: number }) {
   if (!automation) {
     return (
-      <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-        <text fg="#777777">Select an automation</text>
+      <box style={{ width, flexDirection: "column", backgroundColor: theme.bgCode, paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
+        <text fg={theme.textMuted}>Select an automation</text>
       </box>
     )
   }
-  const fields = [
+  const fields: Array<[string, string]> = [
     ["id", automation.automation_id],
     ["state", stateLabel(automation.state)],
     ["schedule", scheduleLabel(automation.source?.cron)],
@@ -134,34 +136,14 @@ function AutomationDetail({ automation, width }: { automation: AutomationInfo | 
     ["created", formatDate(automation.created_at, "Unknown")],
   ]
   return (
-    <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-      <text fg="#f2f2f2">{truncate(automation.name || "Untitled automation", Math.max(1, width - 4))}</text>
-      <box style={{ height: 1 }} />
-      {fields.map(([label, value]) => <Field key={label} label={label} value={value} width={width - 4} />)}
-    </box>
-  )
-}
-
-function Field({ label, value, width }: { label: string; value: string; width: number }) {
-  const labelWidth = 14
-  return (
-    <box style={{ width, height: 1, flexDirection: "row" }}>
-      <text fg="#8a8a8a">{padEnd(label, labelWidth)}</text>
-      <text fg="#d0d0d0">{truncate(value, Math.max(1, width - labelWidth))}</text>
-    </box>
-  )
-}
-
-function SurfaceHeader({ title, meta, width }: { title: string; meta: string; width: number }) {
-  return (
-    <box style={{ width, height: 2, flexDirection: "column" }}>
+    <box style={{ width, flexDirection: "column", backgroundColor: theme.bgCode, paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
       <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg="#8cffb0">ironclaw</text>
-        <text fg="#777777">{padEnd("", Math.max(1, width - title.length - meta.length - 12))}</text>
-        <text fg="#d0d0d0">{title}</text>
-        <text fg="#777777"> · {meta}</text>
+        <text fg={theme.textStrong}>{truncate(automation.name || "Untitled automation", Math.max(1, width - 14))} </text>
+        <Tag label={stateLabel(automation.state)} tone={statusTone(automation.state)} />
       </box>
-      <text fg="#1f1f1f">{padEnd("", width).replaceAll(" ", "-")}</text>
+      <box style={{ height: 1 }} />
+      {fields.map(([label, value]) => <Field key={label} label={label} value={value} width={width - 4} labelWidth={14} />)}
+      {confirmingDelete ? <text fg={theme.danger}>Delete this automation? y / n</text> : null}
     </box>
   )
 }
@@ -176,7 +158,7 @@ function automationSummary(automations: AutomationInfo[]) {
     scheduled: automations.length,
     active,
     paused,
-    nextRun: next ? formatDate(next.next_run_at, null) : null,
+    nextRun: next ? formatDate(next.next_run_at, "none") : null,
   }
 }
 
@@ -208,40 +190,8 @@ function stateLabel(state: string): string {
   return state ? state.replaceAll("_", " ") : "unknown"
 }
 
-function stateColor(state: string): string {
-  if (state === "active" || state === "scheduled" || state === "completed") return "#8cffb0"
-  if (state === "paused" || state === "disabled" || state === "inactive") return "#ffb887"
-  return "#777777"
-}
-
-function formatDate(value?: string | null, fallback: string | null = "Unknown"): string {
-  const timestamp = parseDate(value)
-  if (timestamp === null) return fallback ?? ""
-  return new Date(timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
-}
-
 function parseDate(value?: string | null): number | null {
   if (!value) return null
   const timestamp = new Date(value).getTime()
   return Number.isNaN(timestamp) ? null : timestamp
-}
-
-function padEnd(value: string, width: number) {
-  return value.length >= width ? value.slice(0, width) : value + " ".repeat(width - value.length)
-}
-
-function truncate(value: string, width: number) {
-  if (width <= 0) return ""
-  if (value.length <= width) return value
-  if (width <= 3) return ".".repeat(width)
-  return `${value.slice(0, width - 3)}...`
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
-}
-
-function wrapIndex(index: number, length: number) {
-  if (length <= 0) return 0
-  return ((index % length) + length) % length
 }

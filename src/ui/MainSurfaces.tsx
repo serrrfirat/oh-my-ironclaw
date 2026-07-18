@@ -1,13 +1,17 @@
 import type { SyntaxStyle, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { useEffect, useRef, useState, type RefObject } from "react"
 import type { PendingGateInfo, ThreadInfo } from "../gateway/types"
+import type { RunUsageCost } from "../state"
+import { attachmentChipLabel, type StagedAttachment } from "./attachments"
 import { threadDisplayTitle, type ThreadPreviewMap } from "../threadPreviews"
 import { transcriptItemContentLength, type TranscriptItem } from "../transcript"
 import { activityGroupSummary, groupTranscriptEntries } from "./activityGroups"
 import { TranscriptMessage } from "./TranscriptMessage"
 import { sourceColor, type SlashCommand } from "./slashCommands"
+import { theme } from "./theme"
+import { Tag } from "./pixel"
 
-export type GateAction = "approved" | "denied"
+export type GateAction = "approved" | "denied" | "always"
 
 const SLASH_COMMAND_POPUP_LIMIT = 8
 const THREAD_PALETTE_LIMIT = 10
@@ -34,6 +38,11 @@ export type ComposerCommonProps = {
   activeThreadId?: string | null
   models: string[]
   threads: ThreadInfo[]
+  approvalCount: number
+  usageCost?: RunUsageCost | null
+  notice?: string | null
+  stagedAttachments: StagedAttachment[]
+  threadDeleteConfirm?: boolean
   onInputChange: () => void
   onSubmit: () => void
 }
@@ -63,15 +72,15 @@ export function WelcomeSurface({
   const logoColors = useRainbowLogoColors(localDevYolo)
   const logoText = localDevYolo ? "IRONCLAW" : "ironclaw"
   return (
-    <box style={{ width, height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505" }}>
+    <box style={{ width, height, flexDirection: "column", alignItems: "center", backgroundColor: theme.bg }}>
       <box style={{ height: topSpacer }} />
       {height >= 15 ? (
         <box style={{ flexDirection: "row", alignItems: "flex-start" }}>
-          <ascii-font text={logoText} font="block" color={logoColors} backgroundColor="#050505" />
+          <ascii-font text={logoText} font="block" color={logoColors} backgroundColor={theme.bg} />
           {localDevYolo ? <YoloSplashTag /> : null}
         </box>
       ) : (
-        <text fg={logoColors[0] ?? "#8cffb0"}>{logoText}</text>
+        <text fg={logoColors[0] ?? theme.accentText}>{logoText}</text>
       )}
       <box style={{ height: 2 }} />
       <Composer
@@ -82,12 +91,12 @@ export function WelcomeSurface({
       />
       <HintLine width={composerWidth} />
       <box style={{ height: 3 }} />
-      <text fg="#777777">
-        <span fg="#f6ad3c">* Tip</span> Press <span fg="#cfcfcf">ctrl+z</span> to suspend the terminal and return to your shell
+      <text fg={theme.textMuted}>
+        <span fg={theme.warn}>* Tip</span> Press <span fg={theme.text}>ctrl+z</span> to suspend the terminal and return to your shell
       </text>
       {lastError ? (
         <box style={{ height: 1, width: composerWidth }}>
-          <text fg="#696969">
+          <text fg={theme.textMuted}>
             {connected ? "online" : "offline"} | {status} | {truncate(baseUrl, Math.max(0, composerWidth - 18))}
           </text>
         </box>
@@ -154,7 +163,7 @@ export function ConversationSurface({
   }, [transcriptEndKey, transcriptHeight])
 
   return (
-    <box style={{ height, flexDirection: "column", alignItems: "center", backgroundColor: "#050505", paddingTop: 1 }}>
+    <box style={{ height, flexDirection: "column", alignItems: "center", backgroundColor: theme.bg, paddingTop: 1 }}>
       <scrollbox
         ref={transcriptScrollRef}
         style={{
@@ -257,12 +266,12 @@ function ThinkingMessage({
   return (
     <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
       <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg="#2ee66b">{spinner}</text>
-        <text fg="#2ee66b"> Build</text>
-        <text fg="#777777"> · </text>
-        <text fg="#d0d0d0">{selectedModel}</text>
-        {typeof turnElapsedMs === "number" ? <text fg="#777777"> · {formatDuration(turnElapsedMs)}</text> : null}
-        <text fg="#777777"> · {thinkingLabel}</text>
+        <text fg={theme.accent}>{spinner}</text>
+        <text fg={theme.accent}> Build</text>
+        <text fg={theme.textMuted}> · </text>
+        <text fg={theme.text}>{selectedModel}</text>
+        {typeof turnElapsedMs === "number" ? <text fg={theme.textMuted}> · {formatDuration(turnElapsedMs)}</text> : null}
+        <text fg={theme.textMuted}> · {thinkingLabel}</text>
       </box>
     </box>
   )
@@ -271,7 +280,7 @@ function ThinkingMessage({
 function LoadOlderHint({ width }: { width: number }) {
   return (
     <box style={{ width, height: 2, flexDirection: "column", paddingLeft: 3, marginBottom: 1 }}>
-      <text fg="#777777">{truncate("/history or pageup to load older messages", Math.max(1, width - 3))}</text>
+      <text fg={theme.textMuted}>{truncate("/history or pageup to load older messages", Math.max(1, width - 3))}</text>
     </box>
   )
 }
@@ -303,8 +312,8 @@ function ActivityGroup({
         onMouseDown={() => onToggleActivityExpanded(groupId)}
         style={{ width, height: 1, flexDirection: "row", paddingLeft: 3, paddingRight: 2 }}
       >
-        <text fg="#777777">{expanded ? "▾ " : "▸ "}</text>
-        <text fg="#777777">{truncate(activityGroupSummary(items), Math.max(1, width - 7))}</text>
+        <text fg={theme.textMuted}>{expanded ? "▾ " : "▸ "}</text>
+        <text fg={theme.textMuted}>{truncate(activityGroupSummary(items), Math.max(1, width - 7))}</text>
       </box>
       {expanded ? items.map((item) => (
         <TranscriptMessage
@@ -356,6 +365,11 @@ function Composer({
   activeThreadId,
   models,
   threads,
+  approvalCount,
+  usageCost,
+  notice,
+  stagedAttachments,
+  threadDeleteConfirm,
   width,
   onInputChange,
   onSubmit,
@@ -366,6 +380,16 @@ function Composer({
 } & ComposerCommonProps) {
   return (
     <box style={{ width, flexDirection: "column" }}>
+      {notice ? (
+        <box style={{ width, height: 1, flexDirection: "row" }}>
+          <text fg={theme.textFaint}>◦ {truncate(notice, Math.max(1, width - 3))}</text>
+        </box>
+      ) : null}
+      {stagedAttachments.length ? (
+        <box style={{ width, height: 1, flexDirection: "row" }}>
+          <text fg={theme.accentText}>{truncate(stagedAttachments.map((item) => `[${attachmentChipLabel(item)}]`).join(" "), width)}</text>
+        </box>
+      ) : null}
       {showModelPalette ? (
         <ModelPalette
           models={models}
@@ -381,6 +405,7 @@ function Composer({
           threadPreviews={threadPreviews}
           threadSearch={threadSearch}
           threads={threads}
+          deleteConfirm={Boolean(threadDeleteConfirm)}
           width={width}
         />
       ) : null}
@@ -391,19 +416,19 @@ function Composer({
           width={width}
         />
       ) : null}
-      <box style={{ width, height: 6, flexDirection: "row", backgroundColor: "#1f1f1f" }}>
-        <box style={{ width: 1, backgroundColor: isThinking ? railColor : "#2ee66b" }} />
+      <box style={{ width, height: 6, flexDirection: "row", backgroundColor: theme.bgSoft }}>
+        <box style={{ width: 1, backgroundColor: isThinking ? railColor : theme.accent }} />
         <box style={{ flexDirection: "column", flexGrow: 1, paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
           <textarea
             ref={inputRef}
             focused={focused}
             placeholder={'Ask anything... "What is the tech stack of this project?"'}
             initialValue=""
-            backgroundColor="#1f1f1f"
-            focusedBackgroundColor="#1f1f1f"
-            textColor="#d9d9d9"
-            focusedTextColor="#f2f2f2"
-            placeholderColor="#8a8a8a"
+            backgroundColor={theme.bgSoft}
+            focusedBackgroundColor={theme.bgSoft}
+            textColor={theme.text}
+            focusedTextColor={theme.textStrong}
+            placeholderColor={theme.textFaint}
             keyBindings={[
               { name: "return", action: "submit" },
               { name: "kpenter", action: "submit" },
@@ -416,12 +441,14 @@ function Composer({
             style={{ height: 3 }}
           />
           <box style={{ height: 1, flexDirection: "row" }}>
-            <text fg="#2ee66b">Build</text>
-            <text fg="#777777"> . </text>
-            <text fg="#d0d0d0">{selectedModel}</text>
-            {selectedProvider ? <text fg="#858585"> {selectedProvider}</text> : null}
-            {!connected ? <text fg="#f08a8a"> · ! disconnected</text> : null}
-            {typeof turnElapsedMs === "number" ? <text fg="#777777"> · {formatDuration(turnElapsedMs)}</text> : null}
+            <text fg={theme.accent}>Build</text>
+            <text fg={theme.textMuted}> . </text>
+            <text fg={theme.text}>{selectedModel}</text>
+            {selectedProvider ? <text fg={theme.textMuted}> {selectedProvider}</text> : null}
+            {!connected ? <text fg={theme.danger}> · ! disconnected</text> : null}
+            {usageCostSummary(usageCost, activeThreadId) ? <text fg={theme.textFaint}> · {usageCostSummary(usageCost, activeThreadId)}</text> : null}
+            {approvalCount > 0 ? <text fg={theme.warn}> · {formatApprovalCount(approvalCount)} {approvalCount === 1 ? "approval" : "approvals"}</text> : null}
+            {typeof turnElapsedMs === "number" ? <text fg={theme.textMuted}> · {formatDuration(turnElapsedMs)}</text> : null}
             {isThinking && showThinkingStatus ? <text fg={railColor}> {spinner} {thinkingLabel}</text> : null}
           </box>
         </box>
@@ -436,6 +463,7 @@ function ThreadPalette({
   threadPreviews,
   threadSearch,
   threads,
+  deleteConfirm,
   width,
 }: {
   activeThreadId?: string | null
@@ -443,6 +471,7 @@ function ThreadPalette({
   threadPreviews: ThreadPreviewMap
   threadSearch: string
   threads: ThreadInfo[]
+  deleteConfirm?: boolean
   width: number
 }) {
   const selectedThreadIndex = wrapIndex(selectedIndex, threads.length)
@@ -455,14 +484,14 @@ function ThreadPalette({
     ? `${startIndex + 1}-${startIndex + visibleThreads.length}/${threads.length}`
     : `${threads.length}`
   return (
-    <box style={{ width, flexDirection: "column", backgroundColor: "#171717", paddingTop: 1, paddingBottom: 1 }}>
+    <box style={{ width, flexDirection: "column", backgroundColor: theme.bgSoft, paddingTop: 1, paddingBottom: 1 }}>
       <box style={{ height: 2, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#e8e8e8">Sessions</text>
-        <text fg="#777777">{padLeft("esc", Math.max(1, width - 10))}</text>
+        <text fg={theme.textStrong}>Sessions</text>
+        <text fg={theme.textMuted}>{padLeft("esc", Math.max(1, width - 10))}</text>
       </box>
       <box style={{ height: 2, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#ffb887">{threadSearch ? "" : " "}</text>
-        <text fg={threadSearch ? "#f0f0f0" : "#8a8a8a"}>{truncate(threadSearch || "Search", width - 4)}</text>
+        <text fg={theme.warn}>{threadSearch ? "" : " "}</text>
+        <text fg={threadSearch ? theme.textStrong : theme.textMuted}>{truncate(threadSearch || "Search", width - 4)}</text>
       </box>
       {visibleThreads.length ? (
         visibleThreads.map((thread, index) => (
@@ -477,18 +506,24 @@ function ThreadPalette({
         ))
       ) : (
         <box style={{ height: 3, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
-          <text fg="#777777">No results found</text>
+          <text fg={theme.textMuted}>No results found</text>
         </box>
       )}
-      <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, marginTop: 1 }}>
-        <text fg="#f0f0f0">new</text>
-        <text fg="#777777"> /new   </text>
-        <text fg="#f0f0f0">open</text>
-        <text fg="#777777"> enter   </text>
-        <text fg="#f0f0f0">search</text>
-        <text fg="#777777"> type   </text>
-        <text fg="#777777">{rangeLabel}</text>
-      </box>
+      {deleteConfirm ? (
+        <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, marginTop: 1 }}>
+          <text fg={theme.danger}>delete selected thread? y confirm · n cancel</text>
+        </box>
+      ) : (
+        <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, marginTop: 1 }}>
+          <text fg={theme.textStrong}>new</text>
+          <text fg={theme.textMuted}> /new   </text>
+          <text fg={theme.textStrong}>open</text>
+          <text fg={theme.textMuted}> enter   </text>
+          <text fg={theme.textStrong}>del</text>
+          <text fg={theme.textMuted}> ctrl+d   </text>
+          <text fg={theme.textMuted}>{rangeLabel}</text>
+        </box>
+      )}
     </box>
   )
 }
@@ -510,10 +545,10 @@ function ThreadRow({
   const title = threadDisplayTitle(thread, threadPreviews)
   const suffix = active ? " active" : ""
   return (
-    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#ffb887" : "#171717" }}>
-      <text fg={selected ? "#101010" : active ? "#8cffb0" : "#707070"}>{marker} </text>
-      <text fg={selected ? "#101010" : "#d0d0d0"}>{truncate(title, Math.max(8, width - suffix.length - 8))}</text>
-      <text fg={selected ? "#101010" : active ? "#8cffb0" : "#777777"}>{suffix}</text>
+    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? theme.accentSoftBg : theme.bgSoft }}>
+      <text fg={selected ? theme.accentText : active ? theme.accentText : theme.textMuted}>{marker} </text>
+      <text fg={selected ? theme.accentText : theme.text}>{truncate(title, Math.max(8, width - suffix.length - 8))}</text>
+      <text fg={selected ? theme.accentText : active ? theme.accentText : theme.textMuted}>{suffix}</text>
     </box>
   )
 }
@@ -532,10 +567,10 @@ function ModelPalette({
   const visibleModels = models.slice(0, 8)
   const selectedVisibleIndex = wrapIndex(selectedIndex, visibleModels.length)
   return (
-    <box style={{ width, flexDirection: "column", backgroundColor: "#101010", paddingTop: 1, paddingBottom: 1 }}>
+    <box style={{ width, flexDirection: "column", backgroundColor: theme.bgCode, paddingTop: 1, paddingBottom: 1 }}>
       <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#8cffb0">models</text>
-        <text fg="#777777"> · up/down select · enter use · esc close</text>
+        <text fg={theme.accentText}>models</text>
+        <text fg={theme.textMuted}> · up/down select · enter use · esc close</text>
       </box>
       {visibleModels.map((model, index) => (
         <ModelRow
@@ -547,7 +582,7 @@ function ModelPalette({
         />
       ))}
       <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#606060">{truncate("sends /model through Reborn command workflow", Math.max(1, width - 4))}</text>
+        <text fg={theme.textFaint}>{truncate("sends /model through Reborn command workflow", Math.max(1, width - 4))}</text>
       </box>
     </box>
   )
@@ -567,10 +602,10 @@ function ModelRow({
   const marker = selected ? ">" : active ? "*" : " "
   const suffix = active ? " selected" : ""
   return (
-    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#101010" }}>
-      <text fg={selected || active ? "#2ee66b" : "#707070"}>{marker} </text>
-      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{truncate(model, Math.max(8, width - suffix.length - 8))}</text>
-      <text fg={active ? "#8cffb0" : "#777777"}>{suffix}</text>
+    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? theme.bgSoft : theme.bgCode }}>
+      <text fg={selected || active ? theme.accent : theme.textMuted}>{marker} </text>
+      <text fg={selected ? theme.textStrong : theme.text}>{truncate(model, Math.max(8, width - suffix.length - 8))}</text>
+      <text fg={active ? theme.accentText : theme.textMuted}>{suffix}</text>
     </box>
   )
 }
@@ -588,7 +623,7 @@ function SlashCommandPopup({
   const start = clamp(selected - SLASH_COMMAND_POPUP_LIMIT + 1, 0, Math.max(0, commands.length - SLASH_COMMAND_POPUP_LIMIT))
   const visibleCommands = commands.slice(start, start + SLASH_COMMAND_POPUP_LIMIT)
   return (
-    <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingTop: 1, paddingBottom: 1 }}>
+    <box style={{ width, flexDirection: "column", backgroundColor: theme.bgCode, paddingTop: 1, paddingBottom: 1 }}>
       {visibleCommands.map((command, index) => (
         <SlashCommandRow
           key={command.name}
@@ -598,7 +633,7 @@ function SlashCommandPopup({
         />
       ))}
       <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
-        <text fg="#606060">{truncate(commandPopupHint(start, visibleCommands.length, commands.length), width - 4)}</text>
+        <text fg={theme.textFaint}>{truncate(commandPopupHint(start, visibleCommands.length, commands.length), width - 4)}</text>
       </box>
     </box>
   )
@@ -618,11 +653,11 @@ function SlashCommandRow({
   const sourceWidth = 9
   const descriptionWidth = Math.max(10, width - commandWidth - sourceWidth - 8)
   return (
-    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? "#1b1b1b" : "#111111" }}>
-      <text fg={selected ? "#2ee66b" : "#707070"}>{marker} </text>
-      <text fg={selected ? "#8cffb0" : "#d0d0d0"}>{padEnd(command.name, commandWidth)}</text>
+    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? theme.bgSoft : theme.bgCode }}>
+      <text fg={selected ? theme.accent : theme.textMuted}>{marker} </text>
+      <text fg={selected ? theme.accentText : theme.text}>{padEnd(command.name, commandWidth)}</text>
       <text fg={sourceColor(command.source)}>{padEnd(command.source, sourceWidth)}</text>
-      <text fg="#777777">{truncate(command.description, descriptionWidth)}</text>
+      <text fg={theme.textMuted}>{truncate(command.description, descriptionWidth)}</text>
     </box>
   )
 }
@@ -630,14 +665,14 @@ function SlashCommandRow({
 function HintLine({ width }: { width: number }) {
   return (
     <box style={{ width, height: 1, flexDirection: "row", justifyContent: "flex-end" }}>
-      <text fg="#cfcfcf">ctrl+p</text>
-      <text fg="#777777"> commands   </text>
-      <text fg="#cfcfcf">ctrl+t</text>
-      <text fg="#777777"> threads   </text>
-      <text fg="#cfcfcf">ctrl+m</text>
-      <text fg="#777777"> model   </text>
-      <text fg="#cfcfcf">ctrl+x</text>
-      <text fg="#777777"> cancel</text>
+      <text fg={theme.text}>ctrl+p</text>
+      <text fg={theme.textMuted}> commands   </text>
+      <text fg={theme.text}>ctrl+t</text>
+      <text fg={theme.textMuted}> threads   </text>
+      <text fg={theme.text}>ctrl+m</text>
+      <text fg={theme.textMuted}> model   </text>
+      <text fg={theme.text}>ctrl+x</text>
+      <text fg={theme.textMuted}> cancel</text>
     </box>
   )
 }
@@ -657,8 +692,8 @@ function StatusLine({
 }) {
   return (
     <box style={{ width, height: 2, flexDirection: "column" }}>
-      <text fg={connected ? "#8fd694" : "#f08a8a"}>{connected ? "online" : "offline"} | {status}</text>
-      <text fg="#777777">{truncate(baseUrl ? `${message} | ${baseUrl}` : message, width)}</text>
+      <text fg={connected ? theme.ok : theme.danger}>{connected ? "online" : "offline"} | {status}</text>
+      <text fg={theme.textMuted}>{truncate(baseUrl ? `${message} | ${baseUrl}` : message, width)}</text>
     </box>
   )
 }
@@ -676,34 +711,51 @@ function GatePanel({
   onSelect: (action: GateAction) => void
   onResolve: (action: GateAction) => void
 }) {
+  const context = gate.approval_context ?? null
+  const contextLines = approvalContextLines(context)
+  const allowAlways = Boolean(gate.allow_always)
+  const height = 8 + Math.min(contextLines.length, 3) + (allowAlways ? 0 : 0)
   return (
     <box
       focused
-      style={{ width, height: 8, backgroundColor: "#181818", flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
+      // Pixel: warnSoftBg strip + 3px warn left rail, square corners.
+      style={{ width, height, flexDirection: "row", backgroundColor: theme.warnSoftBg }}
     >
-      <text fg="#f0b45f">Approval required: {gate.tool_name}</text>
-      <text fg="#d7d7d7">{truncate(gate.description, width - 6)}</text>
-      <text fg="#858585">{truncate(gate.parameters, width - 6)}</text>
-      <box style={{ flexDirection: "row", height: 3, marginTop: 1 }}>
-        <GateButton
-          label="Approve"
-          action="approved"
-          selected={selectedAction === "approved"}
-          onSelect={onSelect}
-          onResolve={onResolve}
-        />
-        <box style={{ width: 2 }} />
-        <GateButton
-          label="Deny"
-          action="denied"
-          selected={selectedAction === "denied"}
-          onSelect={onSelect}
-          onResolve={onResolve}
-        />
-        <text fg="#777777">  left/right select, enter activate</text>
+      <box style={{ width: 1, backgroundColor: theme.warn }} />
+      <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
+        <box style={{ height: 1, flexDirection: "row" }}>
+          <Tag label="approval" tone="warn" />
+          <text fg={theme.warn}> {truncate(context?.tool_name ?? gate.tool_name, width - 16)}</text>
+        </box>
+        <text fg={theme.text}>{truncate(context?.action ?? gate.description, width - 6)}</text>
+        {context?.scope || context?.destination ? (
+          <text fg={theme.textMuted}>{truncate([context?.scope, context?.destination].filter(Boolean).join(" → "), width - 6)}</text>
+        ) : (
+          <text fg={theme.textMuted}>{truncate(gate.parameters, width - 6)}</text>
+        )}
+        {contextLines.slice(0, 3).map((line, index) => (
+          <text key={`gate-ctx-${index}`} fg={theme.textFaint}>{truncate(`· ${line}`, width - 6)}</text>
+        ))}
+        <box style={{ flexDirection: "row", height: 3, marginTop: 1 }}>
+          <GateButton label="Approve" action="approved" selected={selectedAction === "approved"} onSelect={onSelect} onResolve={onResolve} />
+          <box style={{ width: 2 }} />
+          {allowAlways ? (
+            <>
+              <GateButton label="Always" action="always" selected={selectedAction === "always"} onSelect={onSelect} onResolve={onResolve} />
+              <box style={{ width: 2 }} />
+            </>
+          ) : null}
+          <GateButton label="Deny" action="denied" selected={selectedAction === "denied"} onSelect={onSelect} onResolve={onResolve} />
+          <text fg={theme.textFaint}>  ctrl+a approve{allowAlways ? " · w always" : ""} · ctrl+d deny</text>
+        </box>
       </box>
     </box>
   )
+}
+
+function approvalContextLines(context: PendingGateInfo["approval_context"]): string[] {
+  if (!context) return []
+  return (context.details ?? []).filter((line): line is string => typeof line === "string" && line.length > 0)
 }
 
 function AuthGatePanel({
@@ -737,17 +789,17 @@ function AuthGatePanel({
   return (
     <box
       focused
-      style={{ width, height: 10, backgroundColor: "#101820", flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
+      style={{ width, height: 10, backgroundColor: theme.accentSoftBg, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
     >
       <AuthGateHeader gate={gate} width={width} />
-      <text fg="#b8c7d8">{truncate(gate.description, width - 6)}</text>
+      <text fg={theme.text}>{truncate(gate.description, width - 6)}</text>
       <AuthProviderLine gate={gate} width={width} />
       <box style={{ height: 1 }} />
-      <box style={{ height: 3, border: true, borderColor: "#2b6f96", backgroundColor: "#0b1118", paddingLeft: 1, paddingRight: 1 }}>
-        <text fg={token ? "#f2f2f2" : "#6f7f8d"}>{truncate(masked, width - 10)}</text>
+      <box style={{ height: 3, border: true, borderColor: theme.accent, backgroundColor: theme.accentSoftBg, paddingLeft: 1, paddingRight: 1 }}>
+        <text fg={token ? theme.textStrong : theme.textMuted}>{truncate(masked, width - 10)}</text>
       </box>
       <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={error ? "#f08a8a" : "#777777"}>
+        <text fg={error ? theme.danger : theme.textMuted}>
           {truncate(error || (submitting ? "checking token..." : "type token, enter submit, esc cancel"), width - 6)}
         </text>
       </box>
@@ -776,15 +828,15 @@ function OAuthGatePanel({
   return (
     <box
       focused
-      style={{ width, height: 10, backgroundColor: "#101820", flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
+      style={{ width, height: 10, backgroundColor: theme.accentSoftBg, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
     >
       <AuthGateHeader gate={gate} width={width} />
-      <text fg="#b8c7d8">{truncate(gate.description, width - 6)}</text>
+      <text fg={theme.text}>{truncate(gate.description, width - 6)}</text>
       <AuthProviderLine gate={gate} width={width} />
       <AuthExpiryLine expiresAt={gate.expires_at} width={width} />
-      <text fg="#73879a">{truncate(gate.authorization_url || "No authorization URL provided", width - 6)}</text>
+      <text fg={theme.textMuted}>{truncate(gate.authorization_url || "No authorization URL provided", width - 6)}</text>
       <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={error ? "#f08a8a" : "#777777"}>{truncate(error || "o open browser, esc cancel", width - 6)}</text>
+        <text fg={error ? theme.danger : theme.textMuted}>{truncate(error || "o open browser, esc cancel", width - 6)}</text>
       </box>
       <box style={{ height: 2, flexDirection: "row", marginTop: 1 }}>
         <AuthGateButton label="Open" primary disabled={!gate.authorization_url} onClick={onOpenUrl} />
@@ -812,15 +864,15 @@ function GenericAuthGatePanel({
   return (
     <box
       focused
-      style={{ width, height: 10, backgroundColor: "#101820", flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
+      style={{ width, height: 10, backgroundColor: theme.accentSoftBg, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}
     >
       <AuthGateHeader gate={gate} width={width} />
-      <text fg="#b8c7d8">{truncate(gate.description || "Authentication required.", width - 6)}</text>
+      <text fg={theme.text}>{truncate(gate.description || "Authentication required.", width - 6)}</text>
       <AuthProviderLine gate={gate} width={width} />
       <AuthExpiryLine expiresAt={gate.expires_at} width={width} />
-      <text fg="#73879a">{truncate(hasUrl ? gate.authorization_url || "" : "Continue in the connected auth flow.", width - 6)}</text>
+      <text fg={theme.textMuted}>{truncate(hasUrl ? gate.authorization_url || "" : "Continue in the connected auth flow.", width - 6)}</text>
       <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg={error ? "#f08a8a" : "#777777"}>{truncate(error || (hasUrl ? "o open browser, esc cancel" : "esc cancel"), width - 6)}</text>
+        <text fg={error ? theme.danger : theme.textMuted}>{truncate(error || (hasUrl ? "o open browser, esc cancel" : "esc cancel"), width - 6)}</text>
       </box>
       <box style={{ height: 2, flexDirection: "row", marginTop: 1 }}>
         {hasUrl ? <AuthGateButton label="Open" primary onClick={onOpenUrl} /> : null}
@@ -834,8 +886,8 @@ function GenericAuthGatePanel({
 function AuthGateHeader({ gate, width }: { gate: PendingGateInfo; width: number }) {
   return (
     <box style={{ height: 1, flexDirection: "row" }}>
-      <text fg="#8fc8f2">! </text>
-      <text fg="#f2f2f2">{truncate(gate.tool_name || "Authentication required", width - 8)}</text>
+      <text fg={theme.accentText}>! </text>
+      <text fg={theme.textStrong}>{truncate(gate.tool_name || "Authentication required", width - 8)}</text>
     </box>
   )
 }
@@ -843,12 +895,12 @@ function AuthGateHeader({ gate, width }: { gate: PendingGateInfo; width: number 
 function AuthProviderLine({ gate, width }: { gate: PendingGateInfo; width: number }) {
   const provider = gate.provider ?? "auth"
   const label = gate.account_label ?? "Authentication"
-  return <text fg="#73879a">{truncate(`${provider} · ${label}`, width - 6)}</text>
+  return <text fg={theme.textMuted}>{truncate(`${provider} · ${label}`, width - 6)}</text>
 }
 
 function AuthExpiryLine({ expiresAt, width }: { expiresAt?: string | null; width: number }) {
   const text = expiresAt ? `Link may expire: ${expiresAt}` : "Link may expire."
-  return <text fg="#6f7f8d">{truncate(text, width - 6)}</text>
+  return <text fg={theme.textMuted}>{truncate(text, width - 6)}</text>
 }
 
 function authChallengeKind(gate: PendingGateInfo): string {
@@ -866,9 +918,9 @@ function AuthGateButton({
   primary?: boolean
   onClick: () => void
 }) {
-  const borderColor = disabled ? "#333333" : primary ? "#2b6f96" : "#3d3d3d"
-  const backgroundColor = disabled ? "#171717" : primary ? "#123044" : "#242424"
-  const textColor = disabled ? "#777777" : primary ? "#d9f0ff" : "#d0d0d0"
+  const borderColor = disabled ? theme.border : primary ? theme.accent : theme.border
+  const backgroundColor = disabled ? theme.bgSoft : primary ? theme.accentSoftBg : theme.bgSoft
+  const textColor = disabled ? theme.textMuted : primary ? theme.accentText : theme.text
   return (
     <box
       focusable={!disabled}
@@ -903,10 +955,24 @@ function GateButton({
   onSelect: (action: GateAction) => void
   onResolve: (action: GateAction) => void
 }) {
-  const isApprove = action === "approved"
-  const backgroundColor = selected ? (isApprove ? "#12351f" : "#3a1616") : "#242424"
-  const borderColor = selected ? (isApprove ? "#2ea043" : "#f85149") : "#3d3d3d"
-  const textColor = selected ? "#f5f5f5" : isApprove ? "#8fd694" : "#f08a8a"
+  const tone = action === "approved" ? "ok" : action === "always" ? "accent" : "danger"
+  const backgroundColor = selected
+    ? tone === "ok"
+      ? theme.okSoftBg
+      : tone === "accent"
+        ? theme.accentStrong
+        : theme.dangerSoftBg
+    : theme.bgSoft
+  const borderColor = selected ? (tone === "ok" ? theme.ok : tone === "accent" ? theme.accent : theme.danger) : theme.border
+  const textColor = selected
+    ? tone === "accent"
+      ? theme.onAccent
+      : theme.textStrong
+    : tone === "ok"
+      ? theme.ok
+      : tone === "accent"
+        ? theme.accentText
+        : theme.danger
 
   return (
     <box
@@ -969,6 +1035,35 @@ function formatDuration(ms: number): string {
   return `${Math.round(ms / 1000)}s`
 }
 
+// The approval poll caps its page (see client.approvalInbox), so a count at the
+// cap means "at least this many" — render it as "25+".
+const APPROVAL_BADGE_CAP = 25
+function formatApprovalCount(count: number): string {
+  return count >= APPROVAL_BADGE_CAP ? `${APPROVAL_BADGE_CAP}+` : String(count)
+}
+
+// Render usage/cost only when it belongs to the current thread context. A value
+// tagged with a different thread (or a leftover from a prior run/thread) is
+// stale and must not be shown against the active composer.
+function usageCostSummary(usageCost?: RunUsageCost | null, activeThreadId?: string | null): string | null {
+  if (!usageCost) return null
+  if (usageCost.threadId && activeThreadId && usageCost.threadId !== activeThreadId) return null
+  const usage = usageCost.usage
+  const cost = usageCost.cost
+  const parts: string[] = []
+  if (usage) parts.push(`${formatTokens(usage.input_tokens)}↑ ${formatTokens(usage.output_tokens)}↓`)
+  if (cost?.total_cost_usd) {
+    const total = Number(cost.total_cost_usd)
+    if (Number.isFinite(total)) parts.push(`$${total.toFixed(total < 0.01 ? 4 : 2)}`)
+  }
+  return parts.length ? parts.join(" · ") : null
+}
+
+function formatTokens(count: number): string {
+  if (count < 1000) return String(count)
+  return `${(count / 1000).toFixed(1)}k`
+}
+
 function wrapIndex(index: number, length: number): number {
   if (length <= 0) return 0
   return ((index % length) + length) % length
@@ -990,7 +1085,7 @@ function useRainbowLogoColors(active: boolean): string[] {
     return () => clearInterval(timer)
   }, [active])
 
-  if (!active) return ["#0f7a3a", "#8cffb0"]
+  if (!active) return [theme.accent, theme.accentText]
 
   const rainbow = ["#ff5c7a", "#ffb86b", "#fff36d", "#57f287", "#5fd7ff", "#8a7cff", "#ff7ad9", "#ffffff"]
   const shine = frame % rainbow.length

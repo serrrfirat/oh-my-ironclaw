@@ -553,7 +553,7 @@ function toolTranscriptActivity(tool: ToolCallInfo): TranscriptActivity | null {
   const detail = [tool.error, tool.result_preview && !isGenericCapabilitySummary(tool.result_preview) ? tool.result_preview : null]
     .filter(Boolean)
     .join(" · ")
-  const status = tool.has_error || toolTextLooksFailed(detail) ? "failed" : "completed"
+  const status = resolveToolStatus(null, tool.has_error, detail)
   const label = tool.name === "Capability" ? "tool call" : tool.name
   if (!tool.error && (!tool.result_preview || isGenericCapabilitySummary(tool.result_preview)) && label === "tool call") {
     return null
@@ -575,9 +575,7 @@ function capabilityToolActivity(tool: Extract<ToolCallInfo, { kind: "capability_
   ]
     .filter(Boolean)
     .join(" · ")
-  const status = tool.has_error || toolTextLooksFailed(statusText)
-    ? "failed"
-    : statusKey(tool.status ?? "completed")
+  const status = resolveToolStatus(tool.status, tool.has_error, statusText)
   const title = tool.name || tool.capability_id || "tool"
   const httpBodyText = httpBodyTextPreview(tool.capability_id, tool.name, tool.output_preview)
   if (httpBodyText) {
@@ -602,6 +600,22 @@ function capabilityToolActivity(tool: Extract<ToolCallInfo, { kind: "capability_
     outputBytes: tool.output_bytes,
     truncated: tool.truncated,
   }
+}
+
+// Decide a tool row's status. The structured status field (completed/failed/
+// killed/…) is authoritative when the wire provides it — a completed tool whose
+// output summary merely mentions "0 failed" must not be rendered as a failure.
+// The `has_error` flag still forces failed. The text heuristic is a fallback
+// used only when no structured status is present.
+function resolveToolStatus(
+  structuredStatus: string | null | undefined,
+  hasError: boolean,
+  heuristicText: string,
+): string {
+  if (hasError) return "failed"
+  const structured = structuredStatus?.trim()
+  if (structured) return statusKey(structured)
+  return toolTextLooksFailed(heuristicText) ? "failed" : "completed"
 }
 
 function toolTextLooksFailed(value: string): boolean {
@@ -891,7 +905,9 @@ function findBodyText(value: unknown): string | null {
   return null
 }
 
-function formatBytes(bytes: number): string {
+// Human-readable byte size. Exported as the single implementation; the
+// attachments UI re-exports this rather than keeping its own copy.
+export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`

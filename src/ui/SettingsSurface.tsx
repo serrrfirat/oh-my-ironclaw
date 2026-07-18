@@ -1,10 +1,12 @@
 import type { ClientConfig } from "../config"
-import type { LlmConfigSnapshot } from "../gateway/types"
+import type { LlmConfigSnapshot, SessionResponse } from "../gateway/types"
+import { theme } from "./theme"
+import { Field, padEnd, Surface, truncate, wrapIndex } from "./pixel"
 
-export type SettingsSection = "Profile" | "Connection" | "Providers" | "Extensions" | "Channels" | "Skills" | "Automations" | "Tools" | "Approvals"
+export type SettingsSection = "Profile" | "Connection" | "Providers" | "Extensions" | "Channels" | "Skills" | "Automations" | "Tools" | "Outbound"
 type SettingsMenuItem = { label: SettingsSection; meta: string }
 
-const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Providers", "Extensions", "Channels", "Skills", "Automations", "Tools", "Approvals"]
+const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Providers", "Extensions", "Channels", "Skills", "Automations", "Tools", "Outbound"]
 
 export const SETTINGS_SECTION_COUNT = SETTINGS_SECTIONS.length
 
@@ -21,12 +23,14 @@ export function SettingsSurface({
   selectedProvider,
   llmConfig,
   llmConfigError,
+  session,
+  operatorOnly = false,
   extensionCount = 0,
   extensionSetupCount = 0,
   automationCount = 0,
   channelCount = 0,
   skillCount = 0,
-  skillsAvailable = false,
+  skillsRemote = false,
   status,
   width,
 }: {
@@ -38,12 +42,14 @@ export function SettingsSurface({
   selectedProvider: string
   llmConfig?: LlmConfigSnapshot | null
   llmConfigError?: string | null
+  session?: SessionResponse | null
+  operatorOnly?: boolean
   extensionCount?: number
   extensionSetupCount?: number
   automationCount?: number
   channelCount?: number
   skillCount?: number
-  skillsAvailable?: boolean
+  skillsRemote?: boolean
   status: string
   width: number
 }) {
@@ -64,134 +70,82 @@ export function SettingsSurface({
       selectedModel,
       selectedProvider,
       skillCount,
-      skillsAvailable,
+      skillsRemote,
       serverState,
       profileName,
+      operatorOnly,
     }),
   }))
   const selectedItem = menu[wrapIndex(selectedIndex, menu.length)] ?? menu[0]
 
-  if (narrow) {
-    return (
-      <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-        <SettingsHeader width={contentWidth} />
-        <box style={{ height: 1 }} />
-        <text fg="#f2f2f2">Settings</text>
-        <box style={{ height: 1 }} />
-        <SettingsMenu items={menu} selectedIndex={selectedIndex} width={contentWidth} />
-        <box style={{ height: 1 }} />
-        <SettingsPreview
-          authState={authState}
-          config={config}
-          connected={connected}
-          item={selectedItem}
-          llmConfig={llmConfig}
-          llmConfigError={llmConfigError}
-          automationCount={automationCount}
-          channelCount={channelCount}
-          extensionCount={extensionCount}
-          extensionSetupCount={extensionSetupCount}
-          skillCount={skillCount}
-          skillsAvailable={skillsAvailable}
-          selectedModel={selectedModel}
-          selectedProvider={selectedProvider}
-          sourcePath={sourcePath}
-          status={status}
-          width={contentWidth}
-        />
-        <SettingsFooter width={contentWidth} />
-      </box>
-    )
-  }
+  const preview = (
+    <SettingsPreview
+      authState={authState}
+      config={config}
+      connected={connected}
+      item={selectedItem}
+      llmConfig={llmConfig}
+      llmConfigError={llmConfigError}
+      session={session}
+      operatorOnly={operatorOnly}
+      automationCount={automationCount}
+      channelCount={channelCount}
+      extensionCount={extensionCount}
+      extensionSetupCount={extensionSetupCount}
+      skillCount={skillCount}
+      skillsRemote={skillsRemote}
+      selectedModel={selectedModel}
+      selectedProvider={selectedProvider}
+      sourcePath={sourcePath}
+      status={status}
+      width={narrow ? contentWidth : Math.max(1, contentWidth - 34)}
+    />
+  )
 
   return (
-    <box style={{ width, height, flexDirection: "column", backgroundColor: "#050505", paddingLeft: 2, paddingRight: 2, paddingTop: 1 }}>
-      <SettingsHeader width={contentWidth} />
-      <box style={{ height: 1 }} />
-      <box style={{ width: contentWidth, flexDirection: "row" }}>
-        <box style={{ width: 32, flexDirection: "column" }}>
-          <text fg="#f2f2f2">Settings</text>
+    <Surface title="settings" width={width} height={height}>
+      {narrow ? (
+        <box style={{ flexDirection: "column" }}>
+          <text fg={theme.textStrong}>Settings</text>
           <box style={{ height: 1 }} />
-          <SettingsMenu items={menu} selectedIndex={selectedIndex} width={32} />
+          <SettingsMenu items={menu} selectedIndex={selectedIndex} width={contentWidth} />
+          <box style={{ height: 1 }} />
+          {preview}
         </box>
-        <box style={{ width: 2 }} />
-        <SettingsPreview
-          authState={authState}
-          config={config}
-          connected={connected}
-          item={selectedItem}
-          llmConfig={llmConfig}
-          llmConfigError={llmConfigError}
-          automationCount={automationCount}
-          channelCount={channelCount}
-          extensionCount={extensionCount}
-          extensionSetupCount={extensionSetupCount}
-          skillCount={skillCount}
-          skillsAvailable={skillsAvailable}
-          selectedModel={selectedModel}
-          selectedProvider={selectedProvider}
-          sourcePath={sourcePath}
-          status={status}
-          width={Math.max(1, contentWidth - 34)}
-        />
-      </box>
+      ) : (
+        <box style={{ width: contentWidth, flexDirection: "row" }}>
+          <box style={{ width: 32, flexDirection: "column" }}>
+            <text fg={theme.textStrong}>Settings</text>
+            <box style={{ height: 1 }} />
+            <SettingsMenu items={menu} selectedIndex={selectedIndex} width={32} />
+          </box>
+          <box style={{ width: 2 }} />
+          {preview}
+        </box>
+      )}
       <SettingsFooter width={contentWidth} />
-    </box>
+    </Surface>
   )
 }
 
-function SettingsHeader({ width }: { width: number }) {
-  return (
-    <box style={{ width, height: 2, flexDirection: "column" }}>
-      <box style={{ height: 1, flexDirection: "row" }}>
-        <text fg="#8cffb0">ironclaw</text>
-        <text fg="#777777">{padEnd("", Math.max(1, width - 18))}</text>
-        <text fg="#d0d0d0">settings</text>
-      </box>
-      <SettingsDivider width={width} />
-    </box>
-  )
-}
-
-function SettingsMenu({
-  items,
-  selectedIndex,
-  width,
-}: {
-  items: SettingsMenuItem[]
-  selectedIndex: number
-  width: number
-}) {
+function SettingsMenu({ items, selectedIndex, width }: { items: SettingsMenuItem[]; selectedIndex: number; width: number }) {
   return (
     <box style={{ width, flexDirection: "column" }}>
       {items.map((item, index) => (
-        <SettingsMenuRow
-          key={item.label}
-          item={item}
-          selected={index === selectedIndex}
-          width={width}
-        />
+        <SettingsMenuRow key={item.label} item={item} selected={index === wrapIndex(selectedIndex, items.length)} width={width} />
       ))}
     </box>
   )
 }
 
-function SettingsMenuRow({
-  item,
-  selected,
-  width,
-}: {
-  item: SettingsMenuItem
-  selected: boolean
-  width: number
-}) {
+function SettingsMenuRow({ item, selected, width }: { item: SettingsMenuItem; selected: boolean; width: number }) {
   const metaWidth = Math.max(0, width - 15)
   return (
-    <box style={{ width, height: 1, flexDirection: "row", backgroundColor: selected ? "#141414" : "#050505" }}>
-      <box style={{ width: 1, backgroundColor: selected ? "#2ee66b" : "#050505" }} />
-      <text fg={selected ? "#2ee66b" : "#707070"}>{selected ? "> " : "  "}</text>
-      <text fg={selected ? "#f2f2f2" : "#d0d0d0"}>{padEnd(item.label, 12)}</text>
-      <text fg="#777777">{truncate(item.meta, metaWidth)}</text>
+    <box style={{ width, height: 1, flexDirection: "row", backgroundColor: selected ? theme.accentSoftBg : theme.bg }}>
+      <box style={{ width: 1, backgroundColor: selected ? theme.accent : theme.border }} />
+      <text fg={selected ? theme.accent : theme.textMuted}>{selected ? " › " : "   "}</text>
+      <text fg={selected ? theme.accentText : theme.text}>{padEnd(item.label, 12)}</text>
+      <text fg={theme.textFaint}>{truncate(item.meta, metaWidth)}</text>
     </box>
   )
 }
@@ -203,12 +157,14 @@ function SettingsPreview({
   item,
   llmConfig,
   llmConfigError,
+  session,
+  operatorOnly,
   automationCount,
   channelCount,
   extensionCount,
   extensionSetupCount,
   skillCount,
-  skillsAvailable,
+  skillsRemote,
   selectedModel,
   selectedProvider,
   sourcePath,
@@ -221,12 +177,14 @@ function SettingsPreview({
   item: SettingsMenuItem
   llmConfig?: LlmConfigSnapshot | null
   llmConfigError?: string | null
+  session?: SessionResponse | null
+  operatorOnly: boolean
   automationCount: number
   channelCount: number
   extensionCount: number
   extensionSetupCount: number
   skillCount: number
-  skillsAvailable: boolean
+  skillsRemote: boolean
   selectedModel: string
   selectedProvider: string
   sourcePath: string
@@ -239,12 +197,14 @@ function SettingsPreview({
     connected,
     llmConfig,
     llmConfigError,
+    session,
+    operatorOnly,
     automationCount,
     channelCount,
     extensionCount,
     extensionSetupCount,
     skillCount,
-    skillsAvailable,
+    skillsRemote,
     selectedModel,
     selectedProvider,
     sourcePath,
@@ -252,14 +212,14 @@ function SettingsPreview({
   })
 
   return (
-    <box style={{ width, flexDirection: "column", backgroundColor: "#111111", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-      <text fg="#f2f2f2">{item.label}</text>
+    <box style={{ width, flexDirection: "column", backgroundColor: theme.bgCode, paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
+      <text fg={theme.textStrong}>{item.label}</text>
       <box style={{ height: 1 }} />
       {fields.map((field) => (
-        <SettingsField key={field.label} label={field.label} value={field.value} width={width - 4} />
+        <Field key={field.label} label={field.label} value={field.value} width={width - 4} labelWidth={18} />
       ))}
       <box style={{ height: 1 }} />
-      <text fg="#777777">{truncate(settingsActionHint(item.label), Math.max(1, width - 4))}</text>
+      <text fg={theme.textFaint}>{truncate(settingsActionHint(item.label), Math.max(1, width - 4))}</text>
     </box>
   )
 }
@@ -274,30 +234,31 @@ function settingsMenuMeta(
     extensionSetupCount: number
     profileName: string
     skillCount: number
-    skillsAvailable: boolean
+    skillsRemote: boolean
     selectedModel: string
     selectedProvider: string
     serverState: string
+    operatorOnly: boolean
   },
 ) {
-  const { automationCount, channelCount, config, extensionCount, extensionSetupCount, profileName, selectedModel, selectedProvider, serverState, skillCount, skillsAvailable } = context
+  const { automationCount, channelCount, config, extensionCount, extensionSetupCount, profileName, selectedModel, selectedProvider, serverState, skillCount, skillsRemote, operatorOnly } = context
   switch (section) {
     case "Connection":
       return serverState
     case "Providers":
-      return selectedProvider ? `${selectedModel} · ${selectedProvider}` : selectedModel
+      return operatorOnly ? "operator only" : selectedProvider ? `${selectedModel} · ${selectedProvider}` : selectedModel
     case "Extensions":
       return extensionSetupCount ? `${extensionSetupCount} need setup` : `${extensionCount} installed`
     case "Channels":
       return `${channelCount} connectable`
     case "Skills":
-      return skillsAvailable ? `${skillCount} local` : "no v2 endpoint"
+      return skillsRemote ? `${skillCount} remote` : `${skillCount} local`
     case "Automations":
       return `${automationCount} schedules`
     case "Tools":
-      return config.mode === "local" ? "local commands" : "activity only"
-    case "Approvals":
-      return "ask"
+      return config.mode === "local" ? "local commands" : "permissions"
+    case "Outbound":
+      return "delivery defaults"
     default:
       return profileName
   }
@@ -311,19 +272,21 @@ function settingsFieldsForSection(
     connected: boolean
     llmConfig?: LlmConfigSnapshot | null
     llmConfigError?: string | null
+    session?: SessionResponse | null
+    operatorOnly: boolean
     automationCount: number
     channelCount: number
     extensionCount: number
     extensionSetupCount: number
     skillCount: number
-    skillsAvailable: boolean
+    skillsRemote: boolean
     selectedModel: string
     selectedProvider: string
     sourcePath: string
     status: string
   },
 ) {
-  const { authState, automationCount, channelCount, config, connected, extensionCount, extensionSetupCount, llmConfig, llmConfigError, selectedModel, selectedProvider, skillCount, skillsAvailable, sourcePath, status } = context
+  const { authState, automationCount, channelCount, config, connected, extensionCount, extensionSetupCount, llmConfig, llmConfigError, session, operatorOnly, selectedModel, selectedProvider, skillCount, skillsRemote, sourcePath, status } = context
   switch (section) {
     case "Connection":
       return [
@@ -331,14 +294,22 @@ function settingsFieldsForSection(
         { label: "state", value: connected ? "online" : "offline" },
         { label: "status", value: status },
         { label: "mode", value: config.mode },
+        { label: "tenant", value: session?.tenant_id ?? "unknown" },
+        { label: "user", value: session?.user_id ?? "unknown" },
       ]
     case "Providers":
+      if (operatorOnly) {
+        return [
+          { label: "access", value: "operator capability required" },
+          { label: "active", value: selectedModel },
+          { label: "provider", value: selectedProvider || "unknown" },
+        ]
+      }
       if (llmConfigError) {
         return [
           { label: "error", value: llmConfigError },
           { label: "active", value: selectedModel },
           { label: "provider", value: selectedProvider || "unknown" },
-          { label: "source", value: "WebChat v2 LLM providers" },
         ]
       }
       return [
@@ -347,49 +318,40 @@ function settingsFieldsForSection(
         { label: "providers", value: String(llmConfig?.providers?.length ?? 0) },
         { label: "api keys", value: providerKeySummary(llmConfig) },
         { label: "models", value: providerModelSummary(llmConfig) },
-        { label: "source", value: "WebChat v2 LLM providers" },
       ]
     case "Extensions":
       return [
         { label: "installed", value: String(extensionCount) },
         { label: "need setup", value: String(extensionSetupCount) },
         { label: "registry", value: "WebChat v2 extension registry" },
-        { label: "setup", value: "install · activate · secret/field input" },
       ]
     case "Channels":
       return [
         { label: "connectable", value: String(channelCount) },
         { label: "source", value: "WebChat v2 connectable channels" },
-        { label: "setup", value: "pairing/action metadata" },
-        { label: "submit", value: "handled by extension setup routes" },
       ]
     case "Skills":
       return [
-        { label: "configured", value: skillsAvailable ? String(skillCount) : "unknown" },
-        { label: "source", value: skillsAvailable ? sourcePath : "no WebChat v2 skills endpoint" },
-        { label: "browse", value: skillsAvailable ? "local skills list" : "not available in remote mode" },
-        { label: "setup", value: "blocked until v2 install/remove route exists" },
+        { label: "configured", value: String(skillCount) },
+        { label: "mode", value: skillsRemote ? "remote HTTP" : "local CLI" },
+        { label: "actions", value: skillsRemote ? "install · remove · auto-activate" : "browse local catalog" },
       ]
     case "Automations":
       return [
         { label: "schedules", value: String(automationCount) },
-        { label: "source", value: "WebChat v2 automations" },
-        { label: "view", value: "schedule dashboard" },
-        { label: "mutations", value: "no v2 create/update route" },
+        { label: "actions", value: "pause · resume · rename · delete" },
       ]
     case "Tools":
       return [
-        { label: "remote", value: "tool calls render in chat" },
+        { label: "permissions", value: "per-tool default/allow/ask/disabled" },
+        { label: "auto-approve", value: session?.features.global_auto_approve ? "on" : "off" },
         { label: "local", value: config.mode === "local" ? "CLI commands enabled" : "disabled" },
-        { label: "settings", value: "no WebChat v2 tools endpoint" },
-        { label: "source", value: sourcePath },
       ]
-    case "Approvals":
+    case "Outbound":
       return [
-        { label: "default", value: "ask" },
-        { label: "shell", value: "ask" },
-        { label: "writes", value: "ask" },
-        { label: "network", value: "ask" },
+        { label: "final reply", value: "select delivery target" },
+        { label: "modality", value: "server default (read-only)" },
+        { label: "source", value: "WebChat v2 outbound preferences" },
       ]
     default:
       return [
@@ -397,21 +359,11 @@ function settingsFieldsForSection(
         { label: "model", value: selectedModel },
         { label: "server", value: `${connected ? "online" : "offline"} · ${config.baseUrl}` },
         { label: "auth", value: `env token · ${authState}` },
+        { label: "features", value: session ? `projects ${session.features.reborn_projects ? "on" : "off"}` : "unknown" },
         { label: "source", value: sourcePath },
         { label: "status", value: status },
       ]
   }
-}
-
-function SettingsField({ label, value, width }: { label: string; value: string; width: number }) {
-  const labelWidth = 18
-  const valueWidth = Math.max(8, width - labelWidth - 1)
-  return (
-    <box style={{ width, height: 1, flexDirection: "row" }}>
-      <text fg="#8a8a8a">{padEnd(label, labelWidth)}</text>
-      <text fg="#d0d0d0">{truncate(value, valueWidth)}</text>
-    </box>
-  )
 }
 
 function settingsActionHint(section: SettingsSection): string {
@@ -423,9 +375,13 @@ function settingsActionHint(section: SettingsSection): string {
     case "Channels":
       return "enter opens channel connection metadata"
     case "Skills":
-      return "enter opens skills browser when available"
+      return "enter opens skills browser"
     case "Automations":
-      return "enter opens automations"
+      return "enter opens automations (pause/resume/rename/delete)"
+    case "Tools":
+      return "enter opens per-tool permissions"
+    case "Outbound":
+      return "enter opens delivery defaults"
     case "Connection":
       return "connection is read-only"
     default:
@@ -451,31 +407,7 @@ function providerModelSummary(llmConfig?: LlmConfigSnapshot | null): string {
 function SettingsFooter({ width }: { width: number }) {
   return (
     <box style={{ width, height: 1, flexDirection: "row", marginTop: 1 }}>
-      <text fg="#777777">{truncate("up/down section · enter open · esc back", width)}</text>
+      <text fg={theme.textFaint}>{truncate("up/down section · enter open · esc back", width)}</text>
     </box>
   )
-}
-
-function SettingsDivider({ width }: { width: number }) {
-  return (
-    <box style={{ height: 1 }}>
-      <text fg="#1f1f1f">{padEnd("", width).replaceAll(" ", "-")}</text>
-    </box>
-  )
-}
-
-function padEnd(value: string, width: number) {
-  return value.length >= width ? value.slice(0, width) : value + " ".repeat(width - value.length)
-}
-
-function truncate(value: string, width: number) {
-  if (width <= 0) return ""
-  if (value.length <= width) return value
-  if (width <= 3) return ".".repeat(width)
-  return `${value.slice(0, width - 3)}...`
-}
-
-function wrapIndex(index: number, length: number) {
-  if (length <= 0) return 0
-  return ((index % length) + length) % length
 }

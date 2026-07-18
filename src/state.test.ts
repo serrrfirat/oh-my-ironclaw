@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { initialUiState, reduceUiState } from "./state"
+import { statusTone } from "./ui/theme"
 import { transcriptActivityLines, type TranscriptItem } from "./transcript"
 
 function activityText(item: TranscriptItem | undefined): string {
@@ -1353,5 +1354,396 @@ describe("UI state", () => {
     })
     expect(state.activeRunId).toBe("run-1")
     expect(running.isThinking).toBe(false)
+  })
+
+  test("keeps a live SSE gate when a post-send history merge carries no gate info", () => {
+    // A gate arrives over SSE mid-run.
+    const gated = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "gate_required",
+        request_id: "run-7:gate:approval-1",
+        thread_id: "thread-1",
+        run_id: "run-7",
+        gate_ref: "gate:approval-1",
+        gate_name: "approval",
+        tool_name: "approval",
+        description: "Shell command approval required",
+        parameters: "",
+        resume_kind: { run_id: "run-7", gate_ref: "gate:approval-1" },
+      },
+    })
+    // The post-send history poll returns a timeline that (like the real
+    // /timeline response) carries neither pending_gate nor in_progress, and shows
+    // no reply after the user's message yet.
+    const refreshed = reduceUiState(gated, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [],
+        has_more: false,
+        messages: [
+          {
+            kind: "user",
+            id: "user-1",
+            thread_id: "thread-1",
+            sequence: 1,
+            status: "sent",
+            content: "run the shell command",
+          },
+        ],
+      },
+    })
+
+    // The gate must survive the merge — it is not wiped just because the timeline
+    // lacked gate/in-progress info.
+    expect(refreshed.pendingGate).toMatchObject({
+      request_id: "run-7:gate:approval-1",
+      gate_ref: "gate:approval-1",
+      run_id: "run-7",
+    })
+    expect(refreshed.activeRunId).toBe("run-7")
+    expect(refreshed.isThinking).toBe(false)
+  })
+
+  test("returns the same state object when approval_count is unchanged", () => {
+    const seeded = reduceUiState(initialUiState, { type: "approval_count", count: 3 })
+    const again = reduceUiState(seeded, { type: "approval_count", count: 3 })
+    expect(again).toBe(seeded)
+    const changed = reduceUiState(seeded, { type: "approval_count", count: 4 })
+    expect(changed).not.toBe(seeded)
+    expect(changed.approvalCount).toBe(4)
+  })
+
+  test("trusts a completed tool status even when the summary mentions 'failed'", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          {
+            turn_number: 1,
+            user_message_id: "user-1",
+            user_input: "run the tests",
+            state: "completed",
+            started_at: "",
+            tool_calls: [
+              {
+                kind: "capability_display_preview",
+                message_id: "preview-tests",
+                name: "run_tests",
+                has_result: true,
+                has_error: false,
+                call_id: "run-1",
+                capability_id: "builtin.run_tests",
+                status: "completed",
+                input_summary: "suite: unit",
+                output_summary: "214 tests · 0 failed",
+                output_preview: "",
+                output_kind: "text",
+                output_bytes: 0,
+                truncated: false,
+              },
+            ],
+          },
+        ],
+        has_more: false,
+      },
+    })
+
+    const activity = state.transcript.find((item) => item.role === "activity")
+    // "0 failed" in the summary must not flip a structurally-completed tool to failed.
+    expect(activity?.role === "activity" ? activity.activity.status : null).toBe("completed")
+  })
+})
+
+describe("UI state — capability parity", () => {
+  test("stores the session snapshot for UI gating", () => {
+    const session = {
+      tenant_id: "tenant-1",
+      user_id: "user-1",
+      capabilities: { operator_webui_config: true },
+      features: { reborn_projects: true, global_auto_approve: false },
+      attachments: { accept: ["image/png"], max_count: 10, max_file_bytes: 5, max_total_bytes: 10 },
+    }
+    const state = reduceUiState(initialUiState, { type: "session", session })
+    expect(state.session).toBe(session)
+    expect(state.session?.capabilities.operator_webui_config).toBe(true)
+    expect(state.session?.features.reborn_projects).toBe(true)
+  })
+
+  test("surfaces a rejected_busy notice without marking an error", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "notice",
+      message: "A run is already active on this thread.",
+    })
+    expect(state.notice).toBe("A run is already active on this thread.")
+    expect(state.lastError).toBeUndefined()
+    expect(state.status).not.toBe("error")
+  })
+
+  test("clears the notice when a new run starts", () => {
+    const noticed = reduceUiState(initialUiState, { type: "notice", message: "busy" })
+    const started = reduceUiState(noticed, { type: "run_started", threadId: "thread-1", runId: "run-1" })
+    expect(started.notice).toBeNull()
+  })
+
+  test("maps a run_cancelled event to a cancelled system message", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_cancelled", run_id: "run-1", status: "Cancelled", thread_id: "thread-1" },
+    })
+    expect(state.isThinking).toBe(false)
+    expect(state.activeRunId).toBeNull()
+    expect(state.transcript).toContainEqual({
+      id: "run-run-1-cancelled",
+      role: "system",
+      text: "Run was cancelled before a reply was produced.",
+      threadId: "thread-1",
+      state: "Cancelled",
+    })
+  })
+
+  test("captures usage and cost for the status bar", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "run_usage",
+        run_id: "run-1",
+        usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        cost: { input_cost_usd: "0.01", cached_input_cost_usd: "0", output_cost_usd: "0.02", total_cost_usd: "0.03", currency: "USD" },
+        thread_id: "thread-1",
+      },
+    })
+    expect(state.runUsageCost?.runId).toBe("run-1")
+    expect(state.runUsageCost?.usage?.input_tokens).toBe(100)
+    expect(state.runUsageCost?.cost?.total_cost_usd).toBe("0.03")
+  })
+
+  test("tracks the approval-inbox count", () => {
+    const state = reduceUiState(initialUiState, { type: "approval_count", count: 3 })
+    expect(state.approvalCount).toBe(3)
+  })
+})
+
+describe("UI state — usage/cost context", () => {
+  function usage(runId: string, threadId: string) {
+    return {
+      type: "event" as const,
+      event: {
+        type: "run_usage" as const,
+        run_id: runId,
+        usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        cost: { input_cost_usd: "0.01", cached_input_cost_usd: "0", output_cost_usd: "0.01", total_cost_usd: "0.02", currency: "USD" },
+        thread_id: threadId,
+      },
+    }
+  }
+
+  test("tags usage/cost with its run and thread", () => {
+    const state = reduceUiState(initialUiState, usage("run-9", "thread-9"))
+    expect(state.runUsageCost).toMatchObject({ runId: "run-9", threadId: "thread-9" })
+  })
+
+  test("clears usage/cost when a new run starts", () => {
+    const withUsage = reduceUiState(initialUiState, usage("run-1", "thread-1"))
+    const started = reduceUiState(withUsage, { type: "run_started", threadId: "thread-1", runId: "run-2" })
+    expect(withUsage.runUsageCost?.runId).toBe("run-1")
+    expect(started.runUsageCost).toBeNull()
+  })
+
+  test("clears usage/cost when the user sends a new message", () => {
+    const withUsage = reduceUiState(initialUiState, usage("run-1", "thread-1"))
+    const sent = reduceUiState(withUsage, { type: "user_sent", content: "again", threadId: "thread-1" })
+    expect(sent.runUsageCost).toBeNull()
+  })
+
+  test("clears usage/cost only when history switches to a different thread", () => {
+    const onThreadOne = reduceUiState(
+      reduceUiState(initialUiState, { type: "history", history: { thread_id: "thread-1", turns: [], has_more: false } }),
+      usage("run-1", "thread-1"),
+    )
+    const stillThreadOne = reduceUiState(onThreadOne, {
+      type: "history",
+      history: { thread_id: "thread-1", turns: [], has_more: false },
+    })
+    const switched = reduceUiState(onThreadOne, {
+      type: "history",
+      history: { thread_id: "thread-2", turns: [], has_more: false },
+    })
+    expect(stillThreadOne.runUsageCost?.runId).toBe("run-1")
+    expect(switched.runUsageCost).toBeNull()
+  })
+})
+
+describe("UI state — terminal runs", () => {
+  test("run_status cancelled and run_cancelled produce identical terminal state", () => {
+    const viaStatus = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_status", status: "cancelled", run_id: "run-1", thread_id: "thread-1" },
+    })
+    const viaEvent = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_cancelled", run_id: "run-1", status: "cancelled", thread_id: "thread-1" },
+    })
+    expect(viaStatus.transcript).toEqual(viaEvent.transcript)
+    expect(viaStatus.activity).toEqual(viaEvent.activity)
+    expect(viaStatus.status).toBe(viaEvent.status)
+    expect(viaStatus.lastError).toBe(viaEvent.lastError)
+    expect(viaStatus.pendingGate).toBeNull()
+    expect(viaEvent.pendingGate).toBeNull()
+    expect(viaStatus.isThinking).toBe(false)
+    expect(viaStatus.activeRunId).toBeNull()
+    expect(viaStatus.lastTerminalRunId).toBe("run-1")
+    expect(viaEvent.lastTerminalRunId).toBe("run-1")
+  })
+
+  test("cancelled uses info tone and does not set lastError", () => {
+    const cancelled = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_cancelled", run_id: "run-1", status: "cancelled", thread_id: "thread-1" },
+    })
+    expect(cancelled.lastError).toBeUndefined()
+    expect(cancelled.activity[0]).toMatchObject({ label: "run cancelled", status: "info" })
+  })
+
+  test("a terminal run clears a live pending gate and records lastTerminalRunId", () => {
+    const gated = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "gate_required",
+        request_id: "gate-1",
+        thread_id: "thread-1",
+        run_id: "run-1",
+        gate_ref: "gate:1",
+        gate_name: "approval",
+        tool_name: "shell",
+        description: "approve",
+        parameters: "",
+        resume_kind: { gate_ref: "gate:1" },
+      },
+    })
+    const failed = reduceUiState(gated, {
+      type: "event",
+      event: { type: "run_status", status: "failed", run_id: "run-1", thread_id: "thread-1" },
+    })
+    expect(gated.pendingGate).not.toBeNull()
+    expect(failed.pendingGate).toBeNull()
+    expect(failed.lastError).toBe("Run failed before a reply was produced.")
+    expect(failed.activity.at(-1)).toMatchObject({ label: "run failed", status: "error" })
+    expect(failed.lastTerminalRunId).toBe("run-1")
+  })
+
+  test("uses the active run id for a null-run_id terminal frame", () => {
+    const running = reduceUiState(initialUiState, {
+      type: "run_started",
+      threadId: "thread-1",
+      runId: "run-1",
+      status: "running",
+    })
+    const cancelled = reduceUiState(running, {
+      type: "event",
+      event: { type: "run_cancelled", run_id: null, status: "cancelled", thread_id: "thread-1" },
+    })
+    expect(cancelled.transcript.some((item) => item.id === "run-run-1-cancelled")).toBe(true)
+    expect(cancelled.lastTerminalRunId).toBe("run-1")
+  })
+
+  test("dual-path cancel (run_status then run_cancelled) does not duplicate", () => {
+    const viaStatus = reduceUiState(
+      reduceUiState(initialUiState, { type: "run_started", threadId: "thread-1", runId: "run-1", status: "running" }),
+      { type: "event", event: { type: "run_status", status: "cancelled", run_id: "run-1", thread_id: "thread-1" } },
+    )
+    const thenEvent = reduceUiState(viaStatus, {
+      type: "event",
+      event: { type: "run_cancelled", run_id: "run-1", status: "cancelled", thread_id: "thread-1" },
+    })
+    expect(thenEvent.transcript.filter((item) => item.role === "system")).toHaveLength(1)
+  })
+
+  test("clears lastTerminalRunId on the next run_started", () => {
+    const failed = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_status", status: "failed", run_id: "run-1", thread_id: "thread-1" },
+    })
+    const restarted = reduceUiState(failed, { type: "run_started", threadId: "thread-1", runId: "run-2" })
+    expect(failed.lastTerminalRunId).toBe("run-1")
+    expect(restarted.lastTerminalRunId).toBeNull()
+  })
+})
+
+describe("UI state — gate mapping parity", () => {
+  test("gate_required and approval_needed map to the same pending-gate shape", () => {
+    const base = reduceUiState(initialUiState, { type: "run_started", threadId: "thread-1", runId: "run-1" })
+    const viaGate = reduceUiState(base, {
+      type: "event",
+      event: {
+        type: "gate_required",
+        request_id: "req-1",
+        thread_id: "thread-1",
+        run_id: "run-1",
+        gate_ref: null,
+        gate_name: "approval",
+        tool_name: "shell",
+        description: "Approve shell",
+        parameters: "ls",
+        allow_always: true,
+        resume_kind: { kind: "approval", allow_always: true },
+      },
+    })
+    const viaApproval = reduceUiState(base, {
+      type: "event",
+      event: {
+        type: "approval_needed",
+        request_id: "req-1",
+        tool_name: "shell",
+        description: "Approve shell",
+        parameters: "ls",
+        thread_id: "thread-1",
+        allow_always: true,
+      },
+    })
+
+    expect(viaApproval.pendingGate).toEqual(viaGate.pendingGate)
+    expect(viaApproval.pendingGate).toMatchObject({
+      request_id: "req-1",
+      thread_id: "thread-1",
+      run_id: "run-1",
+      gate_name: "approval",
+      tool_name: "shell",
+      allow_always: true,
+      approval_context: null,
+      resume_kind: { kind: "approval", allow_always: true },
+    })
+    expect(viaApproval.activeRunId).toBe("run-1")
+    expect(viaApproval.status).toBe("waiting for approval")
+  })
+
+  test("approval_needed reads a runtime approval_context defensively", () => {
+    // Not declared on the approval_needed wire type, but may arrive at runtime;
+    // toPendingGate must still surface it.
+    const event = {
+      type: "approval_needed",
+      request_id: "req-2",
+      tool_name: "shell",
+      description: "Approve shell",
+      parameters: "ls",
+      thread_id: "thread-1",
+      allow_always: false,
+      approval_context: { tool_name: "shell", action: "run ls", details: ["cwd: /repo"] },
+    }
+    const state = reduceUiState(initialUiState, { type: "event", event: event as never })
+    expect(state.pendingGate?.approval_context).toMatchObject({ action: "run ls" })
+  })
+})
+
+describe("statusTone log levels", () => {
+  test("maps log-level literals to canon tones", () => {
+    expect(statusTone("warn")).toBe("warn")
+    expect(statusTone("info")).toBe("info")
+    expect(statusTone("debug")).toBe("muted")
+    expect(statusTone("trace")).toBe("muted")
+    expect(statusTone("error")).toBe("danger")
+    expect(statusTone("fatal")).toBe("danger")
   })
 })

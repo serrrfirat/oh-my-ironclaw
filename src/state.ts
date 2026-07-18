@@ -1,4 +1,13 @@
-import type { AppEvent, HistoryResponse, PendingGateInfo, ThreadInfo } from "./gateway/types"
+import type {
+  AppEvent,
+  ApprovalContext,
+  HistoryResponse,
+  PendingGateInfo,
+  RebornRunCost,
+  RebornRunUsage,
+  SessionResponse,
+  ThreadInfo,
+} from "./gateway/types"
 import {
   capabilityDisplayPreviewDetail,
   capabilityEventActivity,
@@ -24,6 +33,17 @@ export type ActivityItem = {
   kind?: string
 }
 
+// Per-run token usage + USD cost for the status bar, captured from the failed
+// run_state SSE event (and any future run-state read). Tagged with the run and
+// thread it belongs to so a stale value from a previous run/thread is never
+// rendered against the current context.
+export type RunUsageCost = {
+  runId?: string | null
+  threadId?: string | null
+  usage?: RebornRunUsage | null
+  cost?: RebornRunCost | null
+}
+
 export type UiState = {
   connected: boolean
   status: string
@@ -38,6 +58,18 @@ export type UiState = {
   pendingGate?: PendingGateInfo | null
   lastError?: string | null
   streamingAssistantId?: string | null
+  // GET /session snapshot, drives UI capability/feature gating. Null until fetched.
+  session?: SessionResponse | null
+  // Non-error notice (e.g. rejected_busy). Cleared when a new run starts.
+  notice?: string | null
+  // Latest per-run usage/cost for the status bar.
+  runUsageCost?: RunUsageCost | null
+  // Run id of the most recent run that reached a terminal state
+  // (failed/cancelled/killed/recovery_required). Cleared on run_started.
+  // Used by /retry to target the last terminal run.
+  lastTerminalRunId?: string | null
+  // Count of threads waiting on approval (approval-inbox badge).
+  approvalCount: number
 }
 
 export const initialUiState: UiState = {
@@ -51,6 +83,11 @@ export const initialUiState: UiState = {
   hasOlderHistory: false,
   activity: [],
   pendingGate: null,
+  session: null,
+  notice: null,
+  runUsageCost: null,
+  lastTerminalRunId: null,
+  approvalCount: 0,
 }
 
 export type UiAction =
@@ -63,6 +100,9 @@ export type UiAction =
   | { type: "user_sent"; content: string; threadId?: string | null }
   | { type: "event"; event: AppEvent }
   | { type: "gate_cleared" }
+  | { type: "session"; session: SessionResponse }
+  | { type: "notice"; message: string | null }
+  | { type: "approval_count"; count: number }
 
 export function reduceUiState(state: UiState, action: UiAction): UiState {
   switch (action.type) {
@@ -85,12 +125,14 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
       return { ...state, threads: action.threads, activeThreadId: action.activeThreadId ?? state.activeThreadId }
     case "history": {
       const pendingGate = pendingGateFromHistory(state, action.history)
+      const threadSwitched = Boolean(state.activeThreadId) && action.history.thread_id !== state.activeThreadId
       return {
         ...state,
         activeThreadId: action.history.thread_id,
         transcript: mergeHistoryTranscript(state.transcript, action.history),
         historyCursor: action.history.next_cursor ?? null,
         hasOlderHistory: Boolean(action.history.next_cursor),
+        runUsageCost: threadSwitched ? null : state.runUsageCost,
         pendingGate,
         activeRunId: pendingGate?.run_id ?? (action.history.in_progress ? state.activeRunId : null),
         status: action.history.in_progress ? action.history.in_progress.state : "idle",
@@ -106,6 +148,15 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         historyCursor: action.history.next_cursor ?? null,
         hasOlderHistory: Boolean(action.history.next_cursor),
       }
+    case "session":
+      return { ...state, session: action.session }
+    case "notice":
+      return { ...state, notice: action.message }
+    case "approval_count":
+      // The badge polls on an interval; an unchanged count must not spawn a new
+      // state object (and the render it triggers). Return the same reference.
+      if (state.approvalCount === action.count) return state
+      return { ...state, approvalCount: action.count }
     case "run_started":
       return {
         ...state,
@@ -113,12 +164,17 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         activeRunId: action.runId ?? state.activeRunId,
         status: action.status ?? "running",
         isThinking: true,
+        notice: null,
+        runUsageCost: null,
+        lastTerminalRunId: null,
       }
     case "user_sent":
       return {
         ...state,
         status: "sent",
         isThinking: true,
+        notice: null,
+        runUsageCost: null,
         activity: clearRunningActivity(state.activity),
         transcript: [
           ...state.transcript,
@@ -165,7 +221,13 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
       return { ...state, status: event.message }
     case "run_status":
       if (isFailedRunStatus(event.status)) {
-        return appendRunFailure(state, event)
+        return applyTerminalRun(
+          state,
+          event.run_id,
+          event.status,
+          event.thread_id,
+          runFailureMessage(statusKey(event.status), event.failure_category),
+        )
       }
       return {
         ...state,
@@ -173,6 +235,23 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
         activeRunId: isTrackedRunStatus(event.status) ? event.run_id ?? state.activeRunId : null,
         isThinking: isThinkingRunStatus(event.status),
       }
+    case "run_cancelled": {
+      const cancelledStatus = event.status ?? "cancelled"
+      return applyTerminalRun(
+        state,
+        event.run_id,
+        cancelledStatus,
+        event.thread_id,
+        runFailureMessage(statusKey(cancelledStatus)),
+      )
+    }
+    case "run_usage":
+      return {
+        ...state,
+        runUsageCost: { runId: event.run_id, threadId: event.thread_id, usage: event.usage, cost: event.cost },
+      }
+    case "notice":
+      return { ...state, notice: event.message }
     case "stream_chunk":
       return appendAssistantChunk(state, event.content, event.thread_id)
     case "response":
@@ -229,45 +308,16 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
         }),
       }
     case "gate_required":
-      const gateRunId = "run_id" in event ? event.run_id ?? state.activeRunId : state.activeRunId
+    case "approval_needed": {
+      const pendingGate = toPendingGate(event, state)
       return {
         ...state,
         isThinking: false,
         status: "waiting for approval",
-        activeRunId: gateRunId,
-        pendingGate: {
-          request_id: event.request_id,
-          thread_id: event.thread_id ?? state.activeThreadId ?? "",
-          run_id: gateRunId,
-          gate_ref: "gate_ref" in event ? event.gate_ref : null,
-          gate_name: event.gate_name,
-          tool_name: event.tool_name,
-          description: event.description,
-          parameters: event.parameters,
-          extension_name: event.extension_name,
-          provider: event.provider,
-          account_label: event.account_label,
-          challenge_kind: event.challenge_kind,
-          authorization_url: event.authorization_url,
-          expires_at: event.expires_at,
-          resume_kind: event.resume_kind,
-        },
+        activeRunId: pendingGate.run_id ?? state.activeRunId,
+        pendingGate,
       }
-    case "approval_needed":
-      return {
-        ...state,
-        isThinking: false,
-        status: "waiting for approval",
-        pendingGate: {
-          request_id: event.request_id,
-          thread_id: event.thread_id ?? state.activeThreadId ?? "",
-          gate_name: "approval",
-          tool_name: event.tool_name,
-          description: event.description,
-          parameters: event.parameters,
-          resume_kind: { kind: "approval", allow_always: event.allow_always },
-        },
-      }
+    }
     case "gate_resolved":
       return { ...state, pendingGate: null, status: event.message, isThinking: true }
     case "onboarding_state":
@@ -281,10 +331,115 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
           status: event.state === "failed" ? "error" : "info",
         }),
       }
+    case "warning":
+      return {
+        ...state,
+        activity: pushActivity(state.activity, {
+          id: `warning-${Date.now()}`,
+          label: event.source ? `${event.source} warning` : "warning",
+          detail: event.message,
+          status: "info",
+        }),
+      }
     case "error":
       return reduceUiState(state, { type: "error", message: event.message })
     default:
       return state
+  }
+}
+
+// Build a PendingGateInfo from either gate_required or approval_needed. Both
+// reducer cases share this so the field mapping can never drift. Optional wire
+// fields are read defensively — approval_needed's AppEvent type omits several of
+// them, but the runtime frame may still carry them (e.g. approval_context).
+function toPendingGate(
+  event: Extract<AppEvent, { type: "gate_required" }> | Extract<AppEvent, { type: "approval_needed" }>,
+  state: UiState,
+): PendingGateInfo {
+  const loose = event as {
+    run_id?: string | null
+    gate_ref?: string | null
+    gate_name?: string
+    extension_name?: string | null
+    provider?: string | null
+    account_label?: string | null
+    challenge_kind?: string | null
+    authorization_url?: string | null
+    expires_at?: string | null
+    allow_always?: boolean
+    approval_context?: ApprovalContext | null
+    resume_kind?: unknown
+  }
+  const runId = loose.run_id ?? state.activeRunId ?? null
+  const allowAlways = loose.allow_always ?? false
+  return {
+    request_id: event.request_id,
+    thread_id: event.thread_id ?? state.activeThreadId ?? "",
+    run_id: runId,
+    gate_ref: loose.gate_ref ?? null,
+    gate_name: loose.gate_name ?? "approval",
+    tool_name: event.tool_name,
+    description: event.description,
+    parameters: event.parameters,
+    extension_name: loose.extension_name,
+    provider: loose.provider,
+    account_label: loose.account_label,
+    challenge_kind: loose.challenge_kind,
+    authorization_url: loose.authorization_url,
+    expires_at: loose.expires_at,
+    allow_always: allowAlways,
+    approval_context: loose.approval_context ?? null,
+    resume_kind: loose.resume_kind ?? { kind: "approval", allow_always: allowAlways },
+  }
+}
+
+// Single terminal-run path shared by run_status (failed/killed/recovery_required/
+// cancelled) and the run_cancelled event so the two frames can never produce
+// diverging state. Semantics:
+//   cancelled → info tone, "run cancelled", clears the gate, leaves lastError
+//   failed/killed/recovery_required → error tone, sets lastError, clears the gate
+// A terminal run can never have a live gate, so pendingGate is always cleared.
+// Dedupe id prefers the frame's run_id, then the tracked activeRunId, then a
+// synthetic timestamp id so a null run_id never collapses distinct runs.
+function applyTerminalRun(
+  state: UiState,
+  runId: string | null | undefined,
+  status: string,
+  threadId: string | null | undefined,
+  detail: string,
+): UiState {
+  const key = statusKey(status)
+  const cancelled = key === "cancelled"
+  const resolvedRunId = runId ?? state.activeRunId ?? null
+  const id = resolvedRunId ? `run-${resolvedRunId}-${key}` : `run-${key}-${Date.now()}`
+  const transcript = state.transcript.some((item) => item.id === id)
+    ? state.transcript
+    : [
+        ...state.transcript,
+        {
+          id,
+          role: "system" as const,
+          text: detail,
+          threadId,
+          state: status,
+        },
+      ]
+
+  return {
+    ...state,
+    status,
+    isThinking: false,
+    activeRunId: null,
+    pendingGate: null,
+    lastError: cancelled ? state.lastError : detail,
+    lastTerminalRunId: resolvedRunId,
+    transcript,
+    activity: upsertActivity(state.activity, {
+      id,
+      label: cancelled ? "run cancelled" : "run failed",
+      detail,
+      status: cancelled ? "info" : "error",
+    }),
   }
 }
 
@@ -304,11 +459,47 @@ function assistantTimingMeta(
 }
 
 function pendingGateFromHistory(state: UiState, history: HistoryResponse): PendingGateInfo | null {
+  // An explicit gate from the timeline always wins.
   if (history.pending_gate) return history.pending_gate
   const existingGate = state.pendingGate
-  if (!existingGate || !history.in_progress) return null
+  if (!existingGate) return null
+  // Never adopt a live gate onto a different thread's history.
   if (existingGate.thread_id !== history.thread_id) return null
+  // A gate delivered by the SSE stream must survive a post-send history poll
+  // that simply doesn't carry gate/in-progress info (the /timeline response
+  // omits both). Clear it only when the timeline explicitly shows the run has
+  // moved past the gate — a reply landed after the user's turn, or the run
+  // reached a terminal state — so an in-flight approval is never wiped.
+  if (historyShowsRunSettled(history)) return null
   return existingGate
+}
+
+// True when the timeline indicates the run tied to a live gate has settled:
+// an assistant/summary reply landed after the latest user turn, or (legacy
+// turns path) the latest turn carries a terminal run state with nothing in
+// progress. The messages path relies on the reply signal, since a user
+// message's own status is not a run-lifecycle state.
+function historyShowsRunSettled(history: HistoryResponse): boolean {
+  if (hasAssistantAfterLatestUser(history)) return true
+  if (history.in_progress) return false
+  if (!history.messages && history.turns.length > 0) {
+    const last = history.turns[history.turns.length - 1]
+    if (last?.state && isTerminalRunState(last.state)) return true
+  }
+  return false
+}
+
+function isTerminalRunState(status: string): boolean {
+  return [
+    "completed",
+    "done",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "canceled",
+    "killed",
+    "recovery_required",
+  ].includes(statusKey(status))
 }
 
 function latestUserSentAtMs(transcript: TranscriptItem[]): number | undefined {
@@ -646,42 +837,6 @@ function progressDetail(kind: string): string {
       return "SSE progress: tool_running"
     default:
       return `SSE progress: ${kind}`
-  }
-}
-
-function appendRunFailure(
-  state: UiState,
-  event: Extract<AppEvent, { type: "run_status" }>,
-): UiState {
-  const status = statusKey(event.status)
-  const id = event.run_id ? `run-${event.run_id}-${status}` : `run-${status}-${Date.now()}`
-  const detail = runFailureMessage(status, event.failure_category)
-  const transcript = state.transcript.some((item) => item.id === id)
-    ? state.transcript
-    : [
-        ...state.transcript,
-        {
-          id,
-          role: "system" as const,
-          text: detail,
-          threadId: event.thread_id,
-          state: event.status,
-        },
-      ]
-
-  return {
-    ...state,
-    status: event.status,
-    isThinking: false,
-    activeRunId: null,
-    lastError: detail,
-    transcript,
-    activity: upsertActivity(state.activity, {
-      id,
-      label: "run failed",
-      detail,
-      status: "error",
-    }),
   }
 }
 

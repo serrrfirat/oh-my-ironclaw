@@ -1,4 +1,5 @@
 import type { ClientMode } from "../config"
+import { sourceColor as themeSourceColor } from "./theme"
 
 export type SlashCommandAction =
   | "threads"
@@ -11,6 +12,17 @@ export type SlashCommandAction =
   | "cancel-run"
   | "load-older"
   | "settings"
+  | "logs"
+  | "traces"
+  | "workspace"
+  | "projects"
+  | "inbox"
+  | "retry"
+  | "delete-thread"
+  | "outbound"
+  | "tools"
+  | "attach"
+  | "save"
   | "local-command"
   | "quit"
 export type SlashCommandSource = "remote" | "local" | "tui"
@@ -20,10 +32,14 @@ export type SlashCommand = {
   source: SlashCommandSource
   action?: SlashCommandAction
   localArgs?: string[]
+  // When true, the command accepts trailing arguments after its name, so
+  // `submit()` matches it on the first token (e.g. `/attach <path>`) rather than
+  // requiring the whole input to equal the command name.
+  takesArgs?: boolean
 }
 
 const REMOTE_PRODUCT_COMMANDS: SlashCommand[] = [
-  { name: "/model", description: "Show or switch the active model", source: "remote", action: "models" },
+  { name: "/model", description: "Show or switch the active model (set-provider passthrough)", source: "remote", action: "models" },
   { name: "/models", description: "Show available models in the picker", source: "remote", action: "models" },
   { name: "/status", description: "Show Reborn product workflow status", source: "remote" },
   { name: "/progress", description: "Alias for Reborn product workflow status", source: "remote" },
@@ -31,8 +47,9 @@ const REMOTE_PRODUCT_COMMANDS: SlashCommand[] = [
 
 const REMOTE_SKILLS_COMMAND: SlashCommand = {
   name: "/skills",
-  description: "Show product workflow skill catalog",
+  description: "Open the WebChat v2 skills surface",
   source: "remote",
+  action: "skills",
 }
 
 const REMOTE_EXTENSION_COMMAND: SlashCommand = {
@@ -64,74 +81,42 @@ const LOCAL_EXTENSION_SEARCH_COMMAND: SlashCommand = {
   localArgs: ["extension", "search"],
 }
 
+// Remote observability + files surfaces (WebChat v2 HTTP).
+const REMOTE_SURFACE_COMMANDS: SlashCommand[] = [
+  { name: "/logs", description: "Open the remote log viewer (level/target/thread filters, follow)", source: "remote", action: "logs" },
+  { name: "/traces", description: "Open trace credit / holds / account", source: "remote", action: "traces" },
+  { name: "/projects", description: "Open projects (requires reborn_projects feature)", source: "remote", action: "projects" },
+]
+
 const LOCAL_CLI_COMMANDS: SlashCommand[] = [
   { name: "/doctor", description: "Run ironclaw-reborn doctor", source: "local", action: "local-command", localArgs: ["doctor"] },
-  {
-    name: "/profile",
-    description: "Run ironclaw-reborn profile list",
-    source: "local",
-    action: "local-command",
-    localArgs: ["profile", "list"],
-  },
-  {
-    name: "/channels-list",
-    description: "Run ironclaw-reborn channels list",
-    source: "local",
-    action: "local-command",
-    localArgs: ["channels", "list"],
-  },
+  { name: "/profile", description: "Run ironclaw-reborn profile list", source: "local", action: "local-command", localArgs: ["profile", "list"] },
+  { name: "/channels-list", description: "Run ironclaw-reborn channels list", source: "local", action: "local-command", localArgs: ["channels", "list"] },
   { name: "/hooks", description: "Run ironclaw-reborn hooks list", source: "local", action: "local-command", localArgs: ["hooks", "list"] },
-  {
-    name: "/model-status",
-    description: "Run ironclaw-reborn models status",
-    source: "local",
-    action: "local-command",
-    localArgs: ["models", "status"],
-  },
+  { name: "/model-status", description: "Run ironclaw-reborn models status", source: "local", action: "local-command", localArgs: ["models", "status"] },
   { name: "/logs", description: "Run ironclaw-reborn logs", source: "local", action: "local-command", localArgs: ["logs"] },
-  {
-    name: "/logs-json",
-    description: "Run ironclaw-reborn logs --json",
-    source: "local",
-    action: "local-command",
-    localArgs: ["logs", "--json"],
-  },
-  {
-    name: "/config-path",
-    description: "Run ironclaw-reborn config path",
-    source: "local",
-    action: "local-command",
-    localArgs: ["config", "path"],
-  },
-  {
-    name: "/traces-status",
-    description: "Run ironclaw-reborn traces status",
-    source: "local",
-    action: "local-command",
-    localArgs: ["traces", "status"],
-  },
-  {
-    name: "/traces-queue",
-    description: "Run ironclaw-reborn traces queue-status",
-    source: "local",
-    action: "local-command",
-    localArgs: ["traces", "queue-status"],
-  },
-  {
-    name: "/traces-credit",
-    description: "Run ironclaw-reborn traces credit",
-    source: "local",
-    action: "local-command",
-    localArgs: ["traces", "credit"],
-  },
+  { name: "/logs-json", description: "Run ironclaw-reborn logs --json", source: "local", action: "local-command", localArgs: ["logs", "--json"] },
+  { name: "/config-path", description: "Run ironclaw-reborn config path", source: "local", action: "local-command", localArgs: ["config", "path"] },
+  { name: "/traces-status", description: "Run ironclaw-reborn traces status", source: "local", action: "local-command", localArgs: ["traces", "status"] },
+  { name: "/traces-queue", description: "Run ironclaw-reborn traces queue-status", source: "local", action: "local-command", localArgs: ["traces", "queue-status"] },
+  { name: "/traces-credit", description: "Run ironclaw-reborn traces credit", source: "local", action: "local-command", localArgs: ["traces", "credit"] },
 ]
 
 const TUI_CONTROL_COMMANDS: SlashCommand[] = [
   { name: "/new", description: "Start a new thread", source: "tui", action: "new-thread" },
-  { name: "/automations", description: "Open schedule automation dashboard", source: "tui", action: "automations" },
+  { name: "/automations", description: "Open schedule automation dashboard (pause/resume/rename/delete)", source: "tui", action: "automations" },
   { name: "/channels", description: "Open connectable channel dashboard", source: "tui", action: "channels" },
   { name: "/settings", description: "Open settings dashboard", source: "tui", action: "settings" },
+  { name: "/tools", description: "Open per-tool permissions", source: "tui", action: "tools" },
+  { name: "/outbound", description: "Open outbound delivery defaults", source: "tui", action: "outbound" },
+  { name: "/workspace", description: "Browse filesystem mounts (read-only)", source: "tui", action: "workspace" },
+  { name: "/files", description: "Alias for /workspace", source: "tui", action: "workspace" },
   { name: "/threads", description: "Open thread picker", source: "tui", action: "threads" },
+  { name: "/inbox", description: "Jump to the next thread needing approval", source: "tui", action: "inbox" },
+  { name: "/retry", description: "Retry the last failed or cancelled run", source: "tui", action: "retry" },
+  { name: "/delete-thread", description: "Delete the active thread", source: "tui", action: "delete-thread" },
+  { name: "/attach", description: "Stage a local file: /attach <path>", source: "tui", action: "attach", takesArgs: true },
+  { name: "/save", description: "Save the nth attachment of the latest reply: /save <n>", source: "tui", action: "save", takesArgs: true },
   { name: "/history", description: "Load older timeline messages", source: "tui", action: "load-older" },
   { name: "/run-cancel", description: "Cancel the active WebChat run", source: "tui", action: "cancel-run" },
   { name: "/quit", description: "Quit this TUI", source: "tui", action: "quit" },
@@ -142,6 +127,7 @@ export function slashCommandsForMode(mode: ClientMode): SlashCommand[] {
     ...REMOTE_PRODUCT_COMMANDS,
     mode === "local" ? LOCAL_SKILLS_COMMAND : REMOTE_SKILLS_COMMAND,
     mode === "local" ? EXTENSION_OVERLAY_COMMAND : REMOTE_EXTENSION_COMMAND,
+    ...(mode === "local" ? [] : REMOTE_SURFACE_COMMANDS),
     ...(mode === "local" ? LOCAL_CLI_COMMANDS : []),
     ...(mode === "local" ? [LOCAL_EXTENSION_SEARCH_COMMAND] : []),
     ...TUI_CONTROL_COMMANDS,
@@ -166,20 +152,35 @@ export function filteredSlashCommands(input: string, commands: SlashCommand[]): 
   })
 }
 
+// Route a submitted composer line to a slash command. An exact whole-line match
+// wins (no-argument commands). Otherwise, if there are trailing arguments, the
+// first token is matched against commands that declare `takesArgs`, and the rest
+// is returned as the argument string. Returns null when nothing matches (the
+// caller then treats the line as a plain message).
+export function matchSlashCommand(
+  input: string,
+  commands: SlashCommand[],
+): { command: SlashCommand; args: string } | null {
+  const trimmed = input.trim()
+  if (!trimmed.startsWith("/")) return null
+  const exact = commands.find((command) => command.name === trimmed)
+  if (exact) return { command: exact, args: "" }
+  const spaceIndex = trimmed.indexOf(" ")
+  if (spaceIndex === -1) return null
+  const firstToken = trimmed.slice(0, spaceIndex)
+  const args = trimmed.slice(spaceIndex + 1).trim()
+  const withArgs = commands.find((command) => command.name === firstToken && command.takesArgs)
+  if (withArgs) return { command: withArgs, args }
+  return null
+}
+
 export function isSlashCommandInput(input: string): boolean {
   const trimmed = input.trimStart()
   return trimmed.startsWith("/") && !trimmed.includes(" ")
 }
 
 export function sourceColor(source: SlashCommandSource): string {
-  switch (source) {
-    case "remote":
-      return "#8cffb0"
-    case "local":
-      return "#f6ad3c"
-    case "tui":
-      return "#7aa2f7"
-  }
+  return themeSourceColor(source)
 }
 
 function slashCommandQuery(input: string): string {
