@@ -3,6 +3,8 @@ import {
   clearTitle,
   makeNotifyGate,
   notify,
+  notifyDedupKey,
+  pendingApprovalTitleCount,
   setPendingTitle,
   shouldNotify,
   type NotifyEvent,
@@ -33,8 +35,10 @@ function event(overrides: Partial<NotifyEvent> = {}): NotifyEvent {
 }
 
 describe("shouldNotify", () => {
-  const blockingKinds: NotifyKind[] = ["gate", "auth", "failed"]
-  const nonBlockingKinds: NotifyKind[] = ["final_reply", "inbox"]
+  // "inbox" is blocking: it is only emitted for a genuinely-new background
+  // pending approval, which always warrants a page at "blockers".
+  const blockingKinds: NotifyKind[] = ["gate", "auth", "failed", "inbox"]
+  const nonBlockingKinds: NotifyKind[] = ["final_reply"]
   const levels: NotifyLevel[] = ["off", "blockers", "all"]
 
   test("level off never notifies", () => {
@@ -84,6 +88,20 @@ describe("shouldNotify", () => {
         shouldNotify({ event: event({ kind }), level: "all", isActiveThreadVisible: true }),
       ).toBe(false)
     }
+  })
+
+  test("inbox (new background approval) pages at the default blockers level", () => {
+    // Regression: a new pending approval on a background thread must page at
+    // "blockers", not only at "all".
+    expect(
+      shouldNotify({ event: event({ kind: "inbox" }), level: "blockers", isActiveThreadVisible: false }),
+    ).toBe(true)
+    expect(
+      shouldNotify({ event: event({ kind: "inbox" }), level: "all", isActiveThreadVisible: false }),
+    ).toBe(true)
+    expect(
+      shouldNotify({ event: event({ kind: "inbox" }), level: "off", isActiveThreadVisible: false }),
+    ).toBe(false)
   })
 
   test("full truth table", () => {
@@ -146,6 +164,34 @@ describe("notify", () => {
     expect(stream.chunks[0]).toBe("\x07\x1b]9;ironclaw ⚑ — Deploy · run ]0;evil command\x07")
   })
 
+  test("strips 8-bit C1 controls so they can't inject titles on C1-honoring terminals", () => {
+    const stream = fakeStream()
+    notify(
+      event({
+        // \x9d = 8-bit OSC, \x9c = 8-bit ST: an attempt to smuggle a title set.
+        threadTitle: "De\x9dploy\x9c",
+        // \x9b = 8-bit CSI (…2J would clear the screen), \x90 = DCS, \x7f = DEL.
+        summary: "run \x9b2J\x90x\x7f command",
+      }),
+      { stream },
+    )
+    expect(stream.chunks[0]).toBe("\x07\x1b]9;ironclaw ⚑ — Deploy · run 2Jx command\x07")
+    // No stray C1/CSI/OSC/DCS/DEL bytes survived.
+    expect(/[\x80-\x9f\x7f]/.test(stream.chunks[0])).toBe(false)
+  })
+
+  test("strips the full C0 control range from interpolated text", () => {
+    const stream = fakeStream()
+    notify(
+      event({
+        threadTitle: "a\x00b\x08c\x1fd",
+        summary: "x\x0ay\x0dz",
+      }),
+      { stream },
+    )
+    expect(stream.chunks[0]).toBe("\x07\x1b]9;ironclaw ⚑ — abcd · xyz\x07")
+  })
+
   test("optionally updates the terminal title when opts.title is set", () => {
     const stream = fakeStream()
     notify(event({ kind: "failed" }), { stream, title: true })
@@ -204,5 +250,69 @@ describe("makeNotifyGate", () => {
     expect(gate.seen("b")).toBe(true)
     expect(gate.seen("a")).toBe(false)
     expect(gate.seen("b")).toBe(false)
+  })
+})
+
+describe("notifyDedupKey", () => {
+  test("collapses repeats within a run but distinguishes distinct runs", () => {
+    const gate = makeNotifyGate()
+    const runA = event({ kind: "failed", summary: "run failed", runId: "run-1" })
+    const runB = event({ kind: "failed", summary: "run failed", runId: "run-2" })
+    // Same run, same event → one page.
+    expect(gate.seen(notifyDedupKey(runA))).toBe(true)
+    expect(gate.seen(notifyDedupKey(runA))).toBe(false)
+    // A later run with an identical summary is NOT swallowed.
+    expect(gate.seen(notifyDedupKey(runB))).toBe(true)
+  })
+
+  test("events without a run id key on thread+kind+summary", () => {
+    const a = event({ kind: "inbox", summary: "2 threads need approval" })
+    const b = event({ kind: "inbox", summary: "2 threads need approval" })
+    expect(notifyDedupKey(a)).toBe(notifyDedupKey(b))
+    expect(notifyDedupKey(a)).toBe("thread-1|inbox||2 threads need approval")
+  })
+})
+
+describe("pendingApprovalTitleCount", () => {
+  test("does not double-count the active thread's gate already in the inbox", () => {
+    // Inbox already includes the active thread (thread-1) whose gate is live.
+    expect(
+      pendingApprovalTitleCount({
+        approvalCount: 1,
+        pendingGateThreadId: "thread-1",
+        approvalThreadIds: new Set(["thread-1"]),
+      }),
+    ).toBe(1)
+  })
+
+  test("adds the live gate when its thread is not yet in the inbox count", () => {
+    // A gate appeared over SSE before the next inbox poll caught up.
+    expect(
+      pendingApprovalTitleCount({
+        approvalCount: 0,
+        pendingGateThreadId: "thread-1",
+        approvalThreadIds: new Set(),
+      }),
+    ).toBe(1)
+  })
+
+  test("counts background approvals plus a not-yet-polled active gate", () => {
+    expect(
+      pendingApprovalTitleCount({
+        approvalCount: 2,
+        pendingGateThreadId: "thread-active",
+        approvalThreadIds: new Set(["thread-a", "thread-b"]),
+      }),
+    ).toBe(3)
+  })
+
+  test("no live gate: reflects the inbox count as-is", () => {
+    expect(
+      pendingApprovalTitleCount({
+        approvalCount: 2,
+        pendingGateThreadId: null,
+        approvalThreadIds: new Set(["thread-a", "thread-b"]),
+      }),
+    ).toBe(2)
   })
 })

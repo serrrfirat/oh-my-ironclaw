@@ -1,4 +1,6 @@
 import type { AutomationInfo } from "../gateway/types"
+import { isTerminalRunState } from "../state"
+import { normalizeStatusKey as statusKey } from "./theme"
 
 // Pure selectors that turn existing app state + fetched lists into the homepage
 // (control-room) view-model. No React, no fetch, no Date.now() — callers pass
@@ -263,26 +265,11 @@ function parseMs(value?: string | null): number | null {
   return Number.isFinite(ms) ? ms : null
 }
 
-// Normalize an arbitrary status string to a canon key (matches state.ts/theme.ts).
-function statusKey(status: string): string {
-  return status
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .replace(/[-\s]+/g, "_")
-    .toLowerCase()
-}
-
+// A run status that must not appear in the ACTIVE list: the shared terminal
+// run-state set (from state.ts) plus "idle" — an idle thread has no run in
+// flight, so it is excluded here even though it is not a terminal run state.
 function isTerminalStatus(status: string): boolean {
-  return [
-    "completed",
-    "done",
-    "succeeded",
-    "idle",
-    "failed",
-    "cancelled",
-    "canceled",
-    "killed",
-    "recovery_required",
-  ].includes(statusKey(status))
+  return statusKey(status) === "idle" || isTerminalRunState(status)
 }
 
 function projectPhase(status: string, capabilityId?: string | null): string {

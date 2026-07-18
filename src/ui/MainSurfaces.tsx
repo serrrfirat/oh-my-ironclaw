@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type RefObject } from "react"
 import type { PendingGateInfo, ThreadInfo } from "../gateway/types"
 import type { RunUsageCost } from "../state"
 import { attachmentChipLabel, type StagedAttachment } from "./attachments"
+import { formatUsd } from "./homeData"
 import { threadDisplayTitle, type ThreadPreviewMap } from "../threadPreviews"
 import { transcriptItemContentLength, type TranscriptItem } from "../transcript"
 import { activityGroupSummary, groupTranscriptEntries } from "./activityGroups"
@@ -1053,8 +1054,9 @@ function usageCostSummary(usageCost?: RunUsageCost | null, activeThreadId?: stri
   const parts: string[] = []
   if (usage) parts.push(`${formatTokens(usage.input_tokens)}↑ ${formatTokens(usage.output_tokens)}↓`)
   if (cost?.total_cost_usd) {
-    const total = Number(cost.total_cost_usd)
-    if (Number.isFinite(total)) parts.push(`$${total.toFixed(total < 0.01 ? 4 : 2)}`)
+    // Share the home vitals USD rule so money formats identically everywhere.
+    const formatted = formatUsd(Number(cost.total_cost_usd))
+    if (formatted) parts.push(formatted)
   }
   return parts.length ? parts.join(" · ") : null
 }

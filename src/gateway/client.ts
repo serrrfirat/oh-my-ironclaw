@@ -1202,6 +1202,9 @@ export function mapWebChatEvents(frame: RebornWebChatEventFrame | null, threadId
       }]
     }
     case "projection_snapshot":
+      // A snapshot replays the whole thread on (re)connect. Tag its events so
+      // the UI can render them without re-paging the user for old backlog.
+      return projectionEvents(frame, threadId).map(markReplayed)
     case "projection_update":
       return projectionEvents(frame, threadId)
     default:
@@ -1211,6 +1214,15 @@ export function mapWebChatEvents(frame: RebornWebChatEventFrame | null, threadId
 
 function compactEvents(...events: Array<AppEvent | null>): AppEvent[] {
   return events.filter((event): event is AppEvent => Boolean(event))
+}
+
+// Flag a projection_snapshot-sourced event as replayed backlog (see AppEvent).
+// Only the notification-bearing kinds carry the flag; other kinds are unaffected.
+function markReplayed(event: AppEvent): AppEvent {
+  if (event.type === "response" || event.type === "run_status" || event.type === "gate_required") {
+    event.replayed = true
+  }
+  return event
 }
 
 function runUsageEvent(frame: RebornWebChatEventFrame, threadId: string): AppEvent | null {

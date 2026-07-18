@@ -142,6 +142,24 @@ describe("buildActiveRows", () => {
     expect(rows[0]?.elapsedLabel).toBe("2m")
     expect(rows[2]?.elapsedLabel).toBe("—")
   })
+
+  test("filters idle plus every shared terminal run state (RU3)", () => {
+    const rows = buildActiveRows(
+      inputs({
+        activeRuns: [
+          { threadId: "keep", threadTitle: "Live", status: "running" },
+          { threadId: "x1", threadTitle: "Idle", status: "idle" },
+          { threadId: "x2", threadTitle: "Done", status: "completed" },
+          { threadId: "x3", threadTitle: "Failed", status: "failed" },
+          { threadId: "x4", threadTitle: "Killed", status: "killed" },
+          { threadId: "x5", threadTitle: "Recover", status: "recovery_required" },
+          { threadId: "x6", threadTitle: "Cancelled", status: "cancelled" },
+        ],
+      }),
+      NOW,
+    )
+    expect(rows.map((r) => r.threadId)).toEqual(["keep"])
+  })
 })
 
 describe("buildVitals", () => {

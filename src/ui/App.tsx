@@ -57,6 +57,8 @@ import {
   clearTitle,
   makeNotifyGate,
   notify,
+  notifyDedupKey,
+  pendingApprovalTitleCount,
   setPendingTitle,
   shouldNotify,
   type NotifyEvent,
@@ -212,7 +214,14 @@ export function App({ config }: AppProps) {
   const conversationVisibleRef = useRef(false)
   const activeOverlayRef = useRef<ActiveOverlay>(null)
   const notifyGateRef = useRef(makeNotifyGate())
-  const prevApprovalCountRef = useRef(0)
+  // -1 is a sentinel meaning "no baseline yet for this connection": the first
+  // poll after (re)connect seeds the baseline instead of paging the whole
+  // pre-existing approval backlog.
+  const prevApprovalCountRef = useRef(-1)
+  // Thread ids currently in the approval inbox. Drives new-approval detection
+  // (page only genuinely-new background threads) and the title count (so the
+  // active thread's own live gate is not double-counted).
+  const approvalThreadIdsRef = useRef<ReadonlySet<string>>(new Set())
   const titleCountRef = useRef<number>(-1)
   const automationsSigRef = useRef<string>("")
   const homeCreditsSigRef = useRef<string>("")
@@ -400,6 +409,28 @@ export function App({ config }: AppProps) {
     copyTextToClipboard(selectedText)
   })
 
+  // Whether a free-text field currently owns keyboard input. The global ctrl+h
+  // home-toggle must not fire in these contexts: some terminals send Backspace as
+  // ^H, and there editing (of the composer / a rename / token / target / search
+  // field) must win over toggling home. The /home command still reaches home.
+  const isTextInputFocused = (): boolean => {
+    // Conversation composer — also the sink for the slash-command palette and
+    // inline "/…" filtering, both of which keep activeOverlay null.
+    if (!showHome && activeOverlay === null) return true
+    if (activeOverlay === "commands") return true // slash palette filters the composer
+    if (activeOverlay === "threads") return true // thread palette search box
+    if (activeOverlay === "skills") return true // local skill search-as-you-type
+    if (automationRenameActive) return true // automation rename field
+    if (extensionSetupInputKey !== null) return true // extension setup field
+    if (llmProviderSetupInputKey !== null || llmProviderForm !== null || nearAiWalletInputActive) return true
+    if (logEditingTarget) return true // log target filter field
+    if (remoteSkillSearching || skillInstall !== null) return true // remote skill search / install form
+    if (activeOverlay === "projects" && projectsView === "create") return true // new-project name field
+    // Manual-token auth gate exposes a live token input.
+    if (state.pendingGate && isAuthGate(state.pendingGate) && isManualTokenGate(state.pendingGate)) return true
+    return false
+  }
+
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
       clearTitle()
@@ -412,8 +443,11 @@ export function App({ config }: AppProps) {
       copyTextToClipboard(lastSelectedTextRef.current || textareaRef.current?.plainText || input)
       return
     }
-    // ctrl+h toggles the home control room from anywhere (closing any overlay).
-    if (key.ctrl && key.name === "h") {
+    // ctrl+h toggles the home control room from anywhere (closing any overlay),
+    // except while a text input is focused: some terminals send Backspace as ^H,
+    // and there the keystroke must edit text, not toggle home (the /home command
+    // still opens home from a text field). From non-input contexts ctrl+h works.
+    if (key.ctrl && key.name === "h" && !isTextInputFocused()) {
       key.preventDefault()
       key.stopPropagation()
       toggleHome()
@@ -1397,7 +1431,14 @@ export function App({ config }: AppProps) {
   // Keep the terminal (and tmux window) title flagged with the count of things
   // waiting on the user: pending approvals across threads + the live gate.
   useEffect(() => {
-    const total = state.approvalCount + (state.pendingGate ? 1 : 0)
+    // The approval inbox already counts the active thread's own gate, so add the
+    // live gate only when its thread is not already represented (avoids the
+    // "⚑ 2 when 1 pending" double-count). See pendingApprovalTitleCount.
+    const total = pendingApprovalTitleCount({
+      approvalCount: state.approvalCount,
+      pendingGateThreadId: state.pendingGate?.thread_id ?? null,
+      approvalThreadIds: approvalThreadIdsRef.current,
+    })
     if (total === titleCountRef.current) return
     titleCountRef.current = total
     setPendingTitle(total)
@@ -1478,22 +1519,36 @@ export function App({ config }: AppProps) {
   useEffect(() => {
     if (!state.connected) return
     let cancelled = false
+    // Re-establish the approval baseline for this connection so a reconnect
+    // doesn't page the whole backlog that accumulated while disconnected.
+    prevApprovalCountRef.current = -1
     async function pollInbox() {
       try {
         const inbox = await client.approvalInbox()
         if (cancelled) return
-        // Rising approval count → page the user (level "all" only; suppressed
-        // while a conversation is the visible surface).
-        if (inbox.count > prevApprovalCountRef.current) {
-          const first = inbox.threads.find((thread) => thread.thread_id !== activeThreadIdRef.current) ?? inbox.threads[0]
+        const prevCount = prevApprovalCountRef.current
+        const prevIds = approvalThreadIdsRef.current
+        // Genuinely-new pending approvals on *background* threads (not the active
+        // thread, whose own gate already pages over SSE). A pending approval is a
+        // blocker, so kind "inbox" is classified blocking (notify.ts) and pages
+        // at the default "blockers" level — the whole point of the inbox badge.
+        const newBackground = inbox.threads.filter(
+          (thread) => thread.thread_id !== activeThreadIdRef.current && !prevIds.has(thread.thread_id),
+        )
+        // Skip the first poll of a connection (prevCount < 0 baseline): only page
+        // once a baseline exists, so a genuinely-new arrival pages and pre-existing
+        // backlog does not.
+        if (prevCount >= 0 && newBackground.length > 0) {
+          const first = newBackground[0]
           maybeNotify({
             kind: "inbox",
-            threadId: first?.thread_id ?? "inbox",
-            threadTitle: threadTitleFor(first?.thread_id),
-            summary: `${inbox.count} ${inbox.count === 1 ? "thread needs" : "threads need"} approval`,
+            threadId: first.thread_id,
+            threadTitle: threadTitleFor(first.thread_id),
+            summary: inbox.count === 1 ? "1 thread needs approval" : `${inbox.count} threads need approval`,
           })
         }
         prevApprovalCountRef.current = inbox.count
+        approvalThreadIdsRef.current = new Set(inbox.threads.map((thread) => thread.thread_id))
         dispatch({ type: "approval_count", count: inbox.count })
       } catch {
         // ignore; badge stays at its last value
@@ -1562,9 +1617,21 @@ export function App({ config }: AppProps) {
             if (cancelled || activeThreadIdRef.current !== threadId) break
             const eventThreadId = threadIdFromEvent(event)
             if (eventThreadId && eventThreadId !== activeThreadIdRef.current) continue
-            if (event.type === "response") applyModelCommandResponse(event.content)
-            dispatch({ type: "event", event })
-            maybeNotify(notifyEventForAppEvent(event, eventThreadId))
+            // A slash-command ack (e.g. /model, model list) arrives as a
+            // `response` frame and is consumed here; don't also page it as a
+            // "reply ready" final_reply. Genuine assistant replies also arrive as
+            // `response` frames but are not consumed, so they still page.
+            const consumedAsCommand = event.type === "response" ? applyModelCommandResponse(event.content) : false
+            // Stamp the calendar day so the (pure) run_usage cost reducer can
+            // dedup by run_id and roll over "today $" at midnight without Date().
+            dispatch({ type: "event", event, dayKey: currentDayKey() })
+            if (!consumedAsCommand) {
+              // Events replayed from a projection_snapshot on (re)connect are old
+              // backlog; maybeNotify records their dedup key but never pages, so a
+              // reconnect can't burst notifications for gates/replies/failures the
+              // user already saw.
+              maybeNotify(notifyEventForAppEvent(event, eventThreadId), { replayed: eventIsReplayed(event) })
+            }
             if (isTerminalRunStatusEvent(event)) void refreshThreadFromEvent(eventThreadId)
           }
           reconnectDelayMs = SSE_CONSUMER_MIN_MS
@@ -1602,6 +1669,7 @@ export function App({ config }: AppProps) {
           threadId: eventThreadId ?? "",
           threadTitle: threadTitleFor(eventThreadId),
           summary: event.description || event.tool_name || (kind === "auth" ? "authentication required" : "approval required"),
+          runId: event.run_id ?? null,
         }
       }
       case "approval_needed":
@@ -1618,6 +1686,7 @@ export function App({ config }: AppProps) {
           threadId: eventThreadId ?? "",
           threadTitle: threadTitleFor(eventThreadId),
           summary: event.failure_category ? `run failed: ${event.failure_category}` : "run failed",
+          runId: event.run_id ?? null,
         }
       case "response":
         return {
@@ -1633,12 +1702,20 @@ export function App({ config }: AppProps) {
 
   // Page the user for an event, gated by their notify level, whether they're
   // already looking at the thread, and the per-run debounce.
-  function maybeNotify(nev: NotifyEvent | null) {
+  function maybeNotify(nev: NotifyEvent | null, options?: { replayed?: boolean }) {
     if (!nev) return
     const isActiveThreadVisible =
       Boolean(nev.threadId) && nev.threadId === activeThreadIdRef.current && conversationVisibleRef.current
-    if (!shouldNotify({ event: nev, level: notifyLevelRef.current, isActiveThreadVisible })) return
-    if (!notifyGateRef.current.seen(`${nev.threadId}|${nev.kind}|${nev.summary}`)) return
+    const allowed = shouldNotify({ event: nev, level: notifyLevelRef.current, isActiveThreadVisible })
+    // Record the dedup key regardless of whether we page right now, so a later
+    // un-suppression (surface switch, reconnect replay) can't replay the backlog.
+    // The key includes the run id, so an identical event in a *later* run is not
+    // swallowed as a repeat while a burst within one run still collapses to one.
+    const firstSeen = notifyGateRef.current.seen(notifyDedupKey(nev))
+    // Never page for replayed/snapshot backlog; seen() above still records it.
+    if (options?.replayed) return
+    if (!allowed) return
+    if (!firstSeen) return
     notify(nev)
   }
 
@@ -3976,6 +4053,19 @@ function firstLine(text: string): string {
 function threadIdFromEvent(event: AppEvent): string | null {
   if (!("thread_id" in event)) return null
   return typeof event.thread_id === "string" ? event.thread_id : null
+}
+
+// True for an event replayed from a projection_snapshot on (re)connect (old
+// backlog) rather than a live incremental update. Used to suppress re-paging.
+function eventIsReplayed(event: AppEvent): boolean {
+  return (event as { replayed?: boolean }).replayed === true
+}
+
+// Current calendar-day key (e.g. "2026-07-18"), stamped onto event dispatch so
+// the pure run_usage cost reducer can roll "today $" over at midnight and dedup
+// by run_id without reaching for Date() itself.
+function currentDayKey(): string {
+  return new Date().toISOString().slice(0, 10)
 }
 
 function isAuthGate(gate: PendingGateInfo): boolean {
