@@ -1,3 +1,4 @@
+import type { MouseEvent } from "@opentui/core"
 import type { LogEntry } from "../gateway/types"
 import type { LogFilterState } from "./logFilters"
 import { logLevelLabel } from "./logFilters"
@@ -20,6 +21,7 @@ export function LogsSurface({
   error,
   width,
   height,
+  onScroll,
 }: {
   entries: LogEntry[]
   filter: LogFilterState
@@ -34,6 +36,10 @@ export function LogsSurface({
   error: string | null
   width: number
   height: number
+  // Mouse wheel: this list is not a scrollbox (it renders a windowed slice by
+  // offset), so the wheel is wired explicitly to the same offset the up/down
+  // keys drive — up = older, down = newer.
+  onScroll?: (direction: "up" | "down") => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   // `offset` is how many entries the window is scrolled up from the newest. It
@@ -49,7 +55,13 @@ export function LogsSurface({
       <FilterStrip filter={filter} editingTarget={editingTarget} targetInput={targetInput} width={contentWidth} />
       <box style={{ height: 1 }} />
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : null}
-      <box style={{ flexDirection: "column", flexGrow: 1 }}>
+      <box
+        style={{ flexDirection: "column", flexGrow: 1 }}
+        onMouseScroll={(event: MouseEvent) => {
+          const direction = event.scroll?.direction
+          if (direction === "up" || direction === "down") onScroll?.(direction)
+        }}
+      >
         {visible.length ? (
           visible.map((entry) => <LogRow key={entry.id} entry={entry} width={contentWidth} />)
         ) : (

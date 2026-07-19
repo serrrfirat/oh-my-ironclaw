@@ -33,6 +33,7 @@ export function SkillsRemoteSurface({
   markdownStyle,
   width,
   height,
+  onRowClick,
 }: {
   skills: SkillInfo[]
   query: string
@@ -47,6 +48,7 @@ export function SkillsRemoteSurface({
   markdownStyle: SyntaxStyle
   width: number
   height: number
+  onRowClick?: (index: number) => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   return (
@@ -58,7 +60,7 @@ export function SkillsRemoteSurface({
       ) : detail ? (
         <SkillDetailPane detail={detail} markdownStyle={markdownStyle} height={height} width={contentWidth} />
       ) : (
-        <SkillList skills={skills} query={query} selectedIndex={selectedIndex} confirmingRemove={confirmingRemove} loading={loading} width={contentWidth} />
+        <SkillList skills={skills} query={query} selectedIndex={selectedIndex} confirmingRemove={confirmingRemove} loading={loading} width={contentWidth} onRowClick={onRowClick} />
       )}
       <box style={{ flexGrow: 1 }} />
       <Hint text={hintText(Boolean(detail), Boolean(install), confirmingRemove)} width={contentWidth} />
@@ -80,6 +82,7 @@ function SkillList({
   confirmingRemove,
   loading,
   width,
+  onRowClick,
 }: {
   skills: SkillInfo[]
   query: string
@@ -87,6 +90,7 @@ function SkillList({
   confirmingRemove: boolean
   loading: boolean
   width: number
+  onRowClick?: (index: number) => void
 }) {
   const selected = wrapIndex(selectedIndex, skills.length)
   const start = Math.min(Math.max(0, selected - SKILL_VISIBLE_LIMIT + 1), Math.max(0, skills.length - SKILL_VISIBLE_LIMIT))
@@ -117,6 +121,7 @@ function SkillList({
                 </>
               }
               width={width}
+              onMouseDown={onRowClick ? () => onRowClick(start + index) : undefined}
             />
           )
         })

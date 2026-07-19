@@ -13,6 +13,7 @@ export function OutboundSurface({
   error,
   width,
   height,
+  onRowClick,
 }: {
   preferences: OutboundPreferencesResponse | null
   targets: OutboundDeliveryTargetOption[]
@@ -22,6 +23,7 @@ export function OutboundSurface({
   error: string | null
   width: number
   height: number
+  onRowClick?: (index: number) => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   const currentTargetId = preferences?.final_reply_target?.target_id ?? null
@@ -55,6 +57,7 @@ export function OutboundSurface({
               alignSuffix="end"
               trailing={isCurrent ? <Tag label="current" tone="ok" /> : option.capabilities.final_replies ? null : <Tag label="no replies" tone="muted" />}
               width={contentWidth}
+              onMouseDown={onRowClick ? () => onRowClick(start + index) : undefined}
             />
           )
         })

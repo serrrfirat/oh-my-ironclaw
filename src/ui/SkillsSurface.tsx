@@ -23,6 +23,7 @@ export function SkillsSurface({
   source,
   totalCount,
   width,
+  onRowClick,
 }: {
   detail: SkillDetailView | null
   error: string | null
@@ -35,6 +36,8 @@ export function SkillsSurface({
   source: string
   totalCount: number
   width: number
+  // Click a skill to open its SKILL.md (same as cursor + enter).
+  onRowClick?: (index: number) => void
 }) {
   const modalWidth = clamp(Math.floor(width * 0.62), 64, Math.max(64, width - 10))
   const modalHeight = clamp(Math.floor(height * 0.58), 18, Math.max(18, height - 6))
@@ -63,6 +66,7 @@ export function SkillsSurface({
               source={source}
               totalCount={totalCount}
               width={modalWidth - 4}
+              onRowClick={onRowClick}
             />
           )}
         </box>
@@ -81,6 +85,7 @@ function SkillList({
   source,
   totalCount,
   width,
+  onRowClick,
 }: {
   error: string | null
   filteredSkills: SkillListItem[]
@@ -91,6 +96,7 @@ function SkillList({
   source: string
   totalCount: number
   width: number
+  onRowClick?: (index: number) => void
 }) {
   const rows = Math.max(1, height - 7)
   const start = clamp(selectedIndex - rows + 1, 0, Math.max(0, filteredSkills.length - rows))
@@ -121,6 +127,7 @@ function SkillList({
             selected={start + index === selectedIndex}
             skill={skill}
             width={width}
+            onMouseDown={onRowClick ? () => onRowClick(start + index) : undefined}
           />
         ))
       ) : (
@@ -133,11 +140,11 @@ function SkillList({
   )
 }
 
-function SkillRow({ selected, skill, width }: { selected: boolean; skill: SkillListItem; width: number }) {
+function SkillRow({ selected, skill, width, onMouseDown }: { selected: boolean; skill: SkillListItem; width: number; onMouseDown?: () => void }) {
   const nameWidth = clamp(Math.floor(width * 0.38), 18, 40)
   const descriptionWidth = Math.max(10, width - nameWidth - 4)
   return (
-    <box style={{ height: 1, flexDirection: "row", backgroundColor: selected ? theme.accentSoftBg : theme.bgCode }}>
+    <box onMouseDown={onMouseDown} style={{ height: 1, flexDirection: "row", backgroundColor: selected ? theme.accentSoftBg : theme.bgCode }}>
       <text fg={selected ? theme.accentText : theme.text}>{selected ? " " : "  "}</text>
       <text fg={selected ? theme.accentText : theme.textStrong}>{padEnd(skill.name, nameWidth)}</text>
       <text fg={selected ? theme.accentText : theme.textMuted}>{truncate(skill.description || skill.source || "No description.", descriptionWidth)}</text>

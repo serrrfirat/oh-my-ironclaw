@@ -16,6 +16,7 @@ export function ToolsSurface({
   error,
   width,
   height,
+  onRowClick,
 }: {
   rows: ToolPermissionRow[]
   globalAutoApprove: boolean
@@ -26,6 +27,7 @@ export function ToolsSurface({
   error: string | null
   width: number
   height: number
+  onRowClick?: (index: number) => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   const selected = wrapIndex(selectedIndex, rows.length)
@@ -73,6 +75,7 @@ export function ToolsSurface({
                 </>
               }
               width={contentWidth}
+              onMouseDown={onRowClick ? () => onRowClick(start + index) : undefined}
             />
           )
         })

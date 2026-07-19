@@ -158,6 +158,16 @@ The settings surface is functional: the **Tools** section cycles per-tool permis
 
 Surface-local keys are shown in each surface's footer hint (e.g. logs: `l` level · `t` target · `f` follow · `↑`/`↓` scroll · `o` older; tools: `enter` cycle · `g` global auto-approve; automations: `p` pause / `r` resume / `n` rename / `d` delete / `g` refresh; workspace: `enter` descend · `backspace` up). In automations, `d` (delete) asks for a `y`/`n` confirm; `p`/`r`/`n` apply immediately.
 
+## Mouse
+
+The whole TUI is operable with the mouse in addition to the keyboard — the mouse is purely additive, so every keyboard flow keeps working. It needs a mouse-reporting terminal (iTerm2, Kitty, WezTerm, Alacritty, modern xterm, Windows Terminal, tmux with `mouse on`, …); this works over SSH in most terminals since mouse reports travel as normal escape sequences.
+
+- **Click a row to select + activate it** — a single left click does the same thing as moving the cursor there and pressing `enter`: opening a thread (sidebar / thread picker), picking a model, running a command-palette entry, opening a Home row, opening a Settings section, viewing a skill, cycling a tool's permission, setting an outbound target, descending into / viewing a workspace entry, or running an extension's primary (install / activate) action.
+- **Select-only rows** — surfaces whose rows carry several distinct action keys don't guess an action on click; a click only moves the highlight, then you use the footer hint keys. These are Automations (`p`/`r`/`n`/`d`), Projects (`n`/`m`/`d`), LLM providers (`enter`/`e`/`s`/`l`/`g`/`w`/`t`/`m`/`x`), Channels (metadata only), and Traces holds (`a` authorizes).
+- **Buttons run their action** — approval gate **Approve / Always / Deny**, and auth panels **Open / Use token / Cancel / Checking**.
+- **Transcript** — clicking a text message enters transcript-navigation on it; clicking a tool/activity card toggles its expand/collapse. A pending gate owns interaction, so a click can't steal the gate's input.
+- **Scroll wheel** — the conversation transcript is a scroll box, so the wheel scrolls it natively (OpenTUI routes wheel events to the focused scroll box). The Logs list isn't a scroll box (it renders a windowed slice), so its wheel is wired to the same older/newer offset the `↑`/`↓` keys drive.
+
 ## Transcript navigation, per-message actions & search
 
 The conversation transcript is operable, not just a read-only scroll. Focus moves in a ring: **composer ⇄ transcript ⇄ sidebar** (`tab` toggles composer ↔ sidebar as before; the transcript is entered from the composer as described below).

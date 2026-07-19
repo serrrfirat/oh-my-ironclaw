@@ -51,6 +51,7 @@ export function ExtensionsSurface({
   setupInput,
   setupInputLabel,
   width,
+  onRowClick,
 }: {
   actionMessage?: string | null
   error?: string | null
@@ -62,6 +63,8 @@ export function ExtensionsSurface({
   setupInput?: string
   setupInputLabel?: string | null
   width: number
+  // Click runs the row's primary action (install from registry / activate).
+  onRowClick?: (index: number) => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   const selected = rows[wrapIndex(selectedIndex, rows.length)] ?? null
@@ -74,13 +77,13 @@ export function ExtensionsSurface({
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : actionMessage ? <text fg={theme.accentText}>{truncate(actionMessage, contentWidth)}</text> : null}
       {narrow ? (
         <box style={{ flexDirection: "column" }}>
-          <ExtensionList rows={rows} selectedIndex={selectedIndex} width={contentWidth} />
+          <ExtensionList rows={rows} selectedIndex={selectedIndex} width={contentWidth} onRowClick={onRowClick} />
           <box style={{ height: 1 }} />
           <ExtensionDetail row={selected} setup={setup} setupInput={setupInput} setupInputLabel={setupInputLabel} width={contentWidth} />
         </box>
       ) : (
         <box style={{ flexDirection: "row", width: contentWidth }}>
-          <ExtensionList rows={rows} selectedIndex={selectedIndex} width={listWidth} />
+          <ExtensionList rows={rows} selectedIndex={selectedIndex} width={listWidth} onRowClick={onRowClick} />
           <box style={{ width: 2 }} />
           <ExtensionDetail row={selected} setup={setup} setupInput={setupInput} setupInputLabel={setupInputLabel} width={Math.max(1, contentWidth - listWidth - 2)} />
         </box>
@@ -91,14 +94,14 @@ export function ExtensionsSurface({
   )
 }
 
-function ExtensionList({ rows, selectedIndex, width }: { rows: ExtensionRow[]; selectedIndex: number; width: number }) {
+function ExtensionList({ rows, selectedIndex, width, onRowClick }: { rows: ExtensionRow[]; selectedIndex: number; width: number; onRowClick?: (index: number) => void }) {
   const selected = wrapIndex(selectedIndex, rows.length)
   const start = clamp(selected - EXTENSION_VISIBLE_LIMIT + 1, 0, Math.max(0, rows.length - EXTENSION_VISIBLE_LIMIT))
   const visible = rows.slice(start, start + EXTENSION_VISIBLE_LIMIT)
   return (
     <box style={{ width, flexDirection: "column" }}>
       {visible.length ? visible.map((row, index) => (
-        <ExtensionListRow key={`${row.source}-${row.id}`} row={row} selected={start + index === selected} width={width} />
+        <ExtensionListRow key={`${row.source}-${row.id}`} row={row} selected={start + index === selected} width={width} onMouseDown={onRowClick ? () => onRowClick(start + index) : undefined} />
       )) : (
         <box style={{ height: 3, backgroundColor: theme.bgCode, paddingLeft: 2, paddingTop: 1 }}>
           <text fg={theme.textMuted}>No extensions</text>
@@ -108,11 +111,11 @@ function ExtensionList({ rows, selectedIndex, width }: { rows: ExtensionRow[]; s
   )
 }
 
-function ExtensionListRow({ row, selected, width }: { row: ExtensionRow; selected: boolean; width: number }) {
+function ExtensionListRow({ row, selected, width, onMouseDown }: { row: ExtensionRow; selected: boolean; width: number; onMouseDown?: () => void }) {
   const marker = selected ? ">" : row.active ? "*" : " "
   const suffix = row.installed ? row.status : "available"
   return (
-    <box style={{ height: 1, flexDirection: "row", backgroundColor: selected ? theme.bgSoft : theme.bgCode, paddingLeft: 2, paddingRight: 2 }}>
+    <box onMouseDown={onMouseDown} style={{ height: 1, flexDirection: "row", backgroundColor: selected ? theme.bgSoft : theme.bgCode, paddingLeft: 2, paddingRight: 2 }}>
       <text fg={selected || row.active ? theme.accent : theme.textMuted}>{marker} </text>
       <text fg={selected ? theme.textStrong : theme.text}>{truncate(row.name, Math.max(8, width - suffix.length - 10))}</text>
       <text fg={rowStatusColor(row)}> {truncate(suffix, 12)}</text>

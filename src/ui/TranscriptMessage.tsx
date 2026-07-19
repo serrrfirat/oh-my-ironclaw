@@ -33,6 +33,7 @@ export function TranscriptMessage({
   selected = false,
   searchMatch = false,
   onToggleActivityExpanded,
+  onSelectMessage,
 }: {
   item: TranscriptItem
   expanded: boolean
@@ -43,13 +44,18 @@ export function TranscriptMessage({
   selected?: boolean
   searchMatch?: boolean
   onToggleActivityExpanded: (id: string) => void
+  // Mouse: clicking a text message enters transcript-nav on it (the App guards
+  // against stealing a pending gate's input). Tool/activity cards keep their own
+  // expand-toggle click instead.
+  onSelectMessage?: (id: string) => void
 }) {
   const anchorId = transcriptMessageAnchorId(item.id)
   const highlight = messageHighlight(selected, searchMatch)
+  const selectOnClick = onSelectMessage ? () => onSelectMessage(item.id) : undefined
 
   if (item.role === "user") {
     return (
-      <box id={anchorId} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg ?? theme.bgSoft, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bgSoft, marginBottom: 2 }}>
+      <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg ?? theme.bgSoft, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bgSoft, marginBottom: 2 }}>
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
           <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
         </box>
@@ -59,7 +65,7 @@ export function TranscriptMessage({
 
   if (item.role === "assistant") {
     return (
-      <box id={anchorId} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bg, marginBottom: 2 }}>
+      <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bg, marginBottom: 2 }}>
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
           <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
           <BuildLine durationMs={item.meta?.durationMs} selectedModel={selectedModel} />
@@ -72,7 +78,7 @@ export function TranscriptMessage({
     const lines = item.text.split(/\r?\n/).filter(Boolean)
     const [firstLine, ...rest] = lines.length > 0 ? lines : ["thinking"]
     return (
-      <box id={anchorId} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, marginBottom: 1 }}>
+      <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, marginBottom: 1 }}>
         <box style={{ width: 1, backgroundColor: highlight?.edge ?? theme.border }} />
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
           <box style={{ height: 1, flexDirection: "row" }}>
@@ -138,7 +144,7 @@ export function TranscriptMessage({
   }
 
   return (
-    <box id={anchorId} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bg, marginBottom: 2 }}>
+    <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bg, marginBottom: 2 }}>
       <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
         <text fg={theme.warn}>{item.text || " "}</text>
       </box>

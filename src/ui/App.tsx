@@ -2023,8 +2023,8 @@ export function App({ config }: AppProps) {
 
   // Enter on the flat home selection: open the target thread (or /automations for
   // a held-automation row).
-  async function openHomeSelection() {
-    const target = resolveHomeTarget(homeInputs, homeRecentThreads.map((thread) => thread.id), nowMs, homeIndex)
+  async function openHomeSelection(index: number = homeIndex) {
+    const target = resolveHomeTarget(homeInputs, homeRecentThreads.map((thread) => thread.id), nowMs, index)
     if (!target) return
     setShowHome(false)
     if (target.kind === "automations") {
@@ -2269,8 +2269,8 @@ export function App({ config }: AppProps) {
     return providers[wrapIndex(selectedLlmProviderIndex, providers.length)] ?? null
   }
 
-  async function openSelectedSettingsSection() {
-    switch (settingsSectionAt(selectedSettingsIndex)) {
+  async function openSelectedSettingsSection(index: number = selectedSettingsIndex) {
+    switch (settingsSectionAt(index)) {
       case "Providers":
         if (operatorOnly) {
           dispatch({ type: "notice", message: "LLM providers require the operator capability." })
@@ -2654,8 +2654,8 @@ export function App({ config }: AppProps) {
     }
   }
 
-  async function openSelectedSkillDetail() {
-    const skill = filteredSkillList[wrapIndex(selectedSkillIndex, filteredSkillList.length)]
+  async function openSelectedSkillDetail(index: number = selectedSkillIndex) {
+    const skill = filteredSkillList[wrapIndex(index, filteredSkillList.length)]
     if (!skill) return
     const path = skillDetailPath(skill, skillList.details)
     setSkillDetail({ skill, content: skill.content ?? "", error: null, loading: true, path, offset: 0 })
@@ -2685,12 +2685,12 @@ export function App({ config }: AppProps) {
     await loadThread(thread.id)
   }
 
-  function selectedExtension(): ExtensionRow | null {
-    return extensionList[wrapIndex(selectedExtensionIndex, extensionList.length)] ?? null
+  function selectedExtension(index: number = selectedExtensionIndex): ExtensionRow | null {
+    return extensionList[wrapIndex(index, extensionList.length)] ?? null
   }
 
-  async function runSelectedExtensionDefaultAction() {
-    const row = selectedExtension()
+  async function runSelectedExtensionDefaultAction(index: number = selectedExtensionIndex) {
+    const row = selectedExtension(index)
     if (!row) return
     if (!row.installed) {
       await runExtensionAction(() => client.installExtension(row.entry.package_ref))
@@ -3258,12 +3258,12 @@ export function App({ config }: AppProps) {
     }
   }
 
-  function selectedRemoteSkill(): SkillInfo | null {
-    return filteredRemoteSkills[wrapIndex(remoteSkillIndex, filteredRemoteSkills.length)] ?? null
+  function selectedRemoteSkill(index: number = remoteSkillIndex): SkillInfo | null {
+    return filteredRemoteSkills[wrapIndex(index, filteredRemoteSkills.length)] ?? null
   }
 
-  async function openRemoteSkillDetail() {
-    const skill = selectedRemoteSkill()
+  async function openRemoteSkillDetail(index: number = remoteSkillIndex) {
+    const skill = selectedRemoteSkill(index)
     if (!skill) return
     setRemoteSkillDetail({ name: skill.name, content: "", loading: true, error: null, offset: 0 })
     try {
@@ -3465,9 +3465,9 @@ export function App({ config }: AppProps) {
     }
   }
 
-  async function openFsEntry() {
+  async function openFsEntry(index: number = fsSelectedIndex) {
     if (workspaceView.kind !== "browse") return
-    const entry = fsEntries[wrapIndex(fsSelectedIndex, fsEntries.length)]
+    const entry = fsEntries[wrapIndex(index, fsEntries.length)]
     if (!entry) return
     if (entry.kind === "directory") {
       await browseFs(workspaceView.mount, entry.path)
@@ -3610,8 +3610,8 @@ export function App({ config }: AppProps) {
     }
   }
 
-  async function cycleSelectedToolPermission() {
-    const row = toolRows[wrapIndex(selectedToolIndex, toolRows.length)]
+  async function cycleSelectedToolPermission(index: number = selectedToolIndex) {
+    const row = toolRows[wrapIndex(index, toolRows.length)]
     if (!row || !row.mutable) return
     const next = nextToolPermission(row.permission)
     setToolRows((rows) => rows.map((item) => (item.capabilityId === row.capabilityId ? { ...item, permission: next } : item)))
@@ -3663,8 +3663,8 @@ export function App({ config }: AppProps) {
     }
   }
 
-  async function setSelectedOutboundTarget() {
-    const option = outboundTargets[wrapIndex(selectedOutboundIndex, outboundTargets.length)]
+  async function setSelectedOutboundTarget(index: number = selectedOutboundIndex) {
+    const option = outboundTargets[wrapIndex(index, outboundTargets.length)]
     if (!option) return
     try {
       const prefs = await client.setOutboundPreferences(option.target.target_id)
@@ -3869,6 +3869,61 @@ export function App({ config }: AppProps) {
     threadDeleteConfirm,
     onInputChange: handleInputChange,
     onSubmit: submit,
+    onModelRowClick: (index: number) => void selectModel(index),
+    onThreadRowClick: (index: number) => void selectThread(index),
+    onSlashCommandClick: (command: SlashCommand) => void runSlashCommand(command),
+  }
+
+  // --- Mouse: per-surface row click handlers ---
+  // A left click reuses the SAME selection index + activate path the keyboard
+  // uses: it sets the surface's selected index and (for navigation/picker rows)
+  // runs that row's primary/enter action with the clicked index. Multi-action
+  // surfaces (Automations, Projects, LLM providers, Channels, Traces holds) are
+  // select-only — a click just moves the highlight, leaving the destructive /
+  // ambiguous action keys to the user.
+  const onHomeRowClick = (index: number) => { setSelectedHomeIndex(index); void openHomeSelection(index) }
+  const onSettingsRowClick = (index: number) => { setSelectedSettingsIndex(index); void openSelectedSettingsSection(index) }
+  const onSkillRowClick = (index: number) => { setSelectedSkillIndex(index); void openSelectedSkillDetail(index) }
+  const onRemoteSkillRowClick = (index: number) => { setRemoteSkillIndex(index); void openRemoteSkillDetail(index) }
+  const onToolRowClick = (index: number) => { setSelectedToolIndex(index); void cycleSelectedToolPermission(index) }
+  const onOutboundRowClick = (index: number) => { setSelectedOutboundIndex(index); void setSelectedOutboundTarget(index) }
+  const onExtensionRowClick = (index: number) => {
+    setSelectedExtensionIndex(index)
+    setExtensionSetup(null)
+    void runSelectedExtensionDefaultAction(index)
+  }
+  const onWorkspaceRowClick = (index: number) => {
+    setFsSelectedIndex(index)
+    if (workspaceView.kind === "mounts") {
+      const mount = fsMounts[index]
+      if (mount) void browseFs(mount.mount, "")
+    } else if (workspaceView.kind === "browse") {
+      void openFsEntry(index)
+    }
+  }
+  const onSidebarThreadClick = (threadId: string) => { setSidebarFocused(false); void loadThread(threadId) }
+  // Select-only surfaces.
+  const onAutomationRowClick = (index: number) => setSelectedAutomationIndex(index)
+  const onChannelRowClick = (index: number) => setSelectedChannelIndex(index)
+  const onProjectRowClick = (index: number) => setSelectedProjectIndex(index)
+  const onTraceHoldClick = (index: number) => setSelectedHoldIndex(index)
+  const onLlmProviderRowClick = (index: number) => {
+    setSelectedLlmProviderIndex(index)
+    setLlmProviderModels([])
+    setLlmProviderSetupInputKey(null)
+    setLlmProviderForm(null)
+    setNearAiWalletInputActive(false)
+    setNearAiWalletInput("")
+  }
+  // Transcript: clicking a text message enters transcript-nav on it. A pending
+  // gate owns interaction, so a click must not steal the gate's input; and the
+  // id must be a real selectable anchor. (Tool/activity cards keep their own
+  // expand-toggle click.)
+  const onSelectTranscriptMessage = (id: string) => {
+    if (state.pendingGate) return
+    if (!selectableTranscriptIdList.includes(id)) return
+    setSearchActive(false)
+    setNavSelectedId(id)
   }
 
   return (
@@ -3885,6 +3940,7 @@ export function App({ config }: AppProps) {
           confirmingDelete={automationConfirmDelete}
           message={automationMessage}
           width={width}
+          onRowClick={onAutomationRowClick}
         />
       ) : showChannels ? (
         <ChannelsSurface
@@ -3894,6 +3950,7 @@ export function App({ config }: AppProps) {
           loading={channelsLoading}
           selectedIndex={wrapIndex(selectedChannelIndex, channels.length)}
           width={width}
+          onRowClick={onChannelRowClick}
         />
       ) : showExtensions ? (
         <ExtensionsSurface
@@ -3907,6 +3964,7 @@ export function App({ config }: AppProps) {
           setupInput={extensionSetupInput}
           setupInputLabel={extensionSetupInputLabel(extensionSetup, extensionSetupInputKey)}
           width={width}
+          onRowClick={onExtensionRowClick}
         />
       ) : showSkills ? (
         <SkillsSurface
@@ -3921,6 +3979,7 @@ export function App({ config }: AppProps) {
           source={skillList.source}
           totalCount={skillList.configured}
           width={width}
+          onRowClick={onSkillRowClick}
         />
       ) : showLlmProviders ? (
         <LlmProvidersSurface
@@ -3937,6 +3996,7 @@ export function App({ config }: AppProps) {
           setupInputLabel={llmProviderSetupInputKey ? "API key" : null}
           snapshot={llmConfig}
           width={width}
+          onRowClick={onLlmProviderRowClick}
         />
       ) : showSettings ? (
         <SettingsSurface
@@ -3959,6 +4019,7 @@ export function App({ config }: AppProps) {
           notifyLevel={state.notifyLevel}
           status={state.status}
           width={width}
+          onRowClick={onSettingsRowClick}
         />
       ) : showRemoteSkills ? (
         <SkillsRemoteSurface
@@ -3975,6 +4036,7 @@ export function App({ config }: AppProps) {
           markdownStyle={markdownStyle}
           width={width}
           height={height}
+          onRowClick={onRemoteSkillRowClick}
         />
       ) : showLogs ? (
         <LogsSurface
@@ -3991,6 +4053,11 @@ export function App({ config }: AppProps) {
           error={logsError}
           width={width}
           height={height}
+          onScroll={(direction) =>
+            direction === "up"
+              ? setLogOffset((o) => Math.min(o + 3, Math.max(0, logEntries.length - 1)))
+              : setLogOffset((o) => Math.max(0, o - 3))
+          }
         />
       ) : showTraces ? (
         <TracesSurface
@@ -4003,6 +4070,7 @@ export function App({ config }: AppProps) {
           error={tracesError}
           width={width}
           height={height}
+          onHoldClick={onTraceHoldClick}
         />
       ) : showWorkspace ? (
         <WorkspaceSurface
@@ -4017,6 +4085,7 @@ export function App({ config }: AppProps) {
           error={workspaceError}
           width={width}
           height={height}
+          onRowClick={onWorkspaceRowClick}
         />
       ) : showProjects ? (
         <ProjectsSurface
@@ -4031,6 +4100,7 @@ export function App({ config }: AppProps) {
           error={projectsError}
           width={width}
           height={height}
+          onRowClick={onProjectRowClick}
         />
       ) : showTools ? (
         <ToolsSurface
@@ -4043,6 +4113,7 @@ export function App({ config }: AppProps) {
           error={toolsError}
           width={width}
           height={height}
+          onRowClick={onToolRowClick}
         />
       ) : showOutbound ? (
         <OutboundSurface
@@ -4054,6 +4125,7 @@ export function App({ config }: AppProps) {
           error={outboundError}
           width={width}
           height={height}
+          onRowClick={onOutboundRowClick}
         />
       ) : showHome ? (
         <HomeSurface
@@ -4067,6 +4139,7 @@ export function App({ config }: AppProps) {
           focused={homeFocusSection(homeIndex, homeNeedsYou.length, homeActive.length)}
           width={width}
           height={height}
+          onRowClick={onHomeRowClick}
         />
       ) : hasConversation ? (
         <box style={{ width, height, flexDirection: "row", backgroundColor: theme.bg }}>
@@ -4080,6 +4153,7 @@ export function App({ config }: AppProps) {
               dotContext={{ activeThreadId: state.activeThreadId, activeRunning: state.isThinking, approvalThreadIds }}
               width={sidebarLayout.sidebarWidth}
               height={height}
+              onSelect={onSidebarThreadClick}
             />
           ) : null}
           <box style={{ flexGrow: 1, height, flexDirection: "column" }}>
@@ -4106,6 +4180,7 @@ export function App({ config }: AppProps) {
               searchMatchIndex={searchMatchIndex}
               navHint={transcriptNavHint}
               onToggleActivityExpanded={toggleActivityExpanded}
+              onSelectMessage={onSelectTranscriptMessage}
               onResolve={(action) => void resolveGate(action)}
               onSelectGateAction={setSelectedGateAction}
               onSubmitAuthToken={() => void submitAuthToken()}

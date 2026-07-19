@@ -24,6 +24,8 @@ export interface HomeSurfaceProps {
   focused?: HomeSection
   width: number
   height: number
+  // Mouse: click a row to select + open it (same flat index the keyboard uses).
+  onRowClick?: (index: number) => void
 }
 
 const NEEDS_YOU_GLYPH: Record<NeedsYouRow["kind"], string> = {
@@ -49,6 +51,7 @@ export function HomeSurface({
   focused,
   width,
   height,
+  onRowClick,
 }: HomeSurfaceProps) {
   const contentWidth = Math.max(1, width - 4)
   // Flat index ranges: needs-you first, then active, then recent.
@@ -66,6 +69,7 @@ export function HomeSurface({
             row={row}
             selected={selectedIndex === index}
             width={contentWidth}
+            onMouseDown={onRowClick ? () => onRowClick(index) : undefined}
           />
         ))
       ) : (
@@ -81,6 +85,7 @@ export function HomeSurface({
             row={row}
             selected={selectedIndex === activeStart + index}
             width={contentWidth}
+            onMouseDown={onRowClick ? () => onRowClick(activeStart + index) : undefined}
           />
         ))
       ) : (
@@ -101,6 +106,7 @@ export function HomeSurface({
             previews={threadPreviews}
             selected={selectedIndex === recentStart + index}
             width={contentWidth}
+            onMouseDown={onRowClick ? () => onRowClick(recentStart + index) : undefined}
           />
         ))
       ) : (
@@ -133,7 +139,7 @@ function EmptyLine({ text, width }: { text: string; width: number }) {
   )
 }
 
-function NeedsYouListRow({ row, selected, width }: { row: NeedsYouRow; selected: boolean; width: number }) {
+function NeedsYouListRow({ row, selected, width, onMouseDown }: { row: NeedsYouRow; selected: boolean; width: number; onMouseDown?: () => void }) {
   const tone = NEEDS_YOU_TONE[row.kind]
   const glyph = NEEDS_YOU_GLYPH[row.kind]
   const text = row.detail ? `${row.threadTitle} · ${row.detail}` : row.threadTitle
@@ -146,11 +152,12 @@ function NeedsYouListRow({ row, selected, width }: { row: NeedsYouRow; selected:
       suffix={row.ageLabel}
       alignSuffix="end"
       width={width}
+      onMouseDown={onMouseDown}
     />
   )
 }
 
-function ActiveListRow({ row, selected, width }: { row: ActiveRow; selected: boolean; width: number }) {
+function ActiveListRow({ row, selected, width, onMouseDown }: { row: ActiveRow; selected: boolean; width: number; onMouseDown?: () => void }) {
   const text = row.phase ? `${row.threadTitle} · ${row.phase}` : row.threadTitle
   return (
     <ListRow
@@ -160,6 +167,7 @@ function ActiveListRow({ row, selected, width }: { row: ActiveRow; selected: boo
       suffix={row.elapsedLabel}
       alignSuffix="end"
       width={width}
+      onMouseDown={onMouseDown}
     />
   )
 }
@@ -169,13 +177,15 @@ function RecentListRow({
   previews,
   selected,
   width,
+  onMouseDown,
 }: {
   thread: ThreadInfo
   previews: ThreadPreviewMap
   selected: boolean
   width: number
+  onMouseDown?: () => void
 }) {
-  return <ListRow selected={selected} text={threadDisplayTitle(thread, previews)} width={width} />
+  return <ListRow selected={selected} text={threadDisplayTitle(thread, previews)} width={width} onMouseDown={onMouseDown} />
 }
 
 function AutomationsLine({ summary, width }: { summary: AutomationsSummary; width: number }) {

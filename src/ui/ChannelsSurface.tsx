@@ -11,6 +11,7 @@ export function ChannelsSurface({
   loading,
   selectedIndex,
   width,
+  onRowClick,
 }: {
   channels: ConnectableChannelInfo[]
   error?: string | null
@@ -18,6 +19,9 @@ export function ChannelsSurface({
   loading: boolean
   selectedIndex: number
   width: number
+  // Select-only: channel rows only show connection metadata (no enter action),
+  // so a click just moves the highlight to reveal that channel's detail.
+  onRowClick?: (index: number) => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   const selected = channels[wrapIndex(selectedIndex, channels.length)] ?? null
@@ -28,13 +32,13 @@ export function ChannelsSurface({
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : null}
       {narrow ? (
         <box style={{ flexDirection: "column" }}>
-          <ChannelList channels={channels} selectedIndex={selectedIndex} width={contentWidth} />
+          <ChannelList channels={channels} selectedIndex={selectedIndex} width={contentWidth} onRowClick={onRowClick} />
           <box style={{ height: 1 }} />
           <ChannelDetail channel={selected} width={contentWidth} />
         </box>
       ) : (
         <box style={{ flexDirection: "row", width: contentWidth }}>
-          <ChannelList channels={channels} selectedIndex={selectedIndex} width={listWidth} />
+          <ChannelList channels={channels} selectedIndex={selectedIndex} width={listWidth} onRowClick={onRowClick} />
           <box style={{ width: 2 }} />
           <ChannelDetail channel={selected} width={Math.max(1, contentWidth - listWidth - 2)} />
         </box>
@@ -45,14 +49,14 @@ export function ChannelsSurface({
   )
 }
 
-function ChannelList({ channels, selectedIndex, width }: { channels: ConnectableChannelInfo[]; selectedIndex: number; width: number }) {
+function ChannelList({ channels, selectedIndex, width, onRowClick }: { channels: ConnectableChannelInfo[]; selectedIndex: number; width: number; onRowClick?: (index: number) => void }) {
   const selected = wrapIndex(selectedIndex, channels.length)
   const start = clamp(selected - CHANNEL_VISIBLE_LIMIT + 1, 0, Math.max(0, channels.length - CHANNEL_VISIBLE_LIMIT))
   const visible = channels.slice(start, start + CHANNEL_VISIBLE_LIMIT)
   return (
     <box style={{ width, flexDirection: "column" }}>
       {visible.length ? visible.map((channel, index) => (
-        <ChannelRow key={channel.channel} channel={channel} selected={start + index === selected} width={width} />
+        <ChannelRow key={channel.channel} channel={channel} selected={start + index === selected} width={width} onMouseDown={onRowClick ? () => onRowClick(start + index) : undefined} />
       )) : (
         <box style={{ height: 3, backgroundColor: theme.bgCode, paddingLeft: 2, paddingTop: 1 }}>
           <text fg={theme.textMuted}>No connectable channels</text>
@@ -62,9 +66,9 @@ function ChannelList({ channels, selectedIndex, width }: { channels: Connectable
   )
 }
 
-function ChannelRow({ channel, selected, width }: { channel: ConnectableChannelInfo; selected: boolean; width: number }) {
+function ChannelRow({ channel, selected, width, onMouseDown }: { channel: ConnectableChannelInfo; selected: boolean; width: number; onMouseDown?: () => void }) {
   return (
-    <box style={{ height: 1, flexDirection: "row", backgroundColor: selected ? theme.bgSoft : theme.bgCode, paddingLeft: 2, paddingRight: 2 }}>
+    <box onMouseDown={onMouseDown} style={{ height: 1, flexDirection: "row", backgroundColor: selected ? theme.bgSoft : theme.bgCode, paddingLeft: 2, paddingRight: 2 }}>
       <text fg={selected ? theme.accent : theme.textMuted}>{selected ? "> " : "  "}</text>
       <text fg={selected ? theme.textStrong : theme.text}>{truncate(channel.display_name || channel.channel, Math.max(8, width - 18))}</text>
       <text fg={theme.textMuted}> {truncate(channel.strategy, 14)}</text>
