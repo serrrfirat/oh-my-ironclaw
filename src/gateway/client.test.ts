@@ -541,7 +541,7 @@ describe("WebChat event mapping", () => {
     })
   })
 
-  test("emits live projection context before final text", () => {
+  test("emits live projection context before streaming text", () => {
     const events = mapWebChatEvents(
       {
         type: "projection_update",
@@ -549,7 +549,7 @@ describe("WebChat event mapping", () => {
         state: {
           thread_id: "thread-1",
           items: [
-            { text: { id: "reply-1", body: "final answer" } },
+            { text: { id: "text:run-1", body: "final answer" } },
             { thinking: { id: "thinking:run-1:1", body: "checking context" } },
           ],
         },
@@ -557,6 +557,8 @@ describe("WebChat event mapping", () => {
       "thread-1",
     )
 
+    // Projection `text` maps to a stream_text event carrying the STABLE id, so the
+    // reducer upserts one growing bubble (never a bare finalize {type:"response"}).
     expect(events).toEqual([
       {
         type: "thinking_update",
@@ -565,11 +567,94 @@ describe("WebChat event mapping", () => {
         thread_id: "thread-1",
       },
       {
-        type: "response",
+        type: "stream_text",
+        id: "text:run-1",
         content: "final answer",
         thread_id: "thread-1",
       },
     ])
+  })
+
+  test("id-less text items key their fallback id to the run, not a global constant (F3)", () => {
+    // Two runs in the SAME thread, each with an id-less text item but a distinct
+    // run_status run_id. The synthesized fallback id must differ per run so run 2
+    // never clobbers run 1's bubble.
+    const run1 = mapWebChatEvents(
+      {
+        type: "projection_update",
+        cursor: "c1",
+        state: {
+          thread_id: "thread-1",
+          items: [
+            { type: "text", body: "run one answer" },
+            { run_status: { run_id: "run-1", status: "running" } },
+          ],
+        },
+      },
+      "thread-1",
+    )
+    const run2 = mapWebChatEvents(
+      {
+        type: "projection_update",
+        cursor: "c2",
+        state: {
+          thread_id: "thread-1",
+          items: [
+            { type: "text", body: "run two answer" },
+            { run_status: { run_id: "run-2", status: "running" } },
+          ],
+        },
+      },
+      "thread-1",
+    )
+
+    const text1 = run1.find((event) => event.type === "stream_text")
+    const text2 = run2.find((event) => event.type === "stream_text")
+    expect(text1).toMatchObject({ type: "stream_text", id: "text:run-1", content: "run one answer" })
+    expect(text2).toMatchObject({ type: "stream_text", id: "text:run-2", content: "run two answer" })
+    expect((text1 as { id: string }).id).not.toBe((text2 as { id: string }).id)
+  })
+
+  test("id-less text falls back to a per-run id derived from run_state.run_id (F3)", () => {
+    const events = mapWebChatEvents(
+      {
+        type: "projection_update",
+        cursor: "c1",
+        run_state: { run_id: "run-42" },
+        state: {
+          thread_id: "thread-1",
+          items: [{ text: { body: "answer without an id" } }],
+        },
+      },
+      "thread-1",
+    )
+    expect(events).toContainEqual({
+      type: "stream_text",
+      id: "text:run-42",
+      content: "answer without an id",
+      thread_id: "thread-1",
+    })
+  })
+
+  test("projection_snapshot tags stream_text as replayed (F4)", () => {
+    const events = mapWebChatEvents(
+      {
+        type: "projection_snapshot",
+        cursor: "c1",
+        state: {
+          thread_id: "thread-1",
+          items: [{ text: { id: "text:run-1", body: "restored reply" } }],
+        },
+      },
+      "thread-1",
+    )
+    expect(events).toContainEqual({
+      type: "stream_text",
+      id: "text:run-1",
+      content: "restored reply",
+      thread_id: "thread-1",
+      replayed: true,
+    })
   })
 
   test("maps projection gates to approval requests after run status", () => {

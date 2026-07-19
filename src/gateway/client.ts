@@ -1219,7 +1219,15 @@ function compactEvents(...events: Array<AppEvent | null>): AppEvent[] {
 // Flag a projection_snapshot-sourced event as replayed backlog (see AppEvent).
 // Only the notification-bearing kinds carry the flag; other kinds are unaffected.
 function markReplayed(event: AppEvent): AppEvent {
-  if (event.type === "response" || event.type === "run_status" || event.type === "gate_required") {
+  if (
+    event.type === "response" ||
+    event.type === "run_status" ||
+    event.type === "gate_required" ||
+    // stream_text carries the flag too so the reducer can tell a replayed
+    // cumulative body (projection_snapshot on reconnect) from a live one and
+    // refuse to overwrite an already-finalized reply with the stale body.
+    event.type === "stream_text"
+  ) {
     event.replayed = true
   }
   return event
@@ -1278,6 +1286,7 @@ function prioritizedEvent(events: AppEvent[]): AppEvent | null {
   return (
     events.find((event) => event.type === "run_status") ??
     events.find((event) => event.type === "response") ??
+    events.find((event) => event.type === "stream_text") ??
     events.find((event) => event.type === "thinking_update") ??
     events[0] ??
     null
@@ -1342,6 +1351,9 @@ function projectionEvents(frame: RebornWebChatEventFrame, threadId: string): App
   const workSummaryEvents: AppEvent[] = []
   const skillActivationEvents: AppEvent[] = []
   const textEvents: AppEvent[] = []
+  // Per-run token for id-less text items so two runs in the same thread stream
+  // into separate bubbles instead of colliding on a global constant.
+  const fallbackRunId = projectionRunId(frame, items)
 
   for (const item of items) {
     runStatusEvents.push(...runStatusFromProjectionItem(item).map((runStatus): AppEvent => ({
@@ -1385,23 +1397,55 @@ function projectionEvents(frame: RebornWebChatEventFrame, threadId: string): App
       feedback: activation.feedback,
       thread_id: threadId,
     })))
-    textEvents.push(...textBodyFromProjectionItem(item).map((content): AppEvent => ({ type: "response", content, thread_id: threadId })))
+    textEvents.push(...textFromProjectionItem(item, threadId, fallbackRunId).map(({ id, body }): AppEvent => ({ type: "stream_text", id, content: body, thread_id: threadId })))
   }
 
   const events = [...runStatusEvents, ...gateEvents, ...thinkingEvents, ...workSummaryEvents, ...skillActivationEvents, ...textEvents]
   return events.length > 0 ? events : [{ type: "status", message: frame.type, thread_id: threadId }]
 }
 
-function textBodyFromProjectionItem(item: Record<string, unknown>): string[] {
-  const directBody = item.type === "text" && typeof item.body === "string" ? item.body : null
-  if (directBody) return [directBody]
+// Extract the assistant `text` projection item's STABLE id + cumulative body.
+// The id lets the reducer upsert one growing bubble (see stream_text). When the
+// wire omits an id we synthesize a per-RUN stable one (`text:{run_id}`, or a
+// per-thread token as a last resort) so a body streams into a single bubble AND
+// two distinct runs never collide on one constant id / clobber each other.
+function textFromProjectionItem(
+  item: Record<string, unknown>,
+  threadId: string,
+  fallbackRunId?: string | null,
+): Array<{ id: string; body: string }> {
+  const itemRunId = typeof item.run_id === "string" && item.run_id ? item.run_id : fallbackRunId
+  const fallbackId = itemRunId ? `text:${itemRunId}` : `text:thread:${threadId}`
+  if (item.type === "text" && typeof item.body === "string") {
+    return [{ id: typeof item.id === "string" ? item.id : fallbackId, body: item.body }]
+  }
 
   const text = item.text
   if (text && typeof text === "object" && "body" in text && typeof text.body === "string") {
-    return [text.body]
+    const id = "id" in text && typeof text.id === "string" ? text.id : fallbackId
+    return [{ id, body: text.body }]
   }
 
   return []
+}
+
+// Best-effort run id for a projection frame, used to key id-less text items to a
+// single run. Prefers the explicit run_state/prompt run id, then any run_status
+// item's run id in the same frame; null when the frame carries no run identity.
+function projectionRunId(
+  frame: RebornWebChatEventFrame,
+  items: Array<Record<string, unknown>>,
+): string | null {
+  const fromState = frame.run_state?.run_id
+  if (typeof fromState === "string" && fromState) return fromState
+  const fromPrompt = frame.prompt?.turn_run_id
+  if (typeof fromPrompt === "string" && fromPrompt) return fromPrompt
+  for (const item of items) {
+    for (const runStatus of runStatusFromProjectionItem(item)) {
+      if (typeof runStatus.run_id === "string" && runStatus.run_id) return runStatus.run_id
+    }
+  }
+  return null
 }
 
 function thinkingFromProjectionItem(item: Record<string, unknown>): Array<{ id: string; body: string }> {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { accumulateTodayCost, initialUiState, isTerminalRunState, reduceUiState } from "./state"
+import type { AppEvent } from "./gateway/types"
 import { normalizeStatusKey, statusTone } from "./ui/theme"
 import { transcriptActivityLines, type TranscriptItem } from "./transcript"
 
@@ -2060,5 +2061,311 @@ describe("shared status normalizers (RU2/RU3)", () => {
     for (const status of ["running", "queued", "idle", "waiting_for_approval"]) {
       expect(isTerminalRunState(status)).toBe(false)
     }
+  })
+})
+
+describe("live cumulative text streaming (LIVE-CONV)", () => {
+  function running(threadId = "thread-1", runId = "run-1") {
+    return reduceUiState(initialUiState, { type: "run_started", threadId, runId, status: "running" })
+  }
+  function streamText(state: ReturnType<typeof reduceUiState>, content: string, id = "text:run-1") {
+    return reduceUiState(state, {
+      type: "event",
+      event: { type: "stream_text", id, content, thread_id: "thread-1" },
+    })
+  }
+
+  test("upserts ONE assistant bubble by stable id and REPLACES its text each frame", () => {
+    const s1 = streamText(running(), "Hel")
+    const s2 = streamText(s1, "Hello wo")
+    const s3 = streamText(s2, "Hello world")
+
+    const assistants = s3.transcript.filter((item) => item.role === "assistant")
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0]).toMatchObject({ id: "text:run-1", text: "Hello world" })
+    // The bubble grew by REPLACE, not concat — "Hel" must not survive as a prefix twice.
+    expect((assistants[0] as { text: string }).text).toBe("Hello world")
+    expect(s3.streamingAssistantId).toBe("text:run-1")
+  })
+
+  test("does not finalize/idle the run on a text frame (no terminal until final_reply)", () => {
+    const s = streamText(streamText(running(), "partial"), "partial answer")
+    expect(s.status).toBe("running")
+    expect(s.isThinking).toBe(true)
+    expect(s.activeRunId).toBe("run-1")
+    expect(s.streamingAssistantId).toBe("text:run-1")
+  })
+
+  test("final_reply reconciles with the streamed bubble (same id, no duplicate)", () => {
+    const streamed = streamText(streamText(running(), "Hello"), "Hello wor")
+    const done = reduceUiState(streamed, {
+      type: "event",
+      event: { type: "response", content: "Hello world", thread_id: "thread-1" },
+    })
+
+    const assistants = done.transcript.filter((item) => item.role === "assistant")
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0]).toMatchObject({ id: "text:run-1", text: "Hello world" })
+    expect(done.streamingAssistantId).toBeNull()
+    expect(done.isThinking).toBe(false)
+    expect(done.activeRunId).toBeNull()
+    expect(done.status).toBe("idle")
+  })
+
+  test("a clean terminal run_status settles the streamed bubble and clears streaming", () => {
+    const streamed = streamText(running(), "Answer text")
+    const completed = reduceUiState(streamed, {
+      type: "event",
+      event: { type: "run_status", status: "completed", run_id: "run-1", thread_id: "thread-1" },
+    })
+
+    expect(completed.streamingAssistantId).toBeNull()
+    expect(completed.isThinking).toBe(false)
+    expect(completed.activeRunId).toBeNull()
+    expect(completed.activeRunSinceMs).toBeNull()
+    const assistant = completed.transcript.find((item) => item.role === "assistant")
+    expect(assistant).toMatchObject({ id: "text:run-1", text: "Answer text" })
+    expect(typeof (assistant as { meta?: { completedAtMs?: number } })?.meta?.completedAtMs).toBe("number")
+  })
+
+  test("a snapshot text frame with no active run materializes a settled bubble without reactivating", () => {
+    // No run_started: emulates a projection_snapshot replayed for an idle thread.
+    // A real snapshot frame is tagged replayed by client.markReplayed.
+    const s = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "stream_text", id: "text:run-9", content: "old reply", thread_id: "thread-1", replayed: true },
+    })
+    expect(s.transcript.filter((item) => item.role === "assistant")).toHaveLength(1)
+    expect(s.streamingAssistantId).toBeFalsy()
+    expect(s.isThinking).toBe(false)
+    expect(s.status).toBe("starting")
+  })
+})
+
+describe("streaming state machine edge cases (F1-F5)", () => {
+  function running(threadId = "thread-1", runId = "run-1") {
+    return reduceUiState(initialUiState, { type: "run_started", threadId, runId, status: "running" })
+  }
+  function ev(state: ReturnType<typeof reduceUiState>, event: AppEvent) {
+    return reduceUiState(state, { type: "event", event })
+  }
+
+  // F1: the history-refresh trigger must use the reducer's full terminal set so a
+  // run ending 'succeeded'/'done' (reply only in the timeline) still refreshes.
+  test("F1: isTerminalRunState covers succeeded/done/canceled/recovery_required with normalization", () => {
+    for (const status of ["succeeded", "done", "completed", "canceled", "cancelled", "killed", "failed", "recovery_required"]) {
+      expect(isTerminalRunState(status)).toBe(true)
+    }
+    // Normalization (case + separators) — App feeds the raw wire status through this.
+    expect(isTerminalRunState("Succeeded")).toBe(true)
+    expect(isTerminalRunState("RecoveryRequired")).toBe(true)
+    expect(isTerminalRunState("running")).toBe(false)
+    expect(isTerminalRunState("queued")).toBe(false)
+  })
+
+  test("F1: a succeeded run with the reply only in history renders it after the refresh", () => {
+    // Run ends 'succeeded' with NO live stream_text — the spinner clears but no
+    // reply is in the transcript yet.
+    const settled = reduceUiState(running(), {
+      type: "event",
+      event: { type: "run_status", status: "succeeded", run_id: "run-1", thread_id: "thread-1" },
+    })
+    expect(settled.isThinking).toBe(false)
+    expect(settled.transcript.filter((item) => item.role === "assistant")).toHaveLength(0)
+
+    // refreshThreadFromEvent fires (isTerminalRunState('succeeded') is true) and
+    // re-fetches the thread; the history carries the reply, which now renders.
+    const refreshed = reduceUiState(settled, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [
+          { turn_number: 1, user_message_id: "user-1", user_input: "hello", state: "completed", started_at: "", tool_calls: [] },
+          { turn_number: 2, user_input: "", response: "reply from history", state: "completed", started_at: "", tool_calls: [] },
+        ],
+        has_more: false,
+      },
+    })
+    const assistants = refreshed.transcript.filter((item) => item.role === "assistant")
+    expect(assistants).toHaveLength(1)
+    expect((assistants[0] as { text: string }).text).toBe("reply from history")
+  })
+
+  // F2: a clean terminal run_status arriving BEFORE final_reply must still let the
+  // reply reconcile into the existing streamed bubble — no duplicate.
+  test("F2: terminal run_status before final_reply yields ONE bubble", () => {
+    const streamed = ev(ev(running(), { type: "stream_text", id: "text:run-1", content: "Hello", thread_id: "thread-1" }),
+      { type: "stream_text", id: "text:run-1", content: "Hello wor", thread_id: "thread-1" })
+    // Terminal status FIRST (settles, clears streamingAssistantId).
+    const settled = ev(streamed, { type: "run_status", status: "completed", run_id: "run-1", thread_id: "thread-1" })
+    expect(settled.streamingAssistantId).toBeNull()
+    expect(settled.lastStreamedAssistantId).toBe("text:run-1")
+    // final_reply arrives AFTER — must reconcile into the same bubble, not append.
+    const done = ev(settled, { type: "response", content: "Hello world", thread_id: "thread-1" })
+    const assistants = done.transcript.filter((item) => item.role === "assistant")
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0]).toMatchObject({ id: "text:run-1", text: "Hello world" })
+  })
+
+  test("F2: final_reply before terminal run_status also yields ONE bubble (ordering-independent)", () => {
+    const streamed = ev(running(), { type: "stream_text", id: "text:run-1", content: "Hello wor", thread_id: "thread-1" })
+    const done = ev(streamed, { type: "response", content: "Hello world", thread_id: "thread-1" })
+    const afterTerminal = ev(done, { type: "run_status", status: "completed", run_id: "run-1", thread_id: "thread-1" })
+    const assistants = afterTerminal.transcript.filter((item) => item.role === "assistant")
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0]).toMatchObject({ id: "text:run-1", text: "Hello world" })
+  })
+
+  // F3: two id-less runs in a thread synthesize distinct ids client-side; the
+  // reducer additionally matches thread_id so a lingering bubble can't be hijacked.
+  test("F3: two runs with distinct fallback ids in one thread produce two separate bubbles", () => {
+    // Run 1 streams and settles.
+    const run1 = ev(running("thread-1", "run-1"), { type: "stream_text", id: "text:run-1", content: "answer one", thread_id: "thread-1" })
+    const run1done = ev(run1, { type: "response", content: "answer one", thread_id: "thread-1" })
+    // Run 2 starts (clears lastStreamedAssistantId) and streams under its own id.
+    const run2 = ev(reduceUiState(run1done, { type: "run_started", threadId: "thread-1", runId: "run-2", status: "running" }),
+      { type: "stream_text", id: "text:run-2", content: "answer two", thread_id: "thread-1" })
+    const run2done = ev(run2, { type: "response", content: "answer two", thread_id: "thread-1" })
+
+    const assistants = run2done.transcript.filter((item) => item.role === "assistant")
+    expect(assistants).toHaveLength(2)
+    expect(assistants.map((item) => (item as { text: string }).text)).toEqual(["answer one", "answer two"])
+  })
+
+  test("F3: a same-id frame from a different thread does not hijack the bubble", () => {
+    const run1 = ev(running("thread-1", "run-1"), { type: "stream_text", id: "text:stream", content: "thread one", thread_id: "thread-1" })
+    // A stray frame with the SAME id but a different thread must create its own bubble.
+    const crossThread = ev(run1, { type: "stream_text", id: "text:stream", content: "thread two", thread_id: "thread-2" })
+    const byThread = crossThread.transcript.filter((item) => item.role === "assistant")
+    expect(byThread).toHaveLength(2)
+    expect(byThread.find((item) => item.threadId === "thread-1")).toMatchObject({ text: "thread one" })
+    expect(byThread.find((item) => item.threadId === "thread-2")).toMatchObject({ text: "thread two" })
+  })
+
+  // F4: a replayed stream_text (projection_snapshot on reconnect) must not overwrite
+  // a finalized reply with the stale cumulative body.
+  test("F4: replayed stream_text after settle does not overwrite the finalized reply", () => {
+    const streamed = ev(running(), { type: "stream_text", id: "text:run-1", content: "Hello wor", thread_id: "thread-1" })
+    const done = ev(streamed, { type: "response", content: "Hello world (final)", thread_id: "thread-1" })
+    expect(done.transcript.find((item) => item.role === "assistant")).toMatchObject({ text: "Hello world (final)" })
+
+    // Reconnect replays the older cumulative body under the same id.
+    const replayed = ev(done, { type: "stream_text", id: "text:run-1", content: "Hello wor", thread_id: "thread-1", replayed: true })
+    const assistants = replayed.transcript.filter((item) => item.role === "assistant")
+    expect(assistants).toHaveLength(1)
+    // Finalized text preserved — not reverted to the stale streamed body.
+    expect(assistants[0]).toMatchObject({ text: "Hello world (final)" })
+  })
+
+  test("F4: a settled bubble is also protected from a late non-replayed frame with no active run", () => {
+    const streamed = ev(running(), { type: "stream_text", id: "text:run-1", content: "partial", thread_id: "thread-1" })
+    const done = ev(streamed, { type: "response", content: "final answer", thread_id: "thread-1" })
+    // No active run + settled bubble: a stray live frame must not revert it.
+    const stray = ev(done, { type: "stream_text", id: "text:run-1", content: "partial", thread_id: "thread-1" })
+    expect(stray.transcript.find((item) => item.role === "assistant")).toMatchObject({ text: "final answer" })
+  })
+
+  // F5: a first token that precedes the run being marked active must still set the
+  // streaming target so final_reply reconciles without a duplicate.
+  test("F5: first token before the run is active still reconciles at final_reply (no dup)", () => {
+    // Live stream_text with NO run_started/run_status yet (isThinking false, no run).
+    const firstToken = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "stream_text", id: "text:run-1", content: "Hel", thread_id: "thread-1" },
+    })
+    expect(firstToken.streamingAssistantId).toBe("text:run-1")
+    expect(firstToken.lastStreamedAssistantId).toBe("text:run-1")
+
+    const done = reduceUiState(firstToken, {
+      type: "event",
+      event: { type: "response", content: "Hello world", thread_id: "thread-1" },
+    })
+    const assistants = done.transcript.filter((item) => item.role === "assistant")
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0]).toMatchObject({ id: "text:run-1", text: "Hello world" })
+    expect(done.streamingAssistantId).toBeNull()
+  })
+})
+
+describe("single status source while a run is active (LIVE-CONV)", () => {
+  test("a mid-run history read does not reset status/isThinking or reflow the transcript", () => {
+    const streaming = reduceUiState(
+      reduceUiState(initialUiState, { type: "run_started", threadId: "thread-1", runId: "run-1", status: "running" }),
+      { type: "event", event: { type: "stream_text", id: "text:run-1", content: "streaming answer", thread_id: "thread-1" } },
+    )
+    // /timeline omits in-progress/gate info; the poll would otherwise idle the run.
+    const afterHistory = reduceUiState(streaming, {
+      type: "history",
+      history: { thread_id: "thread-1", turns: [], has_more: false, pending_gate: null },
+    })
+
+    expect(afterHistory.status).toBe("running")
+    expect(afterHistory.isThinking).toBe(true)
+    expect(afterHistory.activeRunId).toBe("run-1")
+    // Transcript preserved (streaming bubble kept, not dropped by a merge).
+    expect(afterHistory.transcript.filter((item) => item.role === "assistant")).toHaveLength(1)
+    expect(afterHistory.transcript.find((item) => item.role === "assistant")).toMatchObject({ id: "text:run-1" })
+  })
+
+  test("run_status adopts elapsed via Date.now() fallback when the client has no start time", () => {
+    const originalNow = Date.now
+    try {
+      Date.now = () => 5_000
+      // A tracked run_status with no prior run_started (no client-known start).
+      const adopted = reduceUiState(initialUiState, {
+        type: "event",
+        event: { type: "run_status", status: "running", run_id: "run-1", thread_id: "thread-1" },
+      })
+      expect(adopted.activeRunSinceMs).toBe(5_000)
+      expect(adopted.isThinking).toBe(true)
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  test("history in_progress without started_at falls back to now instead of leaving elapsed null", () => {
+    const originalNow = Date.now
+    try {
+      Date.now = () => 7_000
+      const state = reduceUiState(initialUiState, {
+        type: "history",
+        history: {
+          thread_id: "thread-1",
+          turns: [],
+          has_more: false,
+          pending_gate: null,
+          in_progress: { turn_number: 1, user_input: "hi", state: "running", started_at: "" },
+        },
+      })
+      expect(state.activeRunSinceMs).toBe(7_000)
+    } finally {
+      Date.now = originalNow
+    }
+  })
+})
+
+describe("running-tool legibility (LIVE-CONV)", () => {
+  test("a running capability preview carries its input/command on the row mid-run", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        invocation_id: "inv-1",
+        capability_id: "acme.lookup",
+        status: "running",
+        title: "lookup",
+        input_summary: "query terms",
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+
+    const activity = state.transcript.find((item) => item.role === "activity")
+    expect(activity).toBeTruthy()
+    const lines = transcriptActivityLines((activity as Extract<TranscriptItem, { role: "activity" }>).activity)
+    // The running row carries the input line so the collapsed summary (which now
+    // prefers input over an empty output while running) can surface the command.
+    expect(lines.some((line) => line === "input: query terms")).toBe(true)
+    expect((activity as { activity: { status: string } }).activity.status).toBe("running")
   })
 })
