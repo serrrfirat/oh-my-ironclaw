@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { diffPreviewLineColor, isUnifiedDiffKind } from "./diffPreview"
+import { diffPreviewLineBg, diffPreviewLineColor, isUnifiedDiffKind } from "./diffPreview"
 import { theme } from "./theme"
 
 describe("diff preview rendering", () => {
@@ -31,5 +31,24 @@ describe("diff preview rendering", () => {
   test("failed diff lines render in danger tone", () => {
     expect(diffPreviewLineColor("+added", true)).toBe(theme.danger)
     expect(diffPreviewLineColor(" context", true)).toBe(theme.danger)
+  })
+
+  test("tints added / removed lines with soft backgrounds", () => {
+    expect(diffPreviewLineBg("+added")).toBe(theme.okSoftBg)
+    expect(diffPreviewLineBg("-removed")).toBe(theme.dangerSoftBg)
+  })
+
+  test("leaves headers and context lines untinted", () => {
+    expect(diffPreviewLineBg("@@ -1,1 +1,1 @@")).toBeUndefined()
+    // +++/--- file markers are headers, not add/remove content.
+    expect(diffPreviewLineBg("+++ b/src/file.ts")).toBeUndefined()
+    expect(diffPreviewLineBg("--- a/src/file.ts")).toBeUndefined()
+    expect(diffPreviewLineBg("diff --git a/x b/x")).toBeUndefined()
+    expect(diffPreviewLineBg(" context")).toBeUndefined()
+  })
+
+  test("skips the per-line fill for a failed tool (already all danger)", () => {
+    expect(diffPreviewLineBg("+added", true)).toBeUndefined()
+    expect(diffPreviewLineBg("-removed", true)).toBeUndefined()
   })
 })

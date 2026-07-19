@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { SyntaxStyle, type KeyEvent, type TextareaRenderable } from "@opentui/core"
+import type { KeyEvent, TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useMemo, useReducer, useRef, useState } from "react"
 import type { ClientConfig } from "../config"
@@ -45,6 +45,8 @@ import { ConversationSurface, ThreadsSidebar, WelcomeSurface, type ComposerCommo
 import { computeSidebarLayout } from "./threadsSidebar"
 import { groupTranscriptEntries } from "./activityGroups"
 import { copyTextForItem, moveSelection, searchTranscript, selectableTranscriptIds } from "./transcriptNav"
+import { makeCodeWellRenderNode } from "./codeWell"
+import { createMarkdownSyntaxStyle } from "./syntaxTheme"
 import { transcriptActivityLines } from "../transcript"
 import { HomeSurface, type HomeSection } from "./HomeSurface"
 import {
@@ -137,7 +139,27 @@ export function App({ config }: AppProps) {
   const renderer = useRenderer()
   const { width, height } = useTerminalDimensions()
   const client = useMemo(() => new GatewayClient(config), [config])
-  const markdownStyle = useMemo(() => SyntaxStyle.create(), [])
+  const markdownStyle = useMemo(() => createMarkdownSyntaxStyle(), [])
+  // renderNode for the transcript's <markdown> renderers: turns fenced code /
+  // diff blocks into themed wells with a per-block copy affordance. Built once
+  // (renderer + style are stable) so the markdown renderer isn't forced to
+  // rebuild every block each frame. onCopyCode reuses the shared OSC-52
+  // clipboard path + the existing "notice" surface — no duplicated logic.
+  const markdownRenderNode = useMemo(
+    () =>
+      makeCodeWellRenderNode({
+        ctx: renderer,
+        syntaxStyle: markdownStyle,
+        onCopyCode: (text: string) => {
+          if (!text) return
+          copyTextToClipboard(text)
+          dispatch({ type: "notice", message: "copied to clipboard" })
+        },
+      }),
+    // copyTextToClipboard closes over the stable renderer only; safe to omit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [renderer, markdownStyle],
+  )
   const textareaRef = useRef<TextareaRenderable>(null)
   const activeThreadIdRef = useRef<string | null | undefined>(null)
   const inputHistoryRef = useRef<string[]>([])
@@ -4149,6 +4171,7 @@ export function App({ config }: AppProps) {
               height={height}
               lastError={state.lastError}
               markdownStyle={markdownStyle}
+              markdownRenderNode={markdownRenderNode}
               pendingGate={state.pendingGate ?? null}
               selectedGateAction={selectedGateAction}
               authTokenInput={authTokenInput}

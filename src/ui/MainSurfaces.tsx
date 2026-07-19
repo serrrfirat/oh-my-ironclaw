@@ -7,6 +7,7 @@ import { formatUsd } from "./homeData"
 import { threadDisplayTitle, type ThreadPreviewMap } from "../threadPreviews"
 import { transcriptItemContentLength, type TranscriptItem } from "../transcript"
 import { activityGroupSummary, groupTranscriptEntries } from "./activityGroups"
+import type { MarkdownRenderNode } from "./codeWell"
 import { TranscriptMessage, transcriptMessageAnchorId } from "./TranscriptMessage"
 import { sourceColor, type SlashCommand } from "./slashCommands"
 import { theme, toneColors, type Tone } from "./theme"
@@ -125,6 +126,7 @@ export function ConversationSurface({
   height,
   lastError,
   markdownStyle,
+  markdownRenderNode,
   pendingGate,
   selectedGateAction,
   authTokenInput,
@@ -154,6 +156,7 @@ export function ConversationSurface({
   height: number
   lastError?: string | null
   markdownStyle: SyntaxStyle
+  markdownRenderNode?: MarkdownRenderNode
   pendingGate: PendingGateInfo | null
   selectedGateAction: GateAction
   authTokenInput: string
@@ -225,6 +228,7 @@ export function ConversationSurface({
             groupId={entry.id}
             items={entry.items}
             markdownStyle={markdownStyle}
+            markdownRenderNode={markdownRenderNode}
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
             width={contentWidth}
@@ -239,6 +243,7 @@ export function ConversationSurface({
             item={entry.item}
             expanded={entry.item.role === "activity" ? !expandedActivityIds.has(entry.item.id) : expandedActivityIds.has(entry.item.id)}
             markdownStyle={markdownStyle}
+            markdownRenderNode={markdownRenderNode}
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
             width={contentWidth}
@@ -394,6 +399,7 @@ function ActivityGroup({
   groupId,
   items,
   markdownStyle,
+  markdownRenderNode,
   selectedModel,
   spinner,
   width,
@@ -407,6 +413,7 @@ function ActivityGroup({
   groupId: string
   items: Array<Extract<TranscriptItem, { role: "activity" }>>
   markdownStyle: SyntaxStyle
+  markdownRenderNode?: MarkdownRenderNode
   selectedModel: string
   spinner: string
   width: number
@@ -441,6 +448,7 @@ function ActivityGroup({
           item={item}
           expanded={!expandedActivityIds.has(item.id)}
           markdownStyle={markdownStyle}
+          markdownRenderNode={markdownRenderNode}
           selectedModel={selectedModel}
           spinner={spinner}
           width={width}

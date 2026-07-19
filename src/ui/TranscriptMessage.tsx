@@ -1,7 +1,12 @@
 import { SyntaxStyle } from "@opentui/core"
 import { transcriptActivityLines, type TranscriptItem } from "../transcript"
-import { diffPreviewLineColor, isUnifiedDiffKind } from "./diffPreview"
+import type { MarkdownRenderNode } from "./codeWell"
+import { diffPreviewLineBg, diffPreviewLineColor, isUnifiedDiffKind } from "./diffPreview"
 import { theme } from "./theme"
+
+// Glass-tinted, borderless aligned columns for markdown tables. Shared by both
+// the user and assistant <markdown> renderers.
+const MARKDOWN_TABLE_OPTIONS = { style: "columns", borderColor: theme.border } as const
 
 const ACTIVITY_DETAIL_LINE_LIMIT = 48
 
@@ -27,6 +32,7 @@ export function TranscriptMessage({
   item,
   expanded,
   markdownStyle,
+  markdownRenderNode,
   selectedModel,
   spinner,
   width,
@@ -38,6 +44,10 @@ export function TranscriptMessage({
   item: TranscriptItem
   expanded: boolean
   markdownStyle: SyntaxStyle
+  // Renders fenced code / diff blocks as themed wells with a copy affordance;
+  // every other markdown token falls back to the default renderer. Optional so
+  // callers that don't supply it keep plain (native) code rendering.
+  markdownRenderNode?: MarkdownRenderNode
   selectedModel: string
   spinner: string
   width: number
@@ -57,7 +67,7 @@ export function TranscriptMessage({
     return (
       <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg ?? theme.bgSoft, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bgSoft, marginBottom: 2 }}>
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-          <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
+          <markdown content={item.text || " "} syntaxStyle={markdownStyle} renderNode={markdownRenderNode} tableOptions={MARKDOWN_TABLE_OPTIONS} />
         </box>
       </box>
     )
@@ -67,7 +77,7 @@ export function TranscriptMessage({
     return (
       <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bg, marginBottom: 2 }}>
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
-          <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
+          <markdown content={item.text || " "} syntaxStyle={markdownStyle} renderNode={markdownRenderNode} tableOptions={MARKDOWN_TABLE_OPTIONS} />
           <BuildLine durationMs={item.meta?.durationMs} selectedModel={selectedModel} />
         </box>
       </box>
@@ -173,7 +183,7 @@ function ActivityDetailLine({ failed, line, unifiedDiff, width }: { failed: bool
   }
   if (unifiedDiff) {
     return (
-      <text fg={diffPreviewLineColor(line, failed)}>
+      <text fg={diffPreviewLineColor(line, failed)} bg={diffPreviewLineBg(line, failed)}>
         {truncate(line || " ", max)}
       </text>
     )
