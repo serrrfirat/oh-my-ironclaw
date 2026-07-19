@@ -44,6 +44,9 @@ import { ExtensionsSurface, extensionRows, type ExtensionRow } from "./Extension
 import { LlmProvidersSurface, type LlmProviderFormView } from "./LlmProvidersSurface"
 import { ConversationSurface, ThreadsSidebar, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
 import { computeSidebarLayout } from "./threadsSidebar"
+import { groupTranscriptEntries } from "./activityGroups"
+import { copyTextForItem, moveSelection, searchTranscript, selectableTranscriptIds } from "./transcriptNav"
+import { transcriptActivityLines } from "../transcript"
 import { HomeSurface, type HomeSection } from "./HomeSurface"
 import {
   buildActiveRows,
@@ -167,6 +170,14 @@ export function App({ config }: AppProps) {
   const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
   const [selectedModel, setSelectedModel] = useState(config.model)
   const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(() => new Set())
+  // --- Transcript navigation + in-thread search (opencode-style) ---
+  // navSelectedId is the id of the highlighted transcript message; non-null means
+  // the conversation is in transcript-navigation focus mode. Search reuses the
+  // same highlight: the active match becomes the selection.
+  const [navSelectedId, setNavSelectedId] = useState<string | null>(null)
+  const [searchActive, setSearchActive] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [searchMatchIndex, setSearchMatchIndex] = useState(0)
   const [skillList, setSkillList] = useState<SkillListResult>({ configured: 0, source: "", skills: [], details: {} })
   const [skillSearch, setSkillSearch] = useState("")
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0)
@@ -420,6 +431,129 @@ export function App({ config }: AppProps) {
     })
   }
 
+  // --- Transcript navigation / search derived state ---
+  // Ordered ids the nav cursor can land on (flattened over activity groups).
+  const selectableTranscriptIdList = useMemo(
+    () => selectableTranscriptIds(groupTranscriptEntries(state.transcript)),
+    [state.transcript],
+  )
+  const searchMatchIdList = useMemo(
+    () => (searchActive ? searchTranscript(state.transcript, searchQuery) : []),
+    [searchActive, searchQuery, state.transcript],
+  )
+  const searchMatchIdSet = useMemo(() => new Set(searchMatchIdList), [searchMatchIdList])
+  const navMode = !showHome && activeOverlay === null && !sidebarActive && (navSelectedId !== null || searchActive)
+  const inConversationView = !showHome && activeOverlay === null
+
+  // Keep the search cursor pointed at a real match, and mirror it into the shared
+  // highlight/selection so the matched message scrolls into view.
+  useEffect(() => {
+    if (!searchActive) return
+    const id = searchMatchIdList[searchMatchIndex] ?? searchMatchIdList[0] ?? null
+    setNavSelectedId(id)
+  }, [searchActive, searchMatchIdList, searchMatchIndex])
+
+  // Drop a stale selection (e.g. after switching threads or trimming history).
+  useEffect(() => {
+    if (navSelectedId && !selectableTranscriptIdList.includes(navSelectedId)) setNavSelectedId(null)
+  }, [selectableTranscriptIdList, navSelectedId])
+
+  // Leaving the conversation surface (overlay / home / sidebar) exits nav + search.
+  useEffect(() => {
+    if (showHome || activeOverlay !== null || sidebarActive) {
+      setNavSelectedId(null)
+      setSearchActive(false)
+    }
+  }, [showHome, activeOverlay, sidebarActive])
+
+  // A thread switch clears any transcript selection / open search.
+  useEffect(() => {
+    setNavSelectedId(null)
+    setSearchActive(false)
+    setSearchQuery("")
+    setSearchMatchIndex(0)
+  }, [state.activeThreadId])
+
+  function enterTranscriptNav() {
+    if (selectableTranscriptIdList.length === 0) return
+    const last = selectableTranscriptIdList[selectableTranscriptIdList.length - 1] ?? null
+    setNavSelectedId(last)
+  }
+
+  function exitTranscriptNav() {
+    setNavSelectedId(null)
+    setSearchActive(false)
+  }
+
+  function moveTranscriptSelection(delta: number) {
+    setNavSelectedId((current) => moveSelection(selectableTranscriptIdList, current, delta))
+  }
+
+  function jumpTranscriptSelection(edge: "top" | "bottom") {
+    if (selectableTranscriptIdList.length === 0) return
+    const id = edge === "top"
+      ? selectableTranscriptIdList[0]
+      : selectableTranscriptIdList[selectableTranscriptIdList.length - 1]
+    setNavSelectedId(id ?? null)
+  }
+
+  function selectedTranscriptItem() {
+    return state.transcript.find((item) => item.id === navSelectedId) ?? null
+  }
+
+  // `y` — copy the selected message (message text, or an activity card's rendered
+  // command + output) to the clipboard via OSC 52.
+  function copySelectedTranscriptItem() {
+    const item = selectedTranscriptItem()
+    if (!item) return
+    const detailLines = item.role === "activity" ? transcriptActivityLines(item.activity) : undefined
+    const text = copyTextForItem(item, detailLines)
+    if (!text) return
+    copyTextToClipboard(text)
+    dispatch({ type: "notice", message: "copied to clipboard" })
+  }
+
+  // `e` — edit & resend: repopulate the composer with a user message and hand
+  // focus back to it. Sending is a normal new turn; the original stays put.
+  function editSelectedTranscriptItem() {
+    const item = selectedTranscriptItem()
+    if (!item || item.role !== "user") return
+    exitTranscriptNav()
+    setComposerText(item.text)
+    textareaRef.current?.focus()
+  }
+
+  // `enter` — expand/collapse a tool/activity card (no-op on text messages).
+  function activateSelectedTranscriptItem() {
+    const item = selectedTranscriptItem()
+    if (item?.role === "activity") toggleActivityExpanded(item.id)
+  }
+
+  function openTranscriptSearch() {
+    setNavSelectedId(null)
+    setSearchQuery("")
+    setSearchMatchIndex(0)
+    setSearchActive(true)
+  }
+
+  function closeTranscriptSearch() {
+    setSearchActive(false)
+    setSearchQuery("")
+    setSearchMatchIndex(0)
+    setNavSelectedId(null)
+  }
+
+  function jumpSearchMatch(delta: number) {
+    if (searchMatchIdList.length === 0) return
+    setSearchMatchIndex((index) => wrapIndex(index + delta, searchMatchIdList.length))
+  }
+
+  const transcriptNavHint = searchActive
+    ? null
+    : navSelectedId !== null
+      ? `↑↓ select · enter ${selectedTranscriptItem()?.role === "activity" ? "expand" : "·"} · y copy${selectedTranscriptItem()?.role === "user" ? " · e edit" : ""} · ^f search · esc exit`
+      : null
+
   useSelectionHandler((selection) => {
     const selectedText = selection.getSelectedText()
     if (!selectedText) return
@@ -435,6 +569,8 @@ export function App({ config }: AppProps) {
     // When the threads sidebar owns focus, the composer is not the text sink, so
     // global toggles (ctrl+h) should fire rather than being treated as edits.
     if (sidebarActive) return false
+    // The in-thread transcript search owns a live text input.
+    if (searchActive) return true
     // Conversation composer — also the sink for the slash-command palette and
     // inline "/…" filtering, both of which keep activeOverlay null.
     if (!showHome && activeOverlay === null) return true
@@ -475,7 +611,6 @@ export function App({ config }: AppProps) {
       return
     }
     // --- Threads sidebar (conversation view only; no overlay/home on top) ---
-    const inConversationView = !showHome && activeOverlay === null
     // ctrl+b collapses/expands the sidebar regardless of which pane has focus.
     if (inConversationView && key.ctrl && key.name === "b") {
       key.preventDefault()
@@ -516,6 +651,46 @@ export function App({ config }: AppProps) {
       setSidebarIndex(activeIndex >= 0 ? activeIndex : 0)
       setSidebarFocused(true)
       return
+    }
+    // --- In-thread transcript search (ctrl+f) ---
+    // Opens from the composer or from nav mode. The search field captures typing,
+    // so `n`/`N` can't drive the jumps (they're valid query chars) — enter /
+    // shift+enter jump next / prev instead.
+    if (inConversationView && !sidebarActive && key.ctrl && key.name === "f") {
+      key.preventDefault(); key.stopPropagation()
+      openTranscriptSearch()
+      return
+    }
+    if (inConversationView && !sidebarActive && searchActive) {
+      if (key.name === "escape") { key.preventDefault(); key.stopPropagation(); closeTranscriptSearch(); return }
+      if (key.name === "backspace" || key.name === "delete") {
+        key.preventDefault(); key.stopPropagation()
+        setSearchQuery((q) => q.slice(0, -1)); setSearchMatchIndex(0); return
+      }
+      if (key.ctrl && key.name === "u") { key.preventDefault(); key.stopPropagation(); setSearchQuery(""); setSearchMatchIndex(0); return }
+      if ((key.name === "return" || key.name === "kpenter" || key.name === "linefeed")) {
+        key.preventDefault(); key.stopPropagation(); jumpSearchMatch(key.shift ? -1 : 1); return
+      }
+      const searchText = printableKeyText(key)
+      if (searchText) { key.preventDefault(); key.stopPropagation(); setSearchQuery((q) => q + searchText); setSearchMatchIndex(0); return }
+      return
+    }
+    // --- Transcript navigation focus mode ---
+    // Reached only when a message is selected (composer / sidebar keep their own
+    // focus otherwise). Swallows keys so they never leak to the composer / history.
+    if (inConversationView && !sidebarActive && navSelectedId !== null) {
+      if (key.name === "escape") { key.preventDefault(); key.stopPropagation(); exitTranscriptNav(); return }
+      if (key.name === "up" || key.name === "k") { key.preventDefault(); key.stopPropagation(); moveTranscriptSelection(-1); return }
+      if (key.name === "down" || key.name === "j") { key.preventDefault(); key.stopPropagation(); moveTranscriptSelection(1); return }
+      if (isPlainEnter(key)) { key.preventDefault(); key.stopPropagation(); activateSelectedTranscriptItem(); return }
+      const navText = printableKeyText(key)
+      if (navText === "g") { key.preventDefault(); key.stopPropagation(); jumpTranscriptSelection("top"); return }
+      if (navText === "G") { key.preventDefault(); key.stopPropagation(); jumpTranscriptSelection("bottom"); return }
+      if (navText === "y") { key.preventDefault(); key.stopPropagation(); copySelectedTranscriptItem(); return }
+      if (navText === "e") { key.preventDefault(); key.stopPropagation(); editSelectedTranscriptItem(); return }
+      // pageup keeps loading older history (handled below); everything else is
+      // swallowed while navigating so it can't leak to the composer / history.
+      if (key.name !== "pageup") { key.preventDefault(); key.stopPropagation(); return }
     }
     if (showAutomations) {
       if (key.name === "escape") {
@@ -1403,6 +1578,14 @@ export function App({ config }: AppProps) {
     if (key.name === "up") {
       key.preventDefault()
       key.stopPropagation()
+      // Empty composer: up enters transcript-navigation focus mode (selecting the
+      // last message). With text in the composer, up keeps recalling input history
+      // (never hijacked). `k` is not an entry key — it would shadow typing "k" —
+      // but it moves the cursor once nav mode is active.
+      if (inConversationView && !sidebarActive && !state.pendingGate && input.trim().length === 0 && selectableTranscriptIdList.length > 0) {
+        enterTranscriptNav()
+        return
+      }
       navigateInputHistory("up")
       return
     }
@@ -3857,7 +4040,7 @@ export function App({ config }: AppProps) {
               contentWidth={chatContentWidth}
               composer={composer}
               composerWidth={chatContentWidth}
-              chatFocused={!sidebarActive}
+              chatFocused={!sidebarActive && !navMode}
               height={height}
               lastError={state.lastError}
               markdownStyle={markdownStyle}
@@ -3869,6 +4052,12 @@ export function App({ config }: AppProps) {
               showOlderHistoryHint={state.hasOlderHistory}
               transcript={state.transcript}
               expandedActivityIds={expandedActivityIds}
+              selectedTranscriptId={navSelectedId}
+              searchMatchIds={searchMatchIdSet}
+              searchActive={searchActive}
+              searchQuery={searchQuery}
+              searchMatchIndex={searchMatchIndex}
+              navHint={transcriptNavHint}
               onToggleActivityExpanded={toggleActivityExpanded}
               onResolve={(action) => void resolveGate(action)}
               onSelectGateAction={setSelectedGateAction}

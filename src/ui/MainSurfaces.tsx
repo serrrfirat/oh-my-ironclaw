@@ -7,7 +7,7 @@ import { formatUsd } from "./homeData"
 import { threadDisplayTitle, type ThreadPreviewMap } from "../threadPreviews"
 import { transcriptItemContentLength, type TranscriptItem } from "../transcript"
 import { activityGroupSummary, groupTranscriptEntries } from "./activityGroups"
-import { TranscriptMessage } from "./TranscriptMessage"
+import { TranscriptMessage, transcriptMessageAnchorId } from "./TranscriptMessage"
 import { sourceColor, type SlashCommand } from "./slashCommands"
 import { theme, toneColors, type Tone } from "./theme"
 import { Card, Tag } from "./pixel"
@@ -21,6 +21,7 @@ export type GateAction = "approved" | "denied" | "always"
 
 const SLASH_COMMAND_POPUP_LIMIT = 8
 const THREAD_PALETTE_LIMIT = 10
+const EMPTY_MATCH_IDS: Set<string> = new Set()
 
 export type ComposerCommonProps = {
   inputRef: RefObject<TextareaRenderable | null>
@@ -127,6 +128,12 @@ export function ConversationSurface({
   showOlderHistoryHint,
   transcript,
   expandedActivityIds,
+  selectedTranscriptId = null,
+  searchMatchIds,
+  searchActive = false,
+  searchQuery = "",
+  searchMatchIndex = 0,
+  navHint = null,
   onToggleActivityExpanded,
   onResolve,
   onSelectGateAction,
@@ -149,6 +156,12 @@ export function ConversationSurface({
   showOlderHistoryHint: boolean
   transcript: TranscriptItem[]
   expandedActivityIds: Set<string>
+  selectedTranscriptId?: string | null
+  searchMatchIds?: Set<string>
+  searchActive?: boolean
+  searchQuery?: string
+  searchMatchIndex?: number
+  navHint?: string | null
   onToggleActivityExpanded: (id: string) => void
   onResolve: (action: GateAction) => void
   onSelectGateAction: (action: GateAction) => void
@@ -156,13 +169,16 @@ export function ConversationSurface({
   onCancelAuthGate: () => void
   onOpenAuthUrl: (gate: PendingGateInfo) => void
 }) {
+  const matchIds = searchMatchIds ?? EMPTY_MATCH_IDS
   const slashPopupHeight = composer.showSlashCommands ? slashCommandPopupHeight(composer.slashCommands) : 0
   const threadPopupHeight = composer.showThreadPalette ? threadPaletteHeight(composer.threads) : 0
   const modelPopupHeight = composer.showModelPalette ? modelPaletteHeight(composer.models) : 0
+  const searchBarHeight = searchActive ? 3 : 0
+  const navHintHeight = navHint ? 1 : 0
   // The framed gate/auth cards are ~2 rows taller than the old flat panels, so
   // reserve a little more room below the transcript when a gate is showing to
   // keep the composer from being pushed off the bottom.
-  const transcriptHeight = Math.max(6, height - (pendingGate ? 20 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight)
+  const transcriptHeight = Math.max(6, height - (pendingGate ? 20 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight - searchBarHeight - navHintHeight)
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const transcriptEndKey = transcript.map((item) => `${item.id}:${transcriptItemContentLength(item)}`).join("|")
   const transcriptEntries = groupTranscriptEntries(transcript)
@@ -172,6 +188,13 @@ export function ConversationSurface({
     if (!scrollbox) return
     scrollbox.scrollTo({ x: 0, y: scrollbox.scrollHeight })
   }, [transcriptEndKey, transcriptHeight])
+
+  // Bring the navigated / active-search message into view without disturbing
+  // sticky-bottom auto-scroll when nothing is selected.
+  useEffect(() => {
+    if (!selectedTranscriptId) return
+    transcriptScrollRef.current?.scrollChildIntoView(transcriptMessageAnchorId(selectedTranscriptId))
+  }, [selectedTranscriptId, transcriptHeight])
 
   return (
     <box style={{ height, flexDirection: "column", alignItems: "center", backgroundColor: theme.bg, paddingTop: 1 }}>
@@ -198,6 +221,8 @@ export function ConversationSurface({
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
             width={contentWidth}
+            selectedTranscriptId={selectedTranscriptId}
+            searchMatchIds={matchIds}
             onToggleActivityExpanded={onToggleActivityExpanded}
           />
         ) : (
@@ -209,6 +234,8 @@ export function ConversationSurface({
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
             width={contentWidth}
+            selected={selectedTranscriptId === entry.item.id}
+            searchMatch={matchIds.has(entry.item.id)}
             onToggleActivityExpanded={onToggleActivityExpanded}
           />
         ))}
@@ -222,6 +249,19 @@ export function ConversationSurface({
           />
         ) : null}
       </scrollbox>
+      {searchActive ? (
+        <TranscriptSearchBar
+          matchCount={matchIds.size}
+          matchIndex={searchMatchIndex}
+          query={searchQuery}
+          width={composerWidth}
+        />
+      ) : null}
+      {navHint ? (
+        <box style={{ width: composerWidth, height: 1, flexDirection: "row" }}>
+          <text fg={theme.textFaint}>{truncate(navHint, composerWidth)}</text>
+        </box>
+      ) : null}
       {pendingGate ? (
         isAuthGate(pendingGate) ? (
           <AuthGatePanel
@@ -288,6 +328,49 @@ function ThinkingMessage({
   )
 }
 
+// In-thread search input: a framed accent-tone well showing the live query and
+// the match position, mirroring the composer's rounded-glass look.
+function TranscriptSearchBar({
+  matchCount,
+  matchIndex,
+  query,
+  width,
+}: {
+  matchCount: number
+  matchIndex: number
+  query: string
+  width: number
+}) {
+  const position = matchCount > 0 ? `${Math.min(matchIndex + 1, matchCount)}/${matchCount}` : query ? "no matches" : ""
+  const hint = "enter next · shift+enter prev · esc close"
+  const budget = Math.max(1, width - hint.length - position.length - 8)
+  return (
+    <box
+      style={{
+        width,
+        height: 3,
+        flexDirection: "column",
+        backgroundColor: theme.bgSoft,
+        border: true,
+        borderStyle: "rounded",
+        borderColor: theme.accent,
+        paddingLeft: 1,
+        paddingRight: 1,
+      }}
+    >
+      <box style={{ height: 1, flexDirection: "row" }}>
+        <text fg={theme.accent}>search </text>
+        <text fg={query ? theme.textStrong : theme.textMuted}>{truncate(query || "type to search transcript", budget)}</text>
+        <box style={{ flexGrow: 1 }} />
+        {position ? <text fg={matchCount > 0 ? theme.textMuted : theme.warn}>{position}</text> : null}
+      </box>
+      <box style={{ height: 1, flexDirection: "row" }}>
+        <text fg={theme.textFaint}>{truncate(hint, width)}</text>
+      </box>
+    </box>
+  )
+}
+
 function LoadOlderHint({ width }: { width: number }) {
   return (
     <box style={{ width, height: 2, flexDirection: "column", paddingLeft: 3, marginBottom: 1 }}>
@@ -305,6 +388,8 @@ function ActivityGroup({
   selectedModel,
   spinner,
   width,
+  selectedTranscriptId = null,
+  searchMatchIds,
   onToggleActivityExpanded,
 }: {
   expanded: boolean
@@ -315,8 +400,11 @@ function ActivityGroup({
   selectedModel: string
   spinner: string
   width: number
+  selectedTranscriptId?: string | null
+  searchMatchIds?: Set<string>
   onToggleActivityExpanded: (id: string) => void
 }) {
+  const matchIds = searchMatchIds ?? EMPTY_MATCH_IDS
   return (
     <box style={{ width, flexDirection: "column", marginBottom: 2 }}>
       <box
@@ -335,6 +423,8 @@ function ActivityGroup({
           selectedModel={selectedModel}
           spinner={spinner}
           width={width}
+          selected={selectedTranscriptId === item.id}
+          searchMatch={matchIds.has(item.id)}
           onToggleActivityExpanded={onToggleActivityExpanded}
         />
       )) : null}
