@@ -541,7 +541,7 @@ describe("WebChat event mapping", () => {
     })
   })
 
-  test("emits live projection context before final text", () => {
+  test("emits live projection context before streaming text", () => {
     const events = mapWebChatEvents(
       {
         type: "projection_update",
@@ -549,7 +549,7 @@ describe("WebChat event mapping", () => {
         state: {
           thread_id: "thread-1",
           items: [
-            { text: { id: "reply-1", body: "final answer" } },
+            { text: { id: "text:run-1", body: "final answer" } },
             { thinking: { id: "thinking:run-1:1", body: "checking context" } },
           ],
         },
@@ -557,6 +557,8 @@ describe("WebChat event mapping", () => {
       "thread-1",
     )
 
+    // Projection `text` maps to a stream_text event carrying the STABLE id, so the
+    // reducer upserts one growing bubble (never a bare finalize {type:"response"}).
     expect(events).toEqual([
       {
         type: "thinking_update",
@@ -565,7 +567,8 @@ describe("WebChat event mapping", () => {
         thread_id: "thread-1",
       },
       {
-        type: "response",
+        type: "stream_text",
+        id: "text:run-1",
         content: "final answer",
         thread_id: "thread-1",
       },

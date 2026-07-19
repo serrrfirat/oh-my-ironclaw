@@ -106,7 +106,7 @@ export function TranscriptMessage({
     const icon = running ? spinner : failed ? "!" : "✓"
     const unifiedDiff = isUnifiedDiffKind(item.activity.outputKind)
     const detailLines = expanded ? activityDetailLines(detail) : []
-    const summary = collapsedActivitySummary(detail)
+    const summary = collapsedActivitySummary(detail, running)
     const hint = expanded ? "click to collapse" : "click to expand"
     return (
       // Glass: tool output sits in a rounded card (card-bg fill + card frame).
@@ -217,9 +217,16 @@ function activityTitle(headline: string): string {
   return headline.replace(/^[!✓·∙✕]\s+/, "").trim()
 }
 
-function collapsedActivitySummary(lines: string[]): string | null {
+function collapsedActivitySummary(lines: string[], running = false): string | null {
   const output = lines.find((line) => line.startsWith("output: "))
   if (output) return output.slice("output: ".length)
+  // A still-running tool has no output yet: surface its input/command (available
+  // mid-run via the running display preview) so the collapsed row is legible
+  // instead of showing only a spinner + "click to expand".
+  if (running) {
+    const input = lines.find((line) => line.startsWith("input: "))
+    if (input) return input.slice("input: ".length)
+  }
   const firstVisible = lines.find((line) => line && !line.startsWith("result: ") && !line.startsWith("input: "))
   return firstVisible ?? null
 }

@@ -14,7 +14,6 @@ import type {
   ExtensionRegistryEntry,
   ExtensionSetupResponse,
   FsMountInfo,
-  HistoryResponse,
   LlmConfigSnapshot,
   LlmProviderView,
   LogEntry,
@@ -2832,7 +2831,6 @@ export function App({ config }: AppProps) {
   }
 
   async function submitContent(content: string) {
-    const previousAssistantCount = state.transcript.filter((item) => item.role === "assistant").length
     const attachments = stagedAttachments
     try {
       const response = await client.send(content, state.activeThreadId, {
@@ -2858,7 +2856,11 @@ export function App({ config }: AppProps) {
       if (threadId && threadId !== state.activeThreadId) {
         dispatch({ type: "threads", threads: state.threads, activeThreadId: threadId })
       }
-      if (threadId) void pollThreadForReply(threadId, previousAssistantCount)
+      // No reply polling: the SSE stream (client.events) delivers projection text,
+      // final_reply, gates and run status live, and reconnects replay a
+      // projection_snapshot — so a history poll would only race the stream and
+      // reset status mid-run. Terminal runs still trigger a single history refresh
+      // via refreshThreadFromEvent in the SSE consumer.
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
     }
@@ -3159,7 +3161,7 @@ export function App({ config }: AppProps) {
     try {
       const response = await client.retryRun(threadId, runId)
       dispatch({ type: "run_started", threadId, runId: response.run_id, status: response.status })
-      void pollThreadForReply(threadId, state.transcript.filter((item) => item.role === "assistant").length)
+      // The SSE stream carries the retried run's live progress + reply; see submitContent.
     } catch (error) {
       dispatch({ type: "error", message: errorMessage(error) })
     }
@@ -3682,24 +3684,6 @@ export function App({ config }: AppProps) {
       setOutboundMessage("final-reply target cleared")
     } catch (error) {
       setOutboundError(errorMessage(error))
-    }
-  }
-
-  async function pollThreadForReply(threadId: string, previousAssistantCount: number) {
-    for (const delay of [750, 1250, 2000, 3000, 5000, 8000, 12000]) {
-      await sleep(delay)
-      try {
-        const history = await client.history(threadId)
-        for (const response of assistantResponses(history)) {
-          applyModelCommandResponse(response)
-        }
-        dispatch({ type: "history", history })
-        const assistantCount = assistantResponses(history).length
-        if (assistantCount > previousAssistantCount || history.pending_gate) return
-      } catch (error) {
-        dispatch({ type: "error", message: errorMessage(error) })
-        return
-      }
     }
   }
 
@@ -4332,15 +4316,6 @@ function activeThreadFallback(threadId?: string | null): ThreadInfo[] {
       channel: "webchat_v2",
     },
   ]
-}
-
-function assistantResponses(history: HistoryResponse): string[] {
-  if (history.messages) {
-    return history.messages.flatMap((message) =>
-      (message.kind === "assistant" || message.kind === "summary") && message.content ? [message.content] : [],
-    )
-  }
-  return history.turns.flatMap((turn) => (turn.response ? [turn.response] : []))
 }
 
 function wrapIndex(index: number, length: number): number {

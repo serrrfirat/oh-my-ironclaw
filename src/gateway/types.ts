@@ -979,6 +979,11 @@ export type AppEvent =
   | { type: "tool_result"; name: string; preview: string; call_id?: string | null; thread_id?: string | null }
   | { type: "tool_result_full"; name: string; output: string; truncated?: boolean | null; call_id?: string | null; thread_id?: string | null }
   | { type: "stream_chunk"; content: string; thread_id?: string | null }
+  // Live cumulative assistant text from a projection `text` item. `id` is the
+  // server's STABLE projection id (e.g. "text:{run_id}"), republished ~every 75ms
+  // with the FULL body so far. The reducer upserts one bubble keyed by `id` and
+  // REPLACES its text each frame (never concatenates, never a new bubble).
+  | { type: "stream_text"; id: string; content: string; thread_id: string; replayed?: boolean }
   | { type: "status"; message: string; thread_id?: string | null }
   | { type: "approval_needed"; request_id: string; tool_name: string; description: string; parameters: string; thread_id?: string | null; allow_always: boolean }
   | { type: "gate_required"; request_id: string; gate_name: string; tool_name: string; description: string; parameters: string; extension_name?: string | null; provider?: string | null; account_label?: string | null; challenge_kind?: string | null; authorization_url?: string | null; expires_at?: string | null; allow_always?: boolean; approval_context?: ApprovalContext | null; resume_kind: unknown; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null; replayed?: boolean }

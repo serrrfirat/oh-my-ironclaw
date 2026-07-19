@@ -1278,6 +1278,7 @@ function prioritizedEvent(events: AppEvent[]): AppEvent | null {
   return (
     events.find((event) => event.type === "run_status") ??
     events.find((event) => event.type === "response") ??
+    events.find((event) => event.type === "stream_text") ??
     events.find((event) => event.type === "thinking_update") ??
     events[0] ??
     null
@@ -1385,20 +1386,26 @@ function projectionEvents(frame: RebornWebChatEventFrame, threadId: string): App
       feedback: activation.feedback,
       thread_id: threadId,
     })))
-    textEvents.push(...textBodyFromProjectionItem(item).map((content): AppEvent => ({ type: "response", content, thread_id: threadId })))
+    textEvents.push(...textFromProjectionItem(item).map(({ id, body }): AppEvent => ({ type: "stream_text", id, content: body, thread_id: threadId })))
   }
 
   const events = [...runStatusEvents, ...gateEvents, ...thinkingEvents, ...workSummaryEvents, ...skillActivationEvents, ...textEvents]
   return events.length > 0 ? events : [{ type: "status", message: frame.type, thread_id: threadId }]
 }
 
-function textBodyFromProjectionItem(item: Record<string, unknown>): string[] {
-  const directBody = item.type === "text" && typeof item.body === "string" ? item.body : null
-  if (directBody) return [directBody]
+// Extract the assistant `text` projection item's STABLE id + cumulative body.
+// The id lets the reducer upsert one growing bubble (see stream_text). When the
+// wire omits an id we synthesize a per-thread stable one so a body still streams
+// into a single bubble rather than spawning a new one each frame.
+function textFromProjectionItem(item: Record<string, unknown>): Array<{ id: string; body: string }> {
+  if (item.type === "text" && typeof item.body === "string") {
+    return [{ id: typeof item.id === "string" ? item.id : "text:stream", body: item.body }]
+  }
 
   const text = item.text
   if (text && typeof text === "object" && "body" in text && typeof text.body === "string") {
-    return [text.body]
+    const id = "id" in text && typeof text.id === "string" ? text.id : "text:stream"
+    return [{ id, body: text.body }]
   }
 
   return []

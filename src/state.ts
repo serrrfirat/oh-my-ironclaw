@@ -156,10 +156,23 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
     case "history": {
       const pendingGate = pendingGateFromHistory(state, action.history)
       const threadSwitched = Boolean(state.activeThreadId) && action.history.thread_id !== state.activeThreadId
+      // A live SSE run is the authoritative status source while it's active. The
+      // /timeline response omits in-progress/gate info, so a history read that
+      // lands mid-run must NOT reset status/isThinking to idle or reflow the
+      // transcript (which would drop the streaming bubble). Only defer to history
+      // once it reflects the run — a reply after the user's turn, an explicit
+      // in-progress record, a pending gate, or a switch to another thread.
+      const sseRunActive =
+        !threadSwitched &&
+        !pendingGate &&
+        Boolean(state.activeRunId) &&
+        state.isThinking &&
+        !action.history.in_progress &&
+        !hasAssistantAfterLatestUser(action.history)
       return {
         ...state,
         activeThreadId: action.history.thread_id,
-        transcript: mergeHistoryTranscript(state.transcript, action.history),
+        transcript: sseRunActive ? state.transcript : mergeHistoryTranscript(state.transcript, action.history),
         historyCursor: action.history.next_cursor ?? null,
         hasOlderHistory: Boolean(action.history.next_cursor),
         runUsageCost: threadSwitched ? null : state.runUsageCost,
@@ -173,16 +186,23 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
           : null,
         // Adopt an in-progress run's start time from the server so the home
         // ACTIVE elapsed label is correct for runs picked up via sync/history;
-        // no in-progress run means nothing is active, so clear it.
-        activeRunSinceMs: action.history.in_progress
-          ? parseStartedAtMs(action.history.in_progress.started_at) ??
-            (threadSwitched ? null : state.activeRunSinceMs ?? null)
-          : null,
-        activeRunId: pendingGate?.run_id ?? (action.history.in_progress ? state.activeRunId : null),
-        status: action.history.in_progress ? action.history.in_progress.state : "idle",
-        isThinking: pendingGate
-          ? false
-          : Boolean(action.history.in_progress) || (state.isThinking && !hasAssistantAfterLatestUser(action.history)),
+        // when the server omits started_at, fall back to now so elapsed reads a
+        // duration rather than "—". No in-progress run means nothing is active.
+        activeRunSinceMs: sseRunActive
+          ? state.activeRunSinceMs ?? Date.now()
+          : action.history.in_progress
+            ? parseStartedAtMs(action.history.in_progress.started_at) ??
+              (threadSwitched ? Date.now() : state.activeRunSinceMs ?? Date.now())
+            : null,
+        activeRunId: sseRunActive
+          ? state.activeRunId
+          : pendingGate?.run_id ?? (action.history.in_progress ? state.activeRunId : null),
+        status: sseRunActive ? state.status : action.history.in_progress ? action.history.in_progress.state : "idle",
+        isThinking: sseRunActive
+          ? true
+          : pendingGate
+            ? false
+            : Boolean(action.history.in_progress) || (state.isThinking && !hasAssistantAfterLatestUser(action.history)),
       }
     }
     case "older_history":
@@ -277,7 +297,7 @@ function applyEvent(state: UiState, event: AppEvent, dayKey?: string | null): Ui
       return applySkillActivated(state, event)
     case "status":
       return { ...state, status: event.message }
-    case "run_status":
+    case "run_status": {
       if (isFailedRunStatus(event.status)) {
         return applyTerminalRun(
           state,
@@ -287,12 +307,23 @@ function applyEvent(state: UiState, event: AppEvent, dayKey?: string | null): Ui
           runFailureMessage(statusKey(event.status), event.failure_category),
         )
       }
+      // A clean terminal status (completed/done/succeeded) settles the run when no
+      // final_reply frame does: clear the streaming target and stamp the streamed
+      // bubble's completion so its Build/duration line lands.
+      if (isTerminalRunState(event.status)) {
+        return settleStreamedRun(state, event.status, event.thread_id)
+      }
+      const tracked = isTrackedRunStatus(event.status)
       return {
         ...state,
         status: event.status,
-        activeRunId: isTrackedRunStatus(event.status) ? event.run_id ?? state.activeRunId : null,
+        activeRunId: tracked ? event.run_id ?? state.activeRunId : null,
         isThinking: isThinkingRunStatus(event.status),
+        // First adopt of an active run with no client-known start time falls back
+        // to now, so the home ACTIVE elapsed label reads a duration, not "—".
+        activeRunSinceMs: tracked ? state.activeRunSinceMs ?? Date.now() : state.activeRunSinceMs,
       }
+    }
     case "run_cancelled": {
       const cancelledStatus = event.status ?? "cancelled"
       return applyTerminalRun(
@@ -324,6 +355,8 @@ function applyEvent(state: UiState, event: AppEvent, dayKey?: string | null): Ui
       return { ...state, notice: event.message }
     case "stream_chunk":
       return appendAssistantChunk(state, event.content, event.thread_id)
+    case "stream_text":
+      return applyStreamText(state, event)
     case "response":
       return finalizeAssistant(state, event.content, event.thread_id)
     case "tool_started":
@@ -502,6 +535,9 @@ function applyTerminalRun(
     isThinking: false,
     activeRunId: null,
     activeRunSinceMs: null,
+    // A terminal run ends streaming: drop the streaming target so any partial
+    // assistant bubble settles in place rather than staying "live" forever.
+    streamingAssistantId: null,
     pendingGate: null,
     pendingGateSinceMs: null,
     lastError: cancelled ? state.lastError : detail,
@@ -609,6 +645,44 @@ function appendAssistantChunk(state: UiState, content: string, threadId?: string
   }
 }
 
+// Live cumulative assistant text (projection `text` item). The server republishes
+// the FULL body under a STABLE id every ~75ms, so we upsert ONE bubble keyed by
+// that id and REPLACE its text each frame — never concatenate, never a new bubble.
+// While a run is active this bubble is the streaming target (streamingAssistantId);
+// we deliberately do NOT flip status/isThinking/activeRunId here so a text frame
+// can't oscillate the run to idle between run_status frames. When no run is active
+// (e.g. a projection_snapshot replayed for an already-settled thread) we still
+// materialize the bubble but leave the run state untouched.
+function applyStreamText(
+  state: UiState,
+  event: Extract<AppEvent, { type: "stream_text" }>,
+): UiState {
+  const id = event.id
+  const active = state.isThinking || Boolean(state.activeRunId)
+  const streamingAssistantId = active ? id : state.streamingAssistantId
+  const existing = state.transcript.find((item) => item.id === id && item.role === "assistant")
+  if (existing) {
+    return {
+      ...state,
+      streamingAssistantId,
+      transcript: state.transcript.map((item) =>
+        item.id === id && item.role === "assistant"
+          ? { ...item, text: event.content, threadId: event.thread_id, meta: assistantTimingMeta(state, item) }
+          : item,
+      ),
+    }
+  }
+
+  return {
+    ...state,
+    streamingAssistantId,
+    transcript: [
+      ...state.transcript,
+      { id, role: "assistant", text: event.content, threadId: event.thread_id, meta: assistantTimingMeta(state) },
+    ],
+  }
+}
+
 function finalizeAssistant(state: UiState, content: string, threadId: string): UiState {
   const existingId = state.streamingAssistantId
   if (existingId) {
@@ -644,6 +718,29 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
         meta: assistantTimingMeta(state, undefined, completedAtMs),
       },
     ],
+  }
+}
+
+// Settle a run that reached a clean terminal status without a final_reply frame.
+// Mirrors finalizeAssistant's bookkeeping (idle, not thinking, no active run) and
+// stamps the streamed bubble's completedAtMs so its duration renders.
+function settleStreamedRun(state: UiState, status: string, threadId?: string | null): UiState {
+  const existingId = state.streamingAssistantId
+  const completedAtMs = Date.now()
+  return {
+    ...state,
+    status,
+    isThinking: false,
+    activeRunId: null,
+    activeRunSinceMs: null,
+    streamingAssistantId: null,
+    transcript: existingId
+      ? state.transcript.map((item) =>
+          item.id === existingId && item.role === "assistant"
+            ? { ...item, threadId: threadId ?? item.threadId, meta: assistantTimingMeta(state, item, completedAtMs) }
+            : item,
+        )
+      : state.transcript,
   }
 }
 

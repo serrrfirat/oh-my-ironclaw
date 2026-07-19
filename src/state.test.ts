@@ -2062,3 +2062,163 @@ describe("shared status normalizers (RU2/RU3)", () => {
     }
   })
 })
+
+describe("live cumulative text streaming (LIVE-CONV)", () => {
+  function running(threadId = "thread-1", runId = "run-1") {
+    return reduceUiState(initialUiState, { type: "run_started", threadId, runId, status: "running" })
+  }
+  function streamText(state: ReturnType<typeof reduceUiState>, content: string, id = "text:run-1") {
+    return reduceUiState(state, {
+      type: "event",
+      event: { type: "stream_text", id, content, thread_id: "thread-1" },
+    })
+  }
+
+  test("upserts ONE assistant bubble by stable id and REPLACES its text each frame", () => {
+    const s1 = streamText(running(), "Hel")
+    const s2 = streamText(s1, "Hello wo")
+    const s3 = streamText(s2, "Hello world")
+
+    const assistants = s3.transcript.filter((item) => item.role === "assistant")
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0]).toMatchObject({ id: "text:run-1", text: "Hello world" })
+    // The bubble grew by REPLACE, not concat — "Hel" must not survive as a prefix twice.
+    expect((assistants[0] as { text: string }).text).toBe("Hello world")
+    expect(s3.streamingAssistantId).toBe("text:run-1")
+  })
+
+  test("does not finalize/idle the run on a text frame (no terminal until final_reply)", () => {
+    const s = streamText(streamText(running(), "partial"), "partial answer")
+    expect(s.status).toBe("running")
+    expect(s.isThinking).toBe(true)
+    expect(s.activeRunId).toBe("run-1")
+    expect(s.streamingAssistantId).toBe("text:run-1")
+  })
+
+  test("final_reply reconciles with the streamed bubble (same id, no duplicate)", () => {
+    const streamed = streamText(streamText(running(), "Hello"), "Hello wor")
+    const done = reduceUiState(streamed, {
+      type: "event",
+      event: { type: "response", content: "Hello world", thread_id: "thread-1" },
+    })
+
+    const assistants = done.transcript.filter((item) => item.role === "assistant")
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0]).toMatchObject({ id: "text:run-1", text: "Hello world" })
+    expect(done.streamingAssistantId).toBeNull()
+    expect(done.isThinking).toBe(false)
+    expect(done.activeRunId).toBeNull()
+    expect(done.status).toBe("idle")
+  })
+
+  test("a clean terminal run_status settles the streamed bubble and clears streaming", () => {
+    const streamed = streamText(running(), "Answer text")
+    const completed = reduceUiState(streamed, {
+      type: "event",
+      event: { type: "run_status", status: "completed", run_id: "run-1", thread_id: "thread-1" },
+    })
+
+    expect(completed.streamingAssistantId).toBeNull()
+    expect(completed.isThinking).toBe(false)
+    expect(completed.activeRunId).toBeNull()
+    expect(completed.activeRunSinceMs).toBeNull()
+    const assistant = completed.transcript.find((item) => item.role === "assistant")
+    expect(assistant).toMatchObject({ id: "text:run-1", text: "Answer text" })
+    expect(typeof (assistant as { meta?: { completedAtMs?: number } })?.meta?.completedAtMs).toBe("number")
+  })
+
+  test("a snapshot text frame with no active run materializes a settled bubble without reactivating", () => {
+    // No run_started: emulates a projection_snapshot replayed for an idle thread.
+    const s = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "stream_text", id: "text:run-9", content: "old reply", thread_id: "thread-1" },
+    })
+    expect(s.transcript.filter((item) => item.role === "assistant")).toHaveLength(1)
+    expect(s.streamingAssistantId).toBeFalsy()
+    expect(s.isThinking).toBe(false)
+    expect(s.status).toBe("starting")
+  })
+})
+
+describe("single status source while a run is active (LIVE-CONV)", () => {
+  test("a mid-run history read does not reset status/isThinking or reflow the transcript", () => {
+    const streaming = reduceUiState(
+      reduceUiState(initialUiState, { type: "run_started", threadId: "thread-1", runId: "run-1", status: "running" }),
+      { type: "event", event: { type: "stream_text", id: "text:run-1", content: "streaming answer", thread_id: "thread-1" } },
+    )
+    // /timeline omits in-progress/gate info; the poll would otherwise idle the run.
+    const afterHistory = reduceUiState(streaming, {
+      type: "history",
+      history: { thread_id: "thread-1", turns: [], has_more: false, pending_gate: null },
+    })
+
+    expect(afterHistory.status).toBe("running")
+    expect(afterHistory.isThinking).toBe(true)
+    expect(afterHistory.activeRunId).toBe("run-1")
+    // Transcript preserved (streaming bubble kept, not dropped by a merge).
+    expect(afterHistory.transcript.filter((item) => item.role === "assistant")).toHaveLength(1)
+    expect(afterHistory.transcript.find((item) => item.role === "assistant")).toMatchObject({ id: "text:run-1" })
+  })
+
+  test("run_status adopts elapsed via Date.now() fallback when the client has no start time", () => {
+    const originalNow = Date.now
+    try {
+      Date.now = () => 5_000
+      // A tracked run_status with no prior run_started (no client-known start).
+      const adopted = reduceUiState(initialUiState, {
+        type: "event",
+        event: { type: "run_status", status: "running", run_id: "run-1", thread_id: "thread-1" },
+      })
+      expect(adopted.activeRunSinceMs).toBe(5_000)
+      expect(adopted.isThinking).toBe(true)
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  test("history in_progress without started_at falls back to now instead of leaving elapsed null", () => {
+    const originalNow = Date.now
+    try {
+      Date.now = () => 7_000
+      const state = reduceUiState(initialUiState, {
+        type: "history",
+        history: {
+          thread_id: "thread-1",
+          turns: [],
+          has_more: false,
+          pending_gate: null,
+          in_progress: { turn_number: 1, user_input: "hi", state: "running", started_at: "" },
+        },
+      })
+      expect(state.activeRunSinceMs).toBe(7_000)
+    } finally {
+      Date.now = originalNow
+    }
+  })
+})
+
+describe("running-tool legibility (LIVE-CONV)", () => {
+  test("a running capability preview carries its input/command on the row mid-run", () => {
+    const state = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "capability_display_preview",
+        invocation_id: "inv-1",
+        capability_id: "acme.lookup",
+        status: "running",
+        title: "lookup",
+        input_summary: "query terms",
+        truncated: false,
+        thread_id: "thread-1",
+      },
+    })
+
+    const activity = state.transcript.find((item) => item.role === "activity")
+    expect(activity).toBeTruthy()
+    const lines = transcriptActivityLines((activity as Extract<TranscriptItem, { role: "activity" }>).activity)
+    // The running row carries the input line so the collapsed summary (which now
+    // prefers input over an empty output while running) can surface the command.
+    expect(lines.some((line) => line === "input: query terms")).toBe(true)
+    expect((activity as { activity: { status: string } }).activity.status).toBe("running")
+  })
+})
