@@ -5,14 +5,24 @@ import type { TranscriptRenderEntry } from "./activityGroups"
 // actions, and in-thread search. Kept free of React/opentui so they can be
 // unit-tested in isolation (see transcriptNav.test.ts).
 
-// Ordered list of the transcript ids that navigation can land on. Activity
-// groups are transparent — each activity inside a group is individually
-// selectable — so the returned order matches the flat transcript order.
-export function selectableTranscriptIds(entries: TranscriptRenderEntry[]): string[] {
+const NO_COLLAPSED_GROUPS: ReadonlySet<string> = new Set()
+
+// Ordered list of the transcript ids that navigation can land on. Selection may
+// only target *rendered* anchors: an expanded activity group is transparent (each
+// activity inside it is individually selectable), but a COLLAPSED group renders
+// only its summary line — its inner activities are unmounted, so the group is
+// represented by its group id instead (selecting it, and `enter`-expanding it,
+// operate on the visible summary rather than a hidden child). `collapsedGroupIds`
+// is the set of activity-group ids currently collapsed.
+export function selectableTranscriptIds(
+  entries: TranscriptRenderEntry[],
+  collapsedGroupIds: ReadonlySet<string> = NO_COLLAPSED_GROUPS,
+): string[] {
   const ids: string[] = []
   for (const entry of entries) {
     if (entry.kind === "activity_group") {
-      for (const item of entry.items) ids.push(item.id)
+      if (collapsedGroupIds.has(entry.id)) ids.push(entry.id)
+      else for (const item of entry.items) ids.push(item.id)
     } else {
       ids.push(entry.item.id)
     }
@@ -33,14 +43,30 @@ export function moveSelection(ids: string[], currentId: string | null, delta: nu
 }
 
 // Case-insensitive substring search over rendered message text + tool
-// titles/output, returning the matching ids in transcript order. An empty query
-// matches nothing (returns []).
-export function searchTranscript(items: TranscriptItem[], query: string): string[] {
+// titles/output, returning the matching *rendered-anchor* ids in transcript
+// order. An empty query matches nothing (returns []). Matches inside a COLLAPSED
+// activity group map to that group's id (its inner activities are unmounted), so
+// jumps and highlights only ever target a mounted anchor; a group contributes at
+// most one match. `collapsedGroupIds` is the set of collapsed activity-group ids.
+export function searchTranscript(
+  entries: TranscriptRenderEntry[],
+  query: string,
+  collapsedGroupIds: ReadonlySet<string> = NO_COLLAPSED_GROUPS,
+): string[] {
   if (query.length === 0) return []
   const needle = query.toLowerCase()
   const matches: string[] = []
-  for (const item of items) {
-    if (transcriptSearchText(item).toLowerCase().includes(needle)) matches.push(item.id)
+  const hit = (item: TranscriptItem) => transcriptSearchText(item).toLowerCase().includes(needle)
+  for (const entry of entries) {
+    if (entry.kind === "activity_group") {
+      if (collapsedGroupIds.has(entry.id)) {
+        if (entry.items.some(hit)) matches.push(entry.id)
+      } else {
+        for (const item of entry.items) if (hit(item)) matches.push(item.id)
+      }
+    } else if (hit(entry.item)) {
+      matches.push(entry.item.id)
+    }
   }
   return matches
 }

@@ -343,12 +343,19 @@ export function App({ config }: AppProps) {
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
   const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
   const canCancelRun = Boolean((state.pendingGate?.thread_id || state.activeThreadId) && (state.pendingGate?.run_id || state.activeRunId))
+  // A conversation is on screen (ConversationSurface + its sidebar) only with a
+  // transcript or a live gate; otherwise the WelcomeSurface (empty composer) shows
+  // and the sidebar is NOT rendered — so sidebar focus/keys must be gated on this.
+  const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
 
   // --- Threads sidebar layout (persistent, collapsible, responsive) ---
   // Reuses state.threads (the same list the ctrl+t palette shows) — no new fetch.
   const sidebarThreads = useMemo(() => sortThreadsByRecent(state.threads), [state.threads])
   const sidebarLayout = computeSidebarLayout(width, sidebarCollapsed)
-  const sidebarActive = sidebarLayout.visible && sidebarFocused
+  // The sidebar is only truly on screen when a conversation is showing; in the
+  // welcome/empty-thread state it isn't rendered even if the layout leaves room.
+  const sidebarVisible = sidebarLayout.visible && hasConversation
+  const sidebarActive = sidebarVisible && sidebarFocused
   const chatContentWidth = Math.max(1, sidebarLayout.chatWidth - 4)
   // Threads currently awaiting approval — drives the sidebar's warn status dot.
   const approvalThreadIds = useMemo(() => {
@@ -432,25 +439,41 @@ export function App({ config }: AppProps) {
   }
 
   // --- Transcript navigation / search derived state ---
-  // Ordered ids the nav cursor can land on (flattened over activity groups).
+  const transcriptEntries = useMemo(() => groupTranscriptEntries(state.transcript), [state.transcript])
+  // Activity groups the user has collapsed: their inner activities are unmounted,
+  // so selection/search represent them by the group id (a rendered anchor) rather
+  // than a hidden child. A group is collapsed when its id is in expandedActivityIds
+  // (which tracks the *toggled* state; groups render expanded by default).
+  const collapsedGroupIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const entry of transcriptEntries) {
+      if (entry.kind === "activity_group" && expandedActivityIds.has(entry.id)) ids.add(entry.id)
+    }
+    return ids
+  }, [transcriptEntries, expandedActivityIds])
+  // Ordered ids the nav cursor can land on (rendered anchors only).
   const selectableTranscriptIdList = useMemo(
-    () => selectableTranscriptIds(groupTranscriptEntries(state.transcript)),
-    [state.transcript],
+    () => selectableTranscriptIds(transcriptEntries, collapsedGroupIds),
+    [transcriptEntries, collapsedGroupIds],
   )
   const searchMatchIdList = useMemo(
-    () => (searchActive ? searchTranscript(state.transcript, searchQuery) : []),
-    [searchActive, searchQuery, state.transcript],
+    () => (searchActive ? searchTranscript(transcriptEntries, searchQuery, collapsedGroupIds) : []),
+    [searchActive, searchQuery, transcriptEntries, collapsedGroupIds],
   )
   const searchMatchIdSet = useMemo(() => new Set(searchMatchIdList), [searchMatchIdList])
   const navMode = !showHome && activeOverlay === null && !sidebarActive && (navSelectedId !== null || searchActive)
   const inConversationView = !showHome && activeOverlay === null
 
   // Keep the search cursor pointed at a real match, and mirror it into the shared
-  // highlight/selection so the matched message scrolls into view.
+  // highlight/selection so the matched message scrolls into view. Clamp the active
+  // index when the match list shrinks mid-stream (the transcript can grow/trim
+  // without a keystroke) so the counter, highlight, and next-jump target agree.
   useEffect(() => {
     if (!searchActive) return
-    const id = searchMatchIdList[searchMatchIndex] ?? searchMatchIdList[0] ?? null
-    setNavSelectedId(id)
+    const count = searchMatchIdList.length
+    const clamped = count === 0 ? 0 : Math.min(searchMatchIndex, count - 1)
+    if (clamped !== searchMatchIndex) setSearchMatchIndex(clamped)
+    setNavSelectedId(searchMatchIdList[clamped] ?? null)
   }, [searchActive, searchMatchIdList, searchMatchIndex])
 
   // Drop a stale selection (e.g. after switching threads or trimming history).
@@ -473,6 +496,16 @@ export function App({ config }: AppProps) {
     setSearchQuery("")
     setSearchMatchIndex(0)
   }, [state.activeThreadId])
+
+  // A pending gate owns keyboard input: drop any transcript nav / open search the
+  // moment a gate arrives so the gate's approve/deny/enter/token keys can't be
+  // swallowed by nav- or search-mode key handling.
+  useEffect(() => {
+    if (state.pendingGate) {
+      setNavSelectedId(null)
+      setSearchActive(false)
+    }
+  }, [state.pendingGate?.request_id])
 
   function enterTranscriptNav() {
     if (selectableTranscriptIdList.length === 0) return
@@ -523,8 +556,14 @@ export function App({ config }: AppProps) {
     textareaRef.current?.focus()
   }
 
-  // `enter` — expand/collapse a tool/activity card (no-op on text messages).
+  // `enter` — expand/collapse a tool/activity card (no-op on text messages). When
+  // the selection is a collapsed activity group (represented by its group id, not
+  // a hidden child), enter expands the group.
   function activateSelectedTranscriptItem() {
+    if (navSelectedId && collapsedGroupIds.has(navSelectedId)) {
+      toggleActivityExpanded(navSelectedId)
+      return
+    }
     const item = selectedTranscriptItem()
     if (item?.role === "activity") toggleActivityExpanded(item.id)
   }
@@ -622,7 +661,7 @@ export function App({ config }: AppProps) {
     // While the sidebar owns focus, it captures navigation keys (up/down select,
     // enter opens, tab/esc returns focus to the chat) and swallows the rest so
     // they never reach the composer.
-    if (inConversationView && sidebarLayout.visible && sidebarFocused) {
+    if (inConversationView && sidebarVisible && sidebarFocused) {
       if (key.name === "tab" || key.name === "escape") {
         key.preventDefault(); key.stopPropagation(); setSidebarFocused(false); return
       }
@@ -645,7 +684,7 @@ export function App({ config }: AppProps) {
     }
     // From the chat, tab moves focus into the sidebar (unless a gate or the slash
     // palette is claiming tab), seeding the cursor on the active thread.
-    if (inConversationView && sidebarLayout.visible && !sidebarFocused && key.name === "tab" && !state.pendingGate && !showSlashCommands) {
+    if (inConversationView && sidebarVisible && !sidebarFocused && key.name === "tab" && !state.pendingGate && !showSlashCommands) {
       key.preventDefault(); key.stopPropagation()
       const activeIndex = sidebarThreads.findIndex((thread) => thread.id === state.activeThreadId)
       setSidebarIndex(activeIndex >= 0 ? activeIndex : 0)
@@ -656,14 +695,18 @@ export function App({ config }: AppProps) {
     // Opens from the composer or from nav mode. The search field captures typing,
     // so `n`/`N` can't drive the jumps (they're valid query chars) — enter /
     // shift+enter jump next / prev instead.
-    if (inConversationView && !sidebarActive && key.ctrl && key.name === "f") {
+    // Gated on !pendingGate (like up-into-nav): search must not open over an
+    // auth/token gate and steal the gate's input.
+    if (inConversationView && !sidebarActive && !state.pendingGate && key.ctrl && key.name === "f") {
       key.preventDefault(); key.stopPropagation()
       openTranscriptSearch()
       return
     }
     if (inConversationView && !sidebarActive && searchActive) {
       if (key.name === "escape") { key.preventDefault(); key.stopPropagation(); closeTranscriptSearch(); return }
-      if (key.name === "backspace" || key.name === "delete") {
+      // Backspace deletes the last query char. Some terminals send Backspace as
+      // ^H ({ctrl, name:"h"}) — treat that as backspace too so chars can be deleted.
+      if (key.name === "backspace" || key.name === "delete" || (key.ctrl && key.name === "h")) {
         key.preventDefault(); key.stopPropagation()
         setSearchQuery((q) => q.slice(0, -1)); setSearchMatchIndex(0); return
       }
@@ -673,7 +716,10 @@ export function App({ config }: AppProps) {
       }
       const searchText = printableKeyText(key)
       if (searchText) { key.preventDefault(); key.stopPropagation(); setSearchQuery((q) => q + searchText); setSearchMatchIndex(0); return }
-      return
+      // Swallow other *plain* keys so they can't leak to the composer, but let
+      // global ctrl/meta shortcuts (gate approve/deny, ^x cancel, ^t/^m pickers,
+      // …) fall through to their handlers below instead of being trapped here.
+      if (!key.ctrl && !key.meta) { key.preventDefault(); key.stopPropagation(); return }
     }
     // --- Transcript navigation focus mode ---
     // Reached only when a message is selected (composer / sidebar keep their own
@@ -688,9 +734,11 @@ export function App({ config }: AppProps) {
       if (navText === "G") { key.preventDefault(); key.stopPropagation(); jumpTranscriptSelection("bottom"); return }
       if (navText === "y") { key.preventDefault(); key.stopPropagation(); copySelectedTranscriptItem(); return }
       if (navText === "e") { key.preventDefault(); key.stopPropagation(); editSelectedTranscriptItem(); return }
-      // pageup keeps loading older history (handled below); everything else is
-      // swallowed while navigating so it can't leak to the composer / history.
-      if (key.name !== "pageup") { key.preventDefault(); key.stopPropagation(); return }
+      // pageup keeps loading older history (handled below). Swallow other *plain*
+      // keys so they can't leak to the composer / input history, but let global
+      // ctrl/meta shortcuts (gate approve/deny, ^x cancel, ^t/^m pickers, ^b, ^h)
+      // fall through to their handlers below.
+      if (key.name !== "pageup" && !key.ctrl && !key.meta) { key.preventDefault(); key.stopPropagation(); return }
     }
     if (showAutomations) {
       if (key.name === "escape") {
@@ -3786,7 +3834,6 @@ export function App({ config }: AppProps) {
     await resolveGate("cancelled")
   }
 
-  const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
   const composerWidth = clamp(width - 8, 42, 82)
   const turnElapsedMs = state.isThinking ? activeTurnElapsedMs(state.transcript, nowMs) : null
   const handleInputChange = () => {

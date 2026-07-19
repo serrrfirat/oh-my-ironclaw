@@ -405,14 +405,24 @@ function ActivityGroup({
   onToggleActivityExpanded: (id: string) => void
 }) {
   const matchIds = searchMatchIds ?? EMPTY_MATCH_IDS
+  // When collapsed, the group's inner activities are unmounted and nav/search
+  // represent the group by its id, so the summary row carries the selection /
+  // search highlight and is the scroll anchor for scrollChildIntoView.
+  const groupSelected = selectedTranscriptId === groupId
+  const groupHighlight = groupSelected
+    ? { bg: theme.accentSoftBg, edge: theme.accent }
+    : matchIds.has(groupId)
+      ? { bg: theme.warnSoftBg, edge: theme.warn }
+      : null
   return (
     <box style={{ width, flexDirection: "column", marginBottom: 2 }}>
       <box
+        id={transcriptMessageAnchorId(groupId)}
         onMouseDown={() => onToggleActivityExpanded(groupId)}
-        style={{ width, height: 1, flexDirection: "row", paddingLeft: 3, paddingRight: 2 }}
+        style={{ width, height: 1, flexDirection: "row", paddingLeft: 3, paddingRight: 2, backgroundColor: groupHighlight?.bg }}
       >
-        <text fg={theme.textMuted}>{expanded ? "▾ " : "▸ "}</text>
-        <text fg={theme.textMuted}>{truncate(activityGroupSummary(items), Math.max(1, width - 7))}</text>
+        <text fg={groupHighlight ? theme.accent : theme.textMuted}>{expanded ? "▾ " : "▸ "}</text>
+        <text fg={groupHighlight ? theme.textStrong : theme.textMuted}>{truncate(activityGroupSummary(items), Math.max(1, width - 7))}</text>
       </box>
       {expanded ? items.map((item) => (
         <TranscriptMessage

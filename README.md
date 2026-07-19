@@ -142,7 +142,7 @@ The settings surface is functional: the **Tools** section cycles per-tool permis
 - `ctrl+t`: thread picker (`ctrl+d` deletes the selected thread with a `y`/`n` confirm)
 - `ctrl+b`: collapse / expand the persistent threads sidebar (conversation view)
 - `tab`: move focus between the threads sidebar and the chat; when the sidebar is focused, `↑`/`↓` select a thread and `enter` opens it
-- `↑` (with an **empty** composer): enter transcript-navigation focus mode on the last message (see below). With text in the composer, `↑`/`↓` still recall input history and are never hijacked.
+- `↑`/`↓`: recall input history whenever the composer has text, or when the thread has no transcript yet — history recall is never hijacked in those cases. With an **empty** composer over a non-empty transcript, `↑` instead enters transcript-navigation focus mode on the last message (see below); to bring a previous message back from there, select it and press `e` (edit & resend), which supersedes empty-composer history recall.
 - `ctrl+f`: open in-thread transcript search
 - `ctrl+m`: model picker
 - `ctrl+n`: new thread
@@ -166,7 +166,7 @@ The conversation transcript is operable, not just a read-only scroll. Focus move
 
 - `↑`/`k` and `↓`/`j` move the selection by one message (clamped — no wrapping past the ends). `k` is intentionally **not** an entry key (it would shadow typing "k"); entry is via `↑` only, and `j`/`k` move once nav mode is active.
 - `g` / `G` jump to the top / bottom message.
-- `enter` expands/collapses a selected tool/activity card (no-op on text messages).
+- `enter` expands/collapses a selected tool/activity card (no-op on text messages). A **collapsed** activity group is selectable as a whole (its hidden tools aren't individually navigable while unmounted); `enter` on it expands the group.
 - `pageup` still loads older history.
 
 **Per-message actions** (on the selected message, shown in the footer hint):
@@ -174,7 +174,9 @@ The conversation transcript is operable, not just a read-only scroll. Focus move
 - `y` — copy to the clipboard over OSC 52. For a user/assistant message this copies the message text; for a tool/activity card it copies the rendered command + output. A brief "copied to clipboard" notice confirms.
 - `e` — edit & resend a **user** message: its text is loaded back into the composer, focus returns to the composer, and nav mode exits. Sending is a normal new turn (the server has no edit); the original message is left in place.
 
-**In-thread search.** `ctrl+f` opens a transcript search field (distinct from the `ctrl+t` thread search). Typing filters case-insensitively over message text + tool titles/output; every match is highlighted in the warn tone and the active match is highlighted like the nav selection and scrolled into view. `enter` / `shift+enter` jump to the next / previous match (they wrap); `esc` closes search and clears the highlight. (`n`/`N` are not used for jumping because they are valid query characters typed into the live search field — `enter` / `shift+enter` drive the jumps instead.)
+**In-thread search.** `ctrl+f` opens a transcript search field (distinct from the `ctrl+t` thread search). Typing filters case-insensitively over message text + tool titles/output; every match is highlighted in the warn tone and the active match is highlighted like the nav selection and scrolled into view. A match inside a collapsed activity group maps to the group's (rendered) summary row so a jump never targets an unmounted tool. `enter` / `shift+enter` jump to the next / previous match (they wrap); `esc` closes search and clears the highlight. `ctrl+h` (some terminals' Backspace) and `backspace` delete the last query char. (`n`/`N` are not used for jumping because they are valid query characters typed into the live search field — `enter` / `shift+enter` drive the jumps instead.)
+
+**A pending gate takes precedence.** When an approval or auth/token gate arrives it owns keyboard input: any open transcript nav / search is closed, `ctrl+f` won't open search over a gate, and the gate keys (`ctrl+a`/`ctrl+d`/`enter`, and the token field) plus global shortcuts (`ctrl+x` cancel, `ctrl+t`/`ctrl+m` pickers, `ctrl+b`/`ctrl+h`) are never swallowed by nav- or search-mode key handling.
 
 The pure, unit-tested logic behind all of this lives in `src/ui/transcriptNav.ts` (`selectableTranscriptIds`, `moveSelection`, `searchTranscript`, `copyTextForItem`), covered by `src/ui/transcriptNav.test.ts`.
 

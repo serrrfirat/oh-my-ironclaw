@@ -20,8 +20,17 @@ function activity(id: string, over: Partial<TranscriptActivity> = {}): Transcrip
   }
 }
 
+// The id groupTranscriptEntries assigns an activity_group is derived from its
+// members' ids, so the tests reference it via the produced entry rather than
+// hard-coding the format.
+function groupIdOf(entries: ReturnType<typeof groupTranscriptEntries>): string {
+  const group = entries.find((entry) => entry.kind === "activity_group")
+  if (!group || group.kind !== "activity_group") throw new Error("expected an activity_group entry")
+  return group.id
+}
+
 describe("selectableTranscriptIds", () => {
-  test("flattens items and activity-group members in transcript order", () => {
+  test("flattens items and expanded activity-group members in transcript order", () => {
     const transcript: TranscriptItem[] = [
       text("u1", "user", "hello"),
       activity("t1"),
@@ -31,8 +40,28 @@ describe("selectableTranscriptIds", () => {
     const entries = groupTranscriptEntries(transcript)
     // The two consecutive activities collapse into one activity_group entry...
     expect(entries.map((e) => e.kind)).toEqual(["item", "activity_group", "item"])
-    // ...but every activity is still individually selectable.
+    // ...and while the group is expanded, every activity is individually selectable.
     expect(selectableTranscriptIds(entries)).toEqual(["u1", "t1", "t2", "a1"])
+  })
+
+  test("a collapsed group is represented by its group id, not its unmounted members", () => {
+    const transcript: TranscriptItem[] = [
+      text("u1", "user", "hello"),
+      activity("t1"),
+      activity("t2"),
+      text("a1", "assistant", "hi"),
+    ]
+    const entries = groupTranscriptEntries(transcript)
+    const groupId = groupIdOf(entries)
+    // With the group collapsed, its inner activities are not rendered, so the
+    // selectable anchor is the group id in their place.
+    expect(selectableTranscriptIds(entries, new Set([groupId]))).toEqual(["u1", groupId, "a1"])
+  })
+
+  test("an unrelated collapsed id does not affect the group", () => {
+    const entries = groupTranscriptEntries([activity("t1"), activity("t2")])
+    // Only the group's own id collapses it; a stray id leaves members selectable.
+    expect(selectableTranscriptIds(entries, new Set(["not-a-group"]))).toEqual(["t1", "t2"])
   })
 
   test("empty transcript yields no selectable ids", () => {
@@ -75,22 +104,38 @@ describe("searchTranscript", () => {
     activity("t1", { title: "grep", inputSummary: "pattern: Deploy" }),
     activity("t2", { title: "read", detail: "src/index.ts" }),
   ]
+  const entries = groupTranscriptEntries(transcript)
 
   test("empty query matches nothing", () => {
-    expect(searchTranscript(transcript, "")).toEqual([])
+    expect(searchTranscript(entries, "")).toEqual([])
   })
 
   test("is case-insensitive and ordered", () => {
-    expect(searchTranscript(transcript, "deploy")).toEqual(["u1", "a1", "t1"])
+    expect(searchTranscript(entries, "deploy")).toEqual(["u1", "a1", "t1"])
   })
 
   test("matches tool titles and output", () => {
-    expect(searchTranscript(transcript, "index.ts")).toEqual(["t2"])
-    expect(searchTranscript(transcript, "grep")).toEqual(["t1"])
+    expect(searchTranscript(entries, "index.ts")).toEqual(["t2"])
+    expect(searchTranscript(entries, "grep")).toEqual(["t1"])
   })
 
   test("no match yields empty", () => {
-    expect(searchTranscript(transcript, "nonexistent-token")).toEqual([])
+    expect(searchTranscript(entries, "nonexistent-token")).toEqual([])
+  })
+
+  test("matches inside a collapsed group map to the group id, deduped", () => {
+    const groupId = groupIdOf(entries)
+    const collapsed = new Set([groupId])
+    // Both t1 (pattern: Deploy) and the group's members would otherwise match
+    // separately; collapsed, the whole group contributes a single group-id match.
+    expect(searchTranscript(entries, "deploy", collapsed)).toEqual(["u1", "a1", groupId])
+    // A match that only exists on an unmounted member still surfaces via the group.
+    expect(searchTranscript(entries, "index.ts", collapsed)).toEqual([groupId])
+  })
+
+  test("a collapsed group with no matching member contributes nothing", () => {
+    const groupId = groupIdOf(entries)
+    expect(searchTranscript(entries, "API", new Set([groupId]))).toEqual(["u1"])
   })
 })
 
