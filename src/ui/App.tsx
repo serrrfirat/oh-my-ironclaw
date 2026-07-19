@@ -34,7 +34,7 @@ import { parseModelListResponse, selectedModelFromSwitchResponse, withSelectedMo
 import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebornProfile"
 import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
 import { filterSkills, parseSkillListOutput, skillDetailPath, type SkillListItem, type SkillListResult } from "../skillList"
-import { initialUiState, reduceUiState, type ActivityItem } from "../state"
+import { initialUiState, isTerminalRunState, reduceUiState, type ActivityItem } from "../state"
 import { filterThreads, sortThreadsByRecent, threadDisplayTitle, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
 import { loadUiPrefs, saveNotifyLevel } from "../uiPrefs"
 import { AutomationsSurface } from "./AutomationsSurface"
@@ -4391,9 +4391,14 @@ function printableKeyText(key: KeyEvent): string {
   return ""
 }
 
+// Trigger a history refresh for EVERY terminal run status the reducer recognizes
+// (completed/done/succeeded/failed/cancelled/canceled/killed/recovery_required),
+// normalized the same way. A subset here would silently drop the reply for runs
+// that end 'succeeded'/'done' whose reply arrived only via the timeline — the
+// spinner clears but refreshThreadFromEvent never fires, so the reply never shows.
 function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, { type: "run_status" }> {
   if (event.type !== "run_status") return false
-  return ["completed", "failed", "cancelled", "killed"].includes(event.status)
+  return isTerminalRunState(event.status)
 }
 
 // Run statuses that page the user as a "failed" notification. Cancelled is a

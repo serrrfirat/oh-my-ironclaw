@@ -60,6 +60,12 @@ export type UiState = {
   pendingGate?: PendingGateInfo | null
   lastError?: string | null
   streamingAssistantId?: string | null
+  // Id of the most recent streamed assistant bubble. Unlike streamingAssistantId
+  // this survives a settle (a clean terminal run_status that clears the live
+  // target) so a final_reply arriving AFTER the terminal status can still
+  // reconcile into the existing bubble instead of appending a duplicate. Cleared
+  // only on the next run_started.
+  lastStreamedAssistantId?: string | null
   // GET /session snapshot, drives UI capability/feature gating. Null until fetched.
   session?: SessionResponse | null
   // Non-error notice (e.g. rejected_busy). Cleared when a new run starts.
@@ -234,6 +240,10 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         notice: null,
         runUsageCost: null,
         lastTerminalRunId: null,
+        // A fresh run starts a fresh streaming lineage; drop the previous run's
+        // recoverable bubble id so its settled bubble is never hijacked by this
+        // run's final_reply (see finalizeAssistant / lastStreamedAssistantId).
+        lastStreamedAssistantId: null,
         activeRunSinceMs: Date.now(),
         // Only clear a recorded failure when the new run is on the SAME thread as
         // that failure — starting a run on thread B must not wipe thread A's
@@ -641,6 +651,7 @@ function appendAssistantChunk(state: UiState, content: string, threadId?: string
     status: "streaming",
     isThinking: true,
     streamingAssistantId: id,
+    lastStreamedAssistantId: id,
     transcript: [...state.transcript, { id, role: "assistant", text: content, threadId, meta: assistantTimingMeta(state) }],
   }
 }
@@ -658,15 +669,33 @@ function applyStreamText(
   event: Extract<AppEvent, { type: "stream_text" }>,
 ): UiState {
   const id = event.id
+  const replayed = event.replayed === true
   const active = state.isThinking || Boolean(state.activeRunId)
-  const streamingAssistantId = active ? id : state.streamingAssistantId
-  const existing = state.transcript.find((item) => item.id === id && item.role === "assistant")
+  // Match id AND thread_id: a fallback id synthesized from a run/thread token must
+  // never let one thread's frame hijack another thread's lingering bubble.
+  const existing = state.transcript.find(
+    (item) => item.id === id && item.role === "assistant" && item.threadId === event.thread_id,
+  )
+  // A live (non-replayed) frame is the streaming target even before the run is
+  // marked active, so a first token that precedes run_started still reconciles at
+  // final_reply. A replayed frame only tracks streaming while a run is genuinely
+  // active — it must not reactivate streaming on an idle/settled thread.
+  const trackStreaming = replayed ? active : true
+  const streamingAssistantId = trackStreaming ? id : state.streamingAssistantId
+  const lastStreamedAssistantId = trackStreaming ? id : state.lastStreamedAssistantId
+
   if (existing) {
+    // Never overwrite a finalized reply with a stale cumulative body: a replayed
+    // snapshot on reconnect, or any frame arriving after the bubble already
+    // settled with no run active, must leave the settled text intact.
+    const settled = typeof existing.meta?.completedAtMs === "number"
+    if (settled && (replayed || !active)) return state
     return {
       ...state,
       streamingAssistantId,
+      lastStreamedAssistantId,
       transcript: state.transcript.map((item) =>
-        item.id === id && item.role === "assistant"
+        item.id === id && item.role === "assistant" && item.threadId === event.thread_id
           ? { ...item, text: event.content, threadId: event.thread_id, meta: assistantTimingMeta(state, item) }
           : item,
       ),
@@ -676,6 +705,7 @@ function applyStreamText(
   return {
     ...state,
     streamingAssistantId,
+    lastStreamedAssistantId,
     transcript: [
       ...state.transcript,
       { id, role: "assistant", text: event.content, threadId: event.thread_id, meta: assistantTimingMeta(state) },
@@ -684,8 +714,16 @@ function applyStreamText(
 }
 
 function finalizeAssistant(state: UiState, content: string, threadId: string): UiState {
-  const existingId = state.streamingAssistantId
-  if (existingId) {
+  // Prefer the live streaming target; fall back to the last streamed bubble id so
+  // a final_reply that arrives AFTER a clean terminal run_status (which cleared
+  // streamingAssistantId via settleStreamedRun) still reconciles into the existing
+  // bubble instead of appending a duplicate. Only reconcile if that bubble is
+  // still present in the transcript.
+  const targetId = state.streamingAssistantId ?? state.lastStreamedAssistantId ?? null
+  const target = targetId
+    ? state.transcript.find((item) => item.id === targetId && item.role === "assistant")
+    : undefined
+  if (target) {
     return {
       ...state,
       status: "idle",
@@ -694,7 +732,7 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
       activeRunId: null,
       streamingAssistantId: null,
       transcript: state.transcript.map((item) =>
-        item.id === existingId && item.role === "assistant"
+        item.id === target.id && item.role === "assistant"
           ? { ...item, text: content, threadId, meta: assistantTimingMeta(state, item, Date.now()) }
           : item,
       ),
