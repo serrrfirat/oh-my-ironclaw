@@ -35,6 +35,24 @@ export function isDiffFence(lang?: string | null): boolean {
   return (lang ?? "").trim().toLowerCase() === "diff"
 }
 
+// Gate the custom code-well renderNode on streaming state.
+//
+// @opentui's <markdown> does NOT re-run a custom renderNode when its `content`
+// updates incrementally: the code well freezes at its first partial frame while
+// the rest of the streamed code spills below the border as plain prose, and it
+// stays frozen even after the reply settles. Native code blocks (no renderNode)
+// DO update on content change, and a fresh mount with the COMPLETE text renders
+// the well correctly. So we only apply the renderNode to messages that are NOT
+// actively streaming — the streaming bubble renders native (live) code, and the
+// caller remounts it with the renderNode (via a differing React key) once it
+// settles. See TranscriptMessage.
+export function markdownRenderNodeFor(
+  streaming: boolean,
+  renderNode?: MarkdownRenderNode,
+): MarkdownRenderNode | undefined {
+  return streaming ? undefined : renderNode
+}
+
 // Text a per-block "copy" affordance places on the clipboard: the raw code,
 // never the surrounding fence. Robust to a token with no text (partial stream).
 export function codeBlockCopyText(token: { text?: string }): string {

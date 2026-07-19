@@ -58,7 +58,9 @@ describe("syntax theme style map", () => {
     expect(SYNTAX_THEME_STYLES["markup.italic"].italic).toBe(true)
     expect(SYNTAX_THEME_STYLES["markup.link"].fg).toBe(theme.accentText)
     expect(SYNTAX_THEME_STYLES["markup.link"].underline).toBe(true)
-    expect(SYNTAX_THEME_STYLES["markup.raw"].fg).toBe(theme.text)
+    // Inline `code` reads as an accent chip on the code-well background.
+    expect(SYNTAX_THEME_STYLES["markup.raw"].fg).toBe(theme.accentText)
+    expect(SYNTAX_THEME_STYLES["markup.raw"].bg).toBe(theme.bgCode)
   })
 
   test("comment is dimmed + italic for a de-emphasized read", () => {

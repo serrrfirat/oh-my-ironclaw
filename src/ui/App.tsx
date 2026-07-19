@@ -4179,6 +4179,7 @@ export function App({ config }: AppProps) {
               authTokenSubmitting={authTokenSubmitting}
               showOlderHistoryHint={state.hasOlderHistory}
               transcript={state.transcript}
+              streamingAssistantId={state.streamingAssistantId ?? null}
               expandedActivityIds={expandedActivityIds}
               selectedTranscriptId={navSelectedId}
               searchMatchIds={searchMatchIdSet}

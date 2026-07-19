@@ -134,6 +134,7 @@ export function ConversationSurface({
   authTokenSubmitting,
   showOlderHistoryHint,
   transcript,
+  streamingAssistantId = null,
   expandedActivityIds,
   selectedTranscriptId = null,
   searchMatchIds,
@@ -164,6 +165,9 @@ export function ConversationSurface({
   authTokenSubmitting: boolean
   showOlderHistoryHint: boolean
   transcript: TranscriptItem[]
+  // Id of the actively-streaming assistant bubble; that message renders native
+  // (live) code and remounts into a themed well once it settles.
+  streamingAssistantId?: string | null
   expandedActivityIds: Set<string>
   selectedTranscriptId?: string | null
   searchMatchIds?: Set<string>
@@ -229,6 +233,7 @@ export function ConversationSurface({
             items={entry.items}
             markdownStyle={markdownStyle}
             markdownRenderNode={markdownRenderNode}
+            streamingAssistantId={streamingAssistantId}
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
             width={contentWidth}
@@ -244,6 +249,7 @@ export function ConversationSurface({
             expanded={entry.item.role === "activity" ? !expandedActivityIds.has(entry.item.id) : expandedActivityIds.has(entry.item.id)}
             markdownStyle={markdownStyle}
             markdownRenderNode={markdownRenderNode}
+            streaming={entry.item.id === streamingAssistantId}
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
             width={contentWidth}
@@ -400,6 +406,7 @@ function ActivityGroup({
   items,
   markdownStyle,
   markdownRenderNode,
+  streamingAssistantId = null,
   selectedModel,
   spinner,
   width,
@@ -414,6 +421,7 @@ function ActivityGroup({
   items: Array<Extract<TranscriptItem, { role: "activity" }>>
   markdownStyle: SyntaxStyle
   markdownRenderNode?: MarkdownRenderNode
+  streamingAssistantId?: string | null
   selectedModel: string
   spinner: string
   width: number
@@ -449,6 +457,7 @@ function ActivityGroup({
           expanded={!expandedActivityIds.has(item.id)}
           markdownStyle={markdownStyle}
           markdownRenderNode={markdownRenderNode}
+          streaming={item.id === streamingAssistantId}
           selectedModel={selectedModel}
           spinner={spinner}
           width={width}

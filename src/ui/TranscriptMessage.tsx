@@ -1,6 +1,6 @@
 import { SyntaxStyle } from "@opentui/core"
 import { transcriptActivityLines, type TranscriptItem } from "../transcript"
-import type { MarkdownRenderNode } from "./codeWell"
+import { markdownRenderNodeFor, type MarkdownRenderNode } from "./codeWell"
 import { diffPreviewLineBg, diffPreviewLineColor, isUnifiedDiffKind } from "./diffPreview"
 import { theme } from "./theme"
 
@@ -33,6 +33,7 @@ export function TranscriptMessage({
   expanded,
   markdownStyle,
   markdownRenderNode,
+  streaming = false,
   selectedModel,
   spinner,
   width,
@@ -48,6 +49,11 @@ export function TranscriptMessage({
   // every other markdown token falls back to the default renderer. Optional so
   // callers that don't supply it keep plain (native) code rendering.
   markdownRenderNode?: MarkdownRenderNode
+  // True only for the actively-streaming assistant bubble. While streaming we
+  // skip the custom renderNode (it freezes on incremental content updates) and
+  // render native, live-updating code instead; the differing markdown `key`
+  // remounts the bubble with the themed well once the reply settles.
+  streaming?: boolean
   selectedModel: string
   spinner: string
   width: number
@@ -62,12 +68,17 @@ export function TranscriptMessage({
   const anchorId = transcriptMessageAnchorId(item.id)
   const highlight = messageHighlight(selected, searchMatch)
   const selectOnClick = onSelectMessage ? () => onSelectMessage(item.id) : undefined
+  // Gate the well renderNode on streaming, and force a one-time remount at the
+  // streaming→settled boundary so the settled bubble mounts fresh with the
+  // complete text + renderNode (the known-correct render path).
+  const messageRenderNode = markdownRenderNodeFor(streaming, markdownRenderNode)
+  const markdownKey = streaming ? "md-live" : "md-final"
 
   if (item.role === "user") {
     return (
       <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg ?? theme.bgSoft, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bgSoft, marginBottom: 2 }}>
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-          <markdown content={item.text || " "} syntaxStyle={markdownStyle} renderNode={markdownRenderNode} tableOptions={MARKDOWN_TABLE_OPTIONS} internalBlockMode="top-level" />
+          <markdown key={markdownKey} content={item.text || " "} syntaxStyle={markdownStyle} renderNode={messageRenderNode} tableOptions={MARKDOWN_TABLE_OPTIONS} internalBlockMode="top-level" />
         </box>
       </box>
     )
@@ -77,7 +88,7 @@ export function TranscriptMessage({
     return (
       <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bg, marginBottom: 2 }}>
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
-          <markdown content={item.text || " "} syntaxStyle={markdownStyle} renderNode={markdownRenderNode} tableOptions={MARKDOWN_TABLE_OPTIONS} internalBlockMode="top-level" />
+          <markdown key={markdownKey} content={item.text || " "} syntaxStyle={markdownStyle} renderNode={messageRenderNode} tableOptions={MARKDOWN_TABLE_OPTIONS} internalBlockMode="top-level" />
           <BuildLine durationMs={item.meta?.durationMs} selectedModel={selectedModel} />
         </box>
       </box>
