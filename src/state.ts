@@ -96,6 +96,13 @@ export type UiState = {
   // The most recent run that failed (not cancelled) and still wants the user.
   // Cleared on run_started. Drives a home NEEDS YOU "failed" row.
   lastFailedRun?: { threadId?: string | null; runId?: string | null; detail: string; sinceMs: number } | null
+  // Outcome of the most recently SETTLED run, so the client-side input queue can
+  // decide whether to auto-flush a queued message on the isThinking true→false
+  // edge. "completed" (clean terminal / final reply) → auto-send the oldest
+  // queued message; "failed"/"cancelled" → hold the queue. Cleared to null when a
+  // new run starts (run_started) or the user sends (user_sent) so a stale outcome
+  // never triggers a flush.
+  lastRunOutcome?: "completed" | "failed" | "cancelled" | null
 }
 
 export const initialUiState: UiState = {
@@ -121,6 +128,7 @@ export const initialUiState: UiState = {
   pendingGateSinceMs: null,
   activeRunSinceMs: null,
   lastFailedRun: null,
+  lastRunOutcome: null,
 }
 
 export type UiAction =
@@ -240,6 +248,9 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         notice: null,
         runUsageCost: null,
         lastTerminalRunId: null,
+        // A newly-started run has no settled outcome yet; clear the previous one
+        // so the input-queue flush effect never fires against a stale completion.
+        lastRunOutcome: null,
         // A fresh run starts a fresh streaming lineage; drop the previous run's
         // recoverable bubble id so its settled bubble is never hijacked by this
         // run's final_reply (see finalizeAssistant / lastStreamedAssistantId).
@@ -263,6 +274,9 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         isThinking: true,
         notice: null,
         runUsageCost: null,
+        // Sending starts a new turn: clear the prior settled outcome so the queue
+        // flush effect only reacts to THIS turn's completion edge.
+        lastRunOutcome: null,
         activity: clearRunningActivity(state.activity),
         transcript: [
           ...state.transcript,
@@ -552,6 +566,7 @@ function applyTerminalRun(
     pendingGateSinceMs: null,
     lastError: cancelled ? state.lastError : detail,
     lastTerminalRunId: resolvedRunId,
+    lastRunOutcome: cancelled ? "cancelled" : "failed",
     lastFailedRun: cancelled
       ? null
       : { threadId: threadId ?? state.activeThreadId, runId: resolvedRunId, detail, sinceMs: Date.now() },
@@ -731,6 +746,7 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
       activeThreadId: threadId,
       activeRunId: null,
       streamingAssistantId: null,
+      lastRunOutcome: "completed",
       transcript: state.transcript.map((item) =>
         item.id === target.id && item.role === "assistant"
           ? { ...item, text: content, threadId, meta: assistantTimingMeta(state, item, Date.now()) }
@@ -746,6 +762,7 @@ function finalizeAssistant(state: UiState, content: string, threadId: string): U
     isThinking: false,
     activeThreadId: threadId,
     activeRunId: null,
+    lastRunOutcome: "completed",
     transcript: [
       ...state.transcript,
       {
@@ -772,6 +789,7 @@ function settleStreamedRun(state: UiState, status: string, threadId?: string | n
     activeRunId: null,
     activeRunSinceMs: null,
     streamingAssistantId: null,
+    lastRunOutcome: "completed",
     transcript: existingId
       ? state.transcript.map((item) =>
           item.id === existingId && item.role === "assistant"

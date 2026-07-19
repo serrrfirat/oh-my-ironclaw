@@ -150,6 +150,7 @@ The settings surface is functional: the **Tools** section cycles per-tool permis
 - `ctrl+r`: retry the last failed/cancelled run
 - `ctrl+g`: jump to the next thread awaiting approval
 - `ctrl+h`: toggle the home control room ↔ conversation (from anywhere)
+- `alt+↑`: pop the newest **queued** message back into the composer to edit (see Input queue); clearing the composer then cancels it
 - `pageup` or `/history`: load older timeline messages
 - `ctrl+a`: approve a pending gate
 - `ctrl+d`: deny a pending gate
@@ -189,6 +190,17 @@ The conversation transcript is operable, not just a read-only scroll. Focus move
 **A pending gate takes precedence.** When an approval or auth/token gate arrives it owns keyboard input: any open transcript nav / search is closed, `ctrl+f` won't open search over a gate, and the gate keys (`ctrl+a`/`ctrl+d`/`enter`, and the token field) plus global shortcuts (`ctrl+x` cancel, `ctrl+t`/`ctrl+m` pickers, `ctrl+b`/`ctrl+h`) are never swallowed by nav- or search-mode key handling.
 
 The pure, unit-tested logic behind all of this lives in `src/ui/transcriptNav.ts` (`selectableTranscriptIds`, `moveSelection`, `searchTranscript`, `copyTextForItem`), covered by `src/ui/transcriptNav.test.ts`.
+
+## Input queue
+
+Typing and pressing `enter` while the active thread already has a run in flight no longer rejects and drops the message — it is **queued**. The composer clears, any staged attachments ride along with the queued message, and a faint indicator row above the composer shows `⧗ N queued · <preview> · alt+↑ edit`.
+
+- **Auto-send on clean completion.** When the run finishes cleanly, the **oldest** queued message auto-sends as a new turn (replaying its stored attachments). Exactly one message flushes per completion edge, so a backlog chains naturally — each send starts a new run and the next message waits for that one to finish.
+- **Hold on failure/cancellation.** If the run fails or is cancelled, the queue is **held** (never auto-sent) and a notice nudges you: `run <failed|cancelled> — N message(s) still queued; alt+↑ to edit/send`.
+- **Edit / cancel a queued message.** `alt+↑` pops the newest queued message back into the composer (restoring its text and attachments) so you can edit and re-send it; clearing the composer instead simply cancels it. `esc` is unaffected (it still cancels the active run).
+- **Per-thread.** Queues are keyed by thread. Only the **active** thread's queue auto-flushes on completion; a background thread's queue stays dormant until you switch back to it and its run settles. A thread's queue is dropped when the thread is deleted.
+
+The queue itself is a pure, immutable per-thread FIFO in `src/ui/inputQueue.ts` (`enqueue`, `dequeueOldest`, `popNewest`, `queueCount`, `peekOldest`), covered by `src/ui/inputQueue.test.ts`. The flush decision reads a `lastRunOutcome` signal (`completed` / `failed` / `cancelled`) set by the terminal reducers in `src/state.ts`.
 
 ## Home
 

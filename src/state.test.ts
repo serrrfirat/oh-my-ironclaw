@@ -2369,3 +2369,67 @@ describe("running-tool legibility (LIVE-CONV)", () => {
     expect((activity as { activity: { status: string } }).activity.status).toBe("running")
   })
 })
+
+describe("lastRunOutcome (input-queue flush signal)", () => {
+  const running = { ...initialUiState, isThinking: true, activeRunId: "run-1", activeThreadId: "thread-1" }
+
+  test("starts null", () => {
+    expect(initialUiState.lastRunOutcome).toBeNull()
+  })
+
+  test("clean terminal run_status settles to completed", () => {
+    const state = reduceUiState(running, {
+      type: "event",
+      event: { type: "run_status", status: "completed", run_id: "run-1", thread_id: "thread-1" },
+    })
+    expect(state.lastRunOutcome).toBe("completed")
+    expect(state.isThinking).toBe(false)
+  })
+
+  test("final reply (response) settles to completed", () => {
+    const streamed = reduceUiState(running, {
+      type: "event",
+      event: { type: "stream_chunk", content: "hi", thread_id: "thread-1" },
+    })
+    const state = reduceUiState(streamed, {
+      type: "event",
+      event: { type: "response", content: "hi there", thread_id: "thread-1" },
+    })
+    expect(state.lastRunOutcome).toBe("completed")
+  })
+
+  test("failed run settles to failed", () => {
+    const state = reduceUiState(running, {
+      type: "event",
+      event: { type: "run_status", status: "failed", run_id: "run-1", thread_id: "thread-1" },
+    })
+    expect(state.lastRunOutcome).toBe("failed")
+  })
+
+  test("cancelled run settles to cancelled", () => {
+    const state = reduceUiState(running, {
+      type: "event",
+      event: { type: "run_cancelled", run_id: "run-1", thread_id: "thread-1" },
+    })
+    expect(state.lastRunOutcome).toBe("cancelled")
+  })
+
+  test("run_started clears a prior outcome", () => {
+    const completed = reduceUiState(running, {
+      type: "event",
+      event: { type: "run_status", status: "completed", run_id: "run-1", thread_id: "thread-1" },
+    })
+    expect(completed.lastRunOutcome).toBe("completed")
+    const restarted = reduceUiState(completed, { type: "run_started", threadId: "thread-1", runId: "run-2" })
+    expect(restarted.lastRunOutcome).toBeNull()
+  })
+
+  test("user_sent clears a prior outcome", () => {
+    const completed = reduceUiState(running, {
+      type: "event",
+      event: { type: "run_status", status: "completed", run_id: "run-1", thread_id: "thread-1" },
+    })
+    const sent = reduceUiState(completed, { type: "user_sent", content: "again", threadId: "thread-1" })
+    expect(sent.lastRunOutcome).toBeNull()
+  })
+})

@@ -88,6 +88,15 @@ import {
   validateStagedAttachment,
   type StagedAttachment,
 } from "./attachments"
+import {
+  clearThreadQueue,
+  dequeueOldest,
+  enqueue,
+  peekOldest,
+  popNewest,
+  queueCount,
+  type QueuedMessageMap,
+} from "./inputQueue"
 import { buildLogQuery, cycleLogLevel, DEFAULT_LOG_FILTER, type LogFilterState } from "./logFilters"
 import { globalAutoApproveFromEntries, nextToolPermission, toolPermissionRows, type ToolPermissionRow } from "./toolPermissions"
 import {
@@ -264,6 +273,15 @@ export function App({ config }: AppProps) {
   const homeCreditsSigRef = useRef<string>("")
   // --- Attachments staged for the next send ---
   const [stagedAttachments, setStagedAttachments] = useState<StagedAttachment[]>([])
+  // --- Client-side input queue ---
+  // Messages typed while a thread's run is in flight are queued per thread (keyed
+  // by thread id, "local" fallback) instead of reject-and-dropped. The oldest
+  // auto-sends on that thread's clean-completion edge (see the flush effect); a
+  // failed/cancelled run holds the queue. Only the ACTIVE thread auto-flushes —
+  // a background thread's queue stays dormant until you return to it and its run
+  // settles (thread-scoped by state.activeThreadId in the flush effect).
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessageMap>({})
+  const wasThinkingRef = useRef(false)
   // --- Remote skills surface ---
   const [remoteSkills, setRemoteSkills] = useState<SkillInfo[]>([])
   const [remoteSkillQuery, setRemoteSkillQuery] = useState("")
@@ -1612,6 +1630,24 @@ export function App({ config }: AppProps) {
       void jumpToApprovalInbox()
       return
     }
+    // Alt+↑ pops the NEWEST queued message back into the composer for editing —
+    // removing it from the queue. Clearing the composer then simply cancels it.
+    // Uses the alt (option) modifier so it never shadows plain ↑ (input history /
+    // transcript nav). Only meaningful in the conversation composer.
+    if (key.name === "up" && key.option && inConversationView && !sidebarActive) {
+      key.preventDefault()
+      key.stopPropagation()
+      const queueKey = state.activeThreadId ?? "local"
+      if (queueCount(queuedMessages, queueKey) > 0) {
+        const { msg, map } = popNewest(queuedMessages, queueKey)
+        setQueuedMessages(map)
+        if (msg) {
+          setComposerText(msg.text)
+          setStagedAttachments(msg.attachments)
+        }
+      }
+      return
+    }
     if (showSlashCommands) {
       if (key.name === "up") {
         key.preventDefault()
@@ -1773,6 +1809,35 @@ export function App({ config }: AppProps) {
     const timer = setInterval(() => setNowMs(Date.now()), 250)
     return () => clearInterval(timer)
   }, [state.isThinking, showHome])
+
+  // Input-queue auto-flush. Fires on the isThinking true→false edge, scoped to the
+  // ACTIVE thread's queue. On a clean completion, dequeue the OLDEST queued
+  // message and send it (replaying its stored attachments) — exactly one per edge,
+  // so chaining is natural: sending starts a new run and the next stays queued
+  // until that run completes. On failure/cancellation the queue is HELD and the
+  // user is nudged to edit/send it with alt+↑. Background-thread queues are not
+  // flushed here; they resume when you switch back and that thread's run settles.
+  useEffect(() => {
+    const wasThinking = wasThinkingRef.current
+    wasThinkingRef.current = state.isThinking
+    if (!wasThinking || state.isThinking) return
+    const key = state.activeThreadId ?? "local"
+    const pending = queueCount(queuedMessages, key)
+    if (pending === 0) return
+    if (state.lastRunOutcome === "completed") {
+      const { msg, map } = dequeueOldest(queuedMessages, key)
+      setQueuedMessages(map)
+      if (msg) void submitContent(msg.text, msg.attachments)
+    } else if (state.lastRunOutcome === "failed" || state.lastRunOutcome === "cancelled") {
+      dispatch({
+        type: "notice",
+        message: `run ${state.lastRunOutcome} — ${pending} message(s) still queued; alt+↑ to edit/send`,
+      })
+    }
+    // submitContent/clearComposer are stable component closures; re-including them
+    // would churn the effect. The queue map + run signals are the real inputs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.isThinking, state.activeThreadId, state.lastRunOutcome, queuedMessages])
 
   useEffect(() => {
     let cancelled = false
@@ -2852,20 +2917,39 @@ export function App({ config }: AppProps) {
     await submitContent(content)
   }
 
-  async function submitContent(content: string) {
-    const attachments = stagedAttachments
+  // `overrideAttachments` lets the input-queue flush replay a queued message with
+  // its stored attachments, bypassing the async setStagedAttachments state (which
+  // would race the send). A normal composer send omits it and uses the staged set.
+  async function submitContent(content: string, overrideAttachments?: StagedAttachment[]) {
+    const attachments = overrideAttachments ?? stagedAttachments
+    // Input queue (primary intercept): if the active thread already has a run in
+    // flight, queue the message locally instead of sending (which the gateway
+    // would reject_busy anyway). Clear the composer + staged attachments; the
+    // oldest queued message auto-sends on the thread's clean-completion edge. A
+    // flush replay (overrideAttachments provided) must never re-queue itself.
+    if (overrideAttachments === undefined && state.isThinking && state.activeRunId) {
+      const key = state.activeThreadId ?? "local"
+      setQueuedMessages((map) => enqueue(map, key, { text: content, attachments }))
+      clearComposer()
+      setStagedAttachments([])
+      dispatch({ type: "notice", message: "queued — will send when the current run finishes" })
+      return
+    }
     try {
       const response = await client.send(content, state.activeThreadId, {
         attachments: attachments.length ? attachments.map(toOutgoingAttachment) : undefined,
       })
       const threadId = response.thread_id ?? state.activeThreadId
       if (threadId) activeThreadIdRef.current = threadId
-      // A busy thread already has an active run: surface the notice (not an
-      // error) and leave the composer text + staged attachments intact so the
-      // message isn't lost. Nothing was optimistically committed, so there's
-      // nothing to roll back and isThinking is never left stuck true.
+      // Backstop: a send can still race a run that started between our intercept
+      // check and the gateway. Rather than drop the message, queue it the same way
+      // so the completion edge auto-sends it. Composer + staged set are cleared.
       if (response.outcome === "rejected_busy") {
-        dispatch({ type: "notice", message: response.notice ?? "A run is already active on this thread." })
+        const key = threadId ?? state.activeThreadId ?? "local"
+        setQueuedMessages((map) => enqueue(map, key, { text: content, attachments }))
+        clearComposer()
+        setStagedAttachments([])
+        dispatch({ type: "notice", message: "queued — a run is already active on this thread" })
         return
       }
       // Accepted (submitted / already_submitted): now commit the optimistic UI —
@@ -3209,6 +3293,7 @@ export function App({ config }: AppProps) {
     if (!threadId) return
     try {
       await client.deleteThread(threadId)
+      setQueuedMessages((map) => clearThreadQueue(map, threadId))
       const remaining = state.threads.filter((thread) => thread.id !== threadId)
       dispatch({ type: "threads", threads: remaining, activeThreadId: remaining[0]?.id ?? null })
       if (remaining[0]) await loadThread(remaining[0].id)
@@ -3224,6 +3309,7 @@ export function App({ config }: AppProps) {
     if (!thread) return
     try {
       await client.deleteThread(thread.id)
+      setQueuedMessages((map) => clearThreadQueue(map, thread.id))
       const remaining = paletteThreads.filter((item) => item.id !== thread.id)
       setPaletteThreads(remaining)
       dispatch({ type: "threads", threads: state.threads.filter((item) => item.id !== thread.id), activeThreadId: state.activeThreadId })
@@ -3872,6 +3958,8 @@ export function App({ config }: AppProps) {
     usageCost: state.runUsageCost,
     notice: state.notice,
     stagedAttachments,
+    queuedCount: queueCount(queuedMessages, state.activeThreadId ?? "local"),
+    queuedPreview: peekOldest(queuedMessages, state.activeThreadId ?? "local")?.text ?? null,
     threadDeleteConfirm,
     onInputChange: handleInputChange,
     onSubmit: submit,
