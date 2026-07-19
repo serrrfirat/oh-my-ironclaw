@@ -82,6 +82,12 @@ function buildWellFrame(
     width: "100%",
     paddingLeft: 1,
     paddingRight: 1,
+    // Keep clicks/drags inside the well local: selecting code text (or missing
+    // the copy button) must not bubble to the message box and flip the
+    // transcript into message-nav. The copy button has its own handler.
+    onMouseDown: (event: MouseEvent) => {
+      event.stopPropagation()
+    },
   })
   const header = new BoxRenderable(ctx, {
     flexDirection: "row",

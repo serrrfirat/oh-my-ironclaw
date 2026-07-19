@@ -67,7 +67,7 @@ export function TranscriptMessage({
     return (
       <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg ?? theme.bgSoft, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bgSoft, marginBottom: 2 }}>
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
-          <markdown content={item.text || " "} syntaxStyle={markdownStyle} renderNode={markdownRenderNode} tableOptions={MARKDOWN_TABLE_OPTIONS} />
+          <markdown content={item.text || " "} syntaxStyle={markdownStyle} renderNode={markdownRenderNode} tableOptions={MARKDOWN_TABLE_OPTIONS} internalBlockMode="top-level" />
         </box>
       </box>
     )
@@ -77,7 +77,7 @@ export function TranscriptMessage({
     return (
       <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bg, marginBottom: 2 }}>
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
-          <markdown content={item.text || " "} syntaxStyle={markdownStyle} renderNode={markdownRenderNode} tableOptions={MARKDOWN_TABLE_OPTIONS} />
+          <markdown content={item.text || " "} syntaxStyle={markdownStyle} renderNode={markdownRenderNode} tableOptions={MARKDOWN_TABLE_OPTIONS} internalBlockMode="top-level" />
           <BuildLine durationMs={item.meta?.durationMs} selectedModel={selectedModel} />
         </box>
       </box>

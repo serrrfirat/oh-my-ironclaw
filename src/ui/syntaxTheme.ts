@@ -58,7 +58,16 @@ export const SYNTAX_THEME_STYLES: Record<string, StyleDefinitionInput> = {
   "punctuation.special": { fg: theme.textMuted },
 
   // --- prose: headings + emphasis ---
+  // Register the numbered heading scopes explicitly: some grammars emit
+  // `markup.heading.1`…`.6` and the numeric leaf doesn't always fall back to the
+  // base `markup.heading`, so headings rendered at regular weight without these.
   "markup.heading": { fg: theme.textStrong, bold: true },
+  "markup.heading.1": { fg: theme.textStrong, bold: true },
+  "markup.heading.2": { fg: theme.textStrong, bold: true },
+  "markup.heading.3": { fg: theme.textStrong, bold: true },
+  "markup.heading.4": { fg: theme.textStrong, bold: true },
+  "markup.heading.5": { fg: theme.textStrong, bold: true },
+  "markup.heading.6": { fg: theme.textStrong, bold: true },
   "markup.strong": { fg: theme.textStrong, bold: true },
   strong: { fg: theme.textStrong, bold: true },
   "markup.italic": { fg: theme.text, italic: true },
@@ -72,7 +81,10 @@ export const SYNTAX_THEME_STYLES: Record<string, StyleDefinitionInput> = {
   link: { fg: theme.accentText, underline: true },
 
   // --- prose: inline / fenced code + quotes + lists ---
-  "markup.raw": { fg: theme.text },
+  // Inline `code` reads as a subtle chip (accent text on the code well bg) so it
+  // stands apart from body prose. Fenced blocks (raw.block) are rendered as full
+  // code wells via renderNode, so their scope styling here is a plain fallback.
+  "markup.raw": { fg: theme.accentText, bg: theme.bgCode },
   "markup.raw.block": { fg: theme.text },
   "markup.quote": { fg: theme.textMuted, italic: true },
   "markup.list": { fg: theme.textMuted },
