@@ -120,6 +120,7 @@ Local mode adds read-only CLI commands:
 
 TUI-only controls:
 
+- `/home` — open the home control room (also `ctrl+h`)
 - `/new`
 - `/settings`
 - `/automations` — pause / resume / rename / delete schedules
@@ -131,7 +132,7 @@ TUI-only controls:
 
 `/model`, `/models`, and `ctrl+m` open the model picker. The picker is seeded from config, then updated from the server response. Selecting a model sends `/model <name>` through WebChat v2 so the server-side command applies the choice.
 
-The settings surface is functional: the **Tools** section cycles per-tool permissions (`default → always_allow → ask_each_time → disabled`) and toggles global auto-approve, persisting each change via `/settings/tools`; the **Outbound** section selects the final-reply delivery target; **Skills**, **Automations**, **Extensions**, **Channels**, and **Providers** open their live surfaces. LLM providers are gated on the operator capability from `GET /session`.
+The settings surface is functional: the **Tools** section cycles per-tool permissions (`default → always_allow → ask_each_time → disabled`) and toggles global auto-approve, persisting each change via `/settings/tools`; the **Outbound** section selects the final-reply delivery target; **Skills**, **Automations**, **Extensions**, **Channels**, and **Providers** open their live surfaces; the **Notifications** section cycles the notify level (`off → blockers → all`) and persists it client-side. LLM providers are gated on the operator capability from `GET /session`.
 
 ## Keys
 
@@ -139,11 +140,14 @@ The settings surface is functional: the **Tools** section cycles per-tool permis
 - `esc`: close an open palette / back out a sub-mode; otherwise cancel the active run
 - `ctrl+p`: command palette
 - `ctrl+t`: thread picker (`ctrl+d` deletes the selected thread with a `y`/`n` confirm)
+- `ctrl+b`: collapse / expand the persistent threads sidebar (conversation view)
+- `tab`: move focus between the threads sidebar and the chat; when the sidebar is focused, `↑`/`↓` select a thread and `enter` opens it
 - `ctrl+m`: model picker
 - `ctrl+n`: new thread
 - `ctrl+x`: cancel active run
 - `ctrl+r`: retry the last failed/cancelled run
 - `ctrl+g`: jump to the next thread awaiting approval
+- `ctrl+h`: toggle the home control room ↔ conversation (from anywhere)
 - `pageup` or `/history`: load older timeline messages
 - `ctrl+a`: approve a pending gate
 - `ctrl+d`: deny a pending gate
@@ -152,9 +156,37 @@ The settings surface is functional: the **Tools** section cycles per-tool permis
 
 Surface-local keys are shown in each surface's footer hint (e.g. logs: `l` level · `t` target · `f` follow · `↑`/`↓` scroll · `o` older; tools: `enter` cycle · `g` global auto-approve; automations: `p` pause / `r` resume / `n` rename / `d` delete / `g` refresh; workspace: `enter` descend · `backspace` up). In automations, `d` (delete) asks for a `y`/`n` confirm; `p`/`r`/`n` apply immediately.
 
+## Home
+
+When the session becomes ready on connect, the TUI lands on the **home control room** instead of dropping straight into the conversation. Toggle it from anywhere with `ctrl+h` (or open it with `/home`); `esc` returns to the conversation.
+
+Home answers "what is my IronClaw doing and what needs me?", top to bottom:
+
+- **NEEDS YOU** (amber) — pending approval/auth gates, failed runs, and held automations (an automation whose last run errored), oldest-first with an age label.
+- **ACTIVE** (blue) — threads with a run in flight, showing the phase (thinking / `tool:<cap>` / reflecting / …) and elapsed time.
+- **AUTOMATIONS** — scheduler on/off, the soonest next run, and paused/held counts.
+- **RECENT** — recent thread previews.
+- A faint vitals footer — trace credits, today's spend (summed from run usage), and the count of threads needing approval.
+
+Selection is a single flat list over NEEDS YOU + ACTIVE + RECENT: `↑`/`↓` (or `j`/`k`) move, `enter` opens. A thread row opens that conversation (with its gate focused if it has one); a held-automation row opens `/automations`. The needs-you / active / automations data refreshes on the same 30s cadence as the approval-inbox badge.
+
+## Notifications
+
+IronClaw can page you — terminal bell, an OS desktop notification, and a flagged terminal title — when it's blocked on you or done, but only when you're not already looking at the relevant thread. The level is set in **Settings → Notifications** (persisted client-side to `~/.ironclaw-reborn/tui-prefs.json`) and cycles:
+
+- **off** — never notify.
+- **blockers** (default) — page on blocking events only: an approval gate, an auth challenge, or a failed run.
+- **all** — also page on non-blocking events: a final reply landing, and the approval-inbox count rising.
+
+A notification is suppressed when its thread is the active thread *and* the conversation is the visible surface (a gate in front of you needs no popup). Repeated frames from one run collapse to a single page (debounced by thread + kind + summary).
+
+The terminal title always reflects how many things are waiting on you (pending approvals across threads + the live gate) as `⚑ N · ironclaw`, resetting to `ironclaw` when nothing is pending or on quit. OS popups are emitted via the OSC 9 escape and only appear in a terminal that supports it (e.g. iTerm2, WezTerm, Kitty; many terminals ignore it silently). Under tmux the title escape sets the window name, so a pending count shows as a flag on the tmux status line / window flag rather than a desktop popup.
+
 ## Design
 
-The UI uses the **IronClaw DS (PR #5563) "Pixel" theme** — a flat `#09090b` canvas with hairline separators, square uppercase tag chips, a signal-blue accent ramp (`#2882c8 → #4ca7e6 → #6bb8ec`), and a strict status canon (running = info blue, success = ok green, approval/attention = warn amber, failure/cancelled = danger red, paused/idle = muted). All tokens live in `src/ui/theme.ts`; surfaces import from it rather than hard-coding colors. The LocalDevYolo rainbow splash variant is preserved.
+The UI uses the **IronClaw DS "Glass" look** — the same `#09090b` zinc canvas, signal-blue accent ramp (`#2882c8 → #4ca7e6 → #6bb8ec`), pill tag chips, and strict status canon (running = info blue, success = ok green, approval/attention = warn amber, failure/cancelled = danger red, paused/idle = muted), but rendered as **rounded-border framed panels and elevated cards** rather than flat text on the canvas. Surfaces are wrapped in a rounded frame with a barred header; tool output sits in a rounded card-bg well; approval gates are framed warn-tone cards (keeping the amber identity) and auth challenges are framed accent-tone cards; the composer is a rounded glass well whose border edge doubles as the focus / thinking indicator. Lists stay quiet — only the selected row is emphasised (accent-tinted fill + a coloured left edge) so the list doesn't become a grid of boxes. All tokens (including the Glass `cardBg` / `cardBorder` / `barBg`) live in `src/ui/theme.ts`; surfaces import from it rather than hard-coding colors. The LocalDevYolo rainbow splash variant is preserved.
+
+The conversation view is a two-pane layout: a persistent **threads sidebar** (`THREADS`, ~28 cols) on the left listing threads with a status dot (running = info, needs-approval = warn, idle = muted), the active thread highlighted, over the conversation on the right. The sidebar reads the same in-memory thread list as the `ctrl+t` picker (no extra fetches). It auto-collapses below ~90 cols (chat takes the full width); `ctrl+b` toggles it, and `tab` moves focus between the sidebar and the chat — when the sidebar is focused, `↑`/`↓` select and `enter` opens the thread.
 
 ## Configuration
 

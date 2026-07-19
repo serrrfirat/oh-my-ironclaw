@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { initialUiState, reduceUiState } from "./state"
-import { statusTone } from "./ui/theme"
+import { accumulateTodayCost, initialUiState, isTerminalRunState, reduceUiState } from "./state"
+import { normalizeStatusKey, statusTone } from "./ui/theme"
 import { transcriptActivityLines, type TranscriptItem } from "./transcript"
 
 function activityText(item: TranscriptItem | undefined): string {
@@ -1745,5 +1745,320 @@ describe("statusTone log levels", () => {
     expect(statusTone("trace")).toBe("muted")
     expect(statusTone("error")).toBe("danger")
     expect(statusTone("fatal")).toBe("danger")
+  })
+})
+
+describe("notify level + home-supporting state", () => {
+  test("set_notify_level updates and no-ops when unchanged", () => {
+    expect(initialUiState.notifyLevel).toBe("blockers")
+    const all = reduceUiState(initialUiState, { type: "set_notify_level", level: "all" })
+    expect(all.notifyLevel).toBe("all")
+    // Unchanged level returns the same reference (no needless re-render).
+    const same = reduceUiState(all, { type: "set_notify_level", level: "all" })
+    expect(same).toBe(all)
+  })
+
+  test("run_usage accumulates today's USD cost", () => {
+    const one = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "run_usage",
+        run_id: "r1",
+        thread_id: "t1",
+        cost: {
+          input_cost_usd: "0",
+          cached_input_cost_usd: "0",
+          output_cost_usd: "0",
+          total_cost_usd: "0.25",
+          currency: "USD",
+        },
+      },
+    })
+    expect(one.todayCostUsd).toBeCloseTo(0.25, 5)
+    const two = reduceUiState(one, {
+      type: "event",
+      event: {
+        type: "run_usage",
+        run_id: "r2",
+        thread_id: "t1",
+        cost: {
+          input_cost_usd: "0",
+          cached_input_cost_usd: "0",
+          output_cost_usd: "0",
+          total_cost_usd: "0.75",
+          currency: "USD",
+        },
+      },
+    })
+    expect(two.todayCostUsd).toBeCloseTo(1.0, 5)
+  })
+
+  test("a failed run records lastFailedRun; run_started clears it", () => {
+    const failed = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_status", status: "failed", run_id: "run-9", thread_id: "thread-9", failure_category: "boom" },
+    })
+    expect(failed.lastFailedRun).toMatchObject({ threadId: "thread-9", runId: "run-9", detail: "Run failed: boom" })
+    expect(typeof failed.lastFailedRun?.sinceMs).toBe("number")
+    const restarted = reduceUiState(failed, { type: "run_started", threadId: "thread-9", runId: "run-10", status: "running" })
+    expect(restarted.lastFailedRun).toBeNull()
+    expect(typeof restarted.activeRunSinceMs).toBe("number")
+  })
+
+  test("a cancelled run does not record a failed row", () => {
+    const cancelled = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_cancelled", run_id: "run-1", thread_id: "thread-1", status: "cancelled" },
+    })
+    expect(cancelled.lastFailedRun).toBeNull()
+  })
+
+  test("a raised gate stamps pendingGateSinceMs; clearing it resets", () => {
+    const gated = reduceUiState(initialUiState, {
+      type: "event",
+      event: {
+        type: "gate_required",
+        request_id: "req-1",
+        gate_name: "approval",
+        tool_name: "shell",
+        description: "run ls",
+        parameters: "ls",
+        thread_id: "thread-1",
+        resume_kind: null,
+      } as never,
+    })
+    expect(typeof gated.pendingGateSinceMs).toBe("number")
+    const cleared = reduceUiState(gated, { type: "gate_cleared" })
+    expect(cleared.pendingGateSinceMs).toBeNull()
+  })
+})
+
+describe("accumulateTodayCost (P4 cost dedup + day reset)", () => {
+  test("dedups a replayed run by run id", () => {
+    const first = accumulateTodayCost(0, "2026-07-18", [], "run-1", 0.25, "2026-07-18")
+    expect(first.total).toBeCloseTo(0.25, 5)
+    expect(first.countedRunIds).toEqual(["run-1"])
+    // A reconnect/replay of the same run's cost adds nothing.
+    const replay = accumulateTodayCost(
+      first.total,
+      first.dayKey,
+      first.countedRunIds,
+      "run-1",
+      0.25,
+      "2026-07-18",
+    )
+    expect(replay.total).toBeCloseTo(0.25, 5)
+    expect(replay.countedRunIds).toEqual(["run-1"])
+  })
+
+  test("accumulates distinct runs within a day", () => {
+    const one = accumulateTodayCost(0, null, [], "run-1", 0.25, "2026-07-18")
+    const two = accumulateTodayCost(one.total, one.dayKey, one.countedRunIds, "run-2", 0.75, "2026-07-18")
+    expect(two.total).toBeCloseTo(1.0, 5)
+    expect(two.countedRunIds).toEqual(["run-1", "run-2"])
+  })
+
+  test("resets the total and counted set when the calendar day changes", () => {
+    const day1 = accumulateTodayCost(1.0, "2026-07-18", ["run-1"], "run-2", 0.5, "2026-07-19")
+    expect(day1.total).toBeCloseTo(0.5, 5)
+    expect(day1.dayKey).toBe("2026-07-19")
+    // The prior day's run id is dropped, so it can be counted fresh next day.
+    expect(day1.countedRunIds).toEqual(["run-2"])
+  })
+
+  test("without a dayKey, accumulates + dedups but never rolls over", () => {
+    const one = accumulateTodayCost(0, "2026-07-18", [], "run-1", 0.25, undefined)
+    expect(one.total).toBeCloseTo(0.25, 5)
+    expect(one.dayKey).toBe("2026-07-18")
+    const dupe = accumulateTodayCost(one.total, one.dayKey, one.countedRunIds, "run-1", 0.25, undefined)
+    expect(dupe.total).toBeCloseTo(0.25, 5)
+  })
+})
+
+describe("run_usage cost accumulation via the reducer (P4)", () => {
+  function usageEvent(runId: string, totalUsd: string, dayKey?: string | null) {
+    return {
+      type: "event" as const,
+      dayKey,
+      event: {
+        type: "run_usage" as const,
+        run_id: runId,
+        thread_id: "t1",
+        cost: {
+          input_cost_usd: "0",
+          cached_input_cost_usd: "0",
+          output_cost_usd: "0",
+          total_cost_usd: totalUsd,
+          currency: "USD",
+        },
+      },
+    }
+  }
+
+  test("replaying the same run_usage frame does not double-count", () => {
+    const one = reduceUiState(initialUiState, usageEvent("run-1", "0.25", "2026-07-18"))
+    const replay = reduceUiState(one, usageEvent("run-1", "0.25", "2026-07-18"))
+    expect(one.todayCostUsd).toBeCloseTo(0.25, 5)
+    expect(replay.todayCostUsd).toBeCloseTo(0.25, 5)
+    expect(replay.countedCostRunIds).toEqual(["run-1"])
+  })
+
+  test("a new calendar day resets today's total", () => {
+    const day1 = reduceUiState(initialUiState, usageEvent("run-1", "0.40", "2026-07-18"))
+    const day2 = reduceUiState(day1, usageEvent("run-2", "0.10", "2026-07-19"))
+    expect(day1.todayCostUsd).toBeCloseTo(0.4, 5)
+    expect(day2.todayCostUsd).toBeCloseTo(0.1, 5)
+    expect(day2.todayCostDayKey).toBe("2026-07-19")
+  })
+})
+
+describe("activeRunSinceMs from history in_progress.started_at (P5)", () => {
+  function historyWith(inProgress: { started_at: string } | null, threadId = "thread-1") {
+    return {
+      type: "history" as const,
+      history: {
+        thread_id: threadId,
+        turns: [],
+        has_more: false,
+        pending_gate: null,
+        in_progress: inProgress
+          ? { turn_number: 1, user_input: "hi", state: "running", started_at: inProgress.started_at }
+          : null,
+      },
+    }
+  }
+
+  test("adopts the server started_at for a run picked up via history", () => {
+    const startedAt = "2026-07-18T10:00:00Z"
+    const state = reduceUiState(initialUiState, historyWith({ started_at: startedAt }))
+    expect(state.activeRunSinceMs).toBe(Date.parse(startedAt))
+  })
+
+  test("clears activeRunSinceMs when history shows no in-progress run", () => {
+    const withRun = reduceUiState(initialUiState, historyWith({ started_at: "2026-07-18T10:00:00Z" }))
+    const settled = reduceUiState(withRun, historyWith(null))
+    expect(settled.activeRunSinceMs).toBeNull()
+  })
+
+  test("a terminal run clears activeRunSinceMs", () => {
+    const running = reduceUiState(initialUiState, {
+      type: "run_started",
+      threadId: "thread-1",
+      runId: "run-1",
+      status: "running",
+    })
+    expect(typeof running.activeRunSinceMs).toBe("number")
+    const failed = reduceUiState(running, {
+      type: "event",
+      event: { type: "run_status", status: "failed", run_id: "run-1", thread_id: "thread-1" },
+    })
+    expect(failed.activeRunSinceMs).toBeNull()
+  })
+})
+
+describe("pendingGateSinceMs reset on thread switch (P6)", () => {
+  function gateFor(threadId: string) {
+    return {
+      type: "event" as const,
+      event: {
+        type: "gate_required" as const,
+        request_id: `${threadId}:gate`,
+        thread_id: threadId,
+        run_id: "run-1",
+        gate_ref: "gate:1",
+        gate_name: "approval",
+        tool_name: "shell",
+        description: "approve",
+        parameters: "",
+        resume_kind: { gate_ref: "gate:1" },
+      },
+    }
+  }
+
+  test("a switched-to thread's gate age starts fresh, not inherited", () => {
+    const gatedA = reduceUiState(
+      reduceUiState(initialUiState, { type: "history", history: { thread_id: "thread-A", turns: [], has_more: false } }),
+      gateFor("thread-A"),
+    )
+    const stampA = gatedA.pendingGateSinceMs as number
+    expect(typeof stampA).toBe("number")
+    // Switch to thread B whose history carries its own pending gate.
+    const switched = reduceUiState(gatedA, {
+      type: "history",
+      history: {
+        thread_id: "thread-B",
+        turns: [],
+        has_more: false,
+        pending_gate: {
+          request_id: "thread-B:gate",
+          thread_id: "thread-B",
+          run_id: "run-2",
+          gate_ref: "gate:2",
+          gate_name: "approval",
+          tool_name: "shell",
+          description: "approve",
+          parameters: "",
+          resume_kind: { gate_ref: "gate:2" },
+        },
+      },
+    })
+    expect(switched.pendingGate?.thread_id).toBe("thread-B")
+    // Fresh stamp for thread B — must not equal thread A's older timestamp.
+    expect(switched.pendingGateSinceMs).toBeGreaterThanOrEqual(stampA)
+    expect(switched.pendingGateSinceMs).not.toBe(null)
+  })
+
+  test("the same thread's persisting gate keeps its original timestamp", () => {
+    const gated = reduceUiState(
+      reduceUiState(initialUiState, { type: "history", history: { thread_id: "thread-A", turns: [], has_more: false } }),
+      gateFor("thread-A"),
+    )
+    const stamp = gated.pendingGateSinceMs
+    // A history poll on the same thread that omits gate info preserves the gate.
+    const refreshed = reduceUiState(gated, {
+      type: "history",
+      history: { thread_id: "thread-A", turns: [], has_more: false },
+    })
+    expect(refreshed.pendingGate).not.toBeNull()
+    expect(refreshed.pendingGateSinceMs).toBe(stamp)
+  })
+})
+
+describe("lastFailedRun cross-thread preservation (P7)", () => {
+  test("starting a run on a different thread preserves the other thread's failure", () => {
+    const failedA = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_status", status: "failed", run_id: "run-a", thread_id: "thread-A" },
+    })
+    expect(failedA.lastFailedRun).toMatchObject({ threadId: "thread-A", runId: "run-a" })
+    const startedB = reduceUiState(failedA, { type: "run_started", threadId: "thread-B", runId: "run-b", status: "running" })
+    expect(startedB.lastFailedRun).toMatchObject({ threadId: "thread-A", runId: "run-a" })
+  })
+
+  test("starting a run on the same thread clears that thread's failure", () => {
+    const failedA = reduceUiState(initialUiState, {
+      type: "event",
+      event: { type: "run_status", status: "failed", run_id: "run-a", thread_id: "thread-A" },
+    })
+    const restartedA = reduceUiState(failedA, { type: "run_started", threadId: "thread-A", runId: "run-a2", status: "running" })
+    expect(restartedA.lastFailedRun).toBeNull()
+  })
+})
+
+describe("shared status normalizers (RU2/RU3)", () => {
+  test("normalizeStatusKey canonicalizes camel/kebab/space forms", () => {
+    expect(normalizeStatusKey("recovery_required")).toBe("recovery_required")
+    expect(normalizeStatusKey("recovery-required")).toBe("recovery_required")
+    expect(normalizeStatusKey("Recovery Required")).toBe("recovery_required")
+    expect(normalizeStatusKey("waitingForApproval")).toBe("waiting_for_approval")
+  })
+
+  test("isTerminalRunState matches the reducer's terminal handling", () => {
+    for (const status of ["completed", "done", "succeeded", "failed", "cancelled", "canceled", "killed", "recovery_required"]) {
+      expect(isTerminalRunState(status)).toBe(true)
+    }
+    for (const status of ["running", "queued", "idle", "waiting_for_approval"]) {
+      expect(isTerminalRunState(status)).toBe(false)
+    }
   })
 })

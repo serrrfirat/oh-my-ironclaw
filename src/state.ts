@@ -21,6 +21,8 @@ import {
   upsertTranscriptItem,
   type TranscriptItem,
 } from "./transcript"
+import type { NotifyLevel } from "./ui/notify"
+import { normalizeStatusKey as statusKey } from "./ui/theme"
 
 export { transcriptActivityLines, toolSummary } from "./transcript"
 export type { TranscriptActivity, TranscriptItem } from "./transcript"
@@ -70,6 +72,24 @@ export type UiState = {
   lastTerminalRunId?: string | null
   // Count of threads waiting on approval (approval-inbox badge).
   approvalCount: number
+  // How aggressively to page the user (bell/OS popup/title). Persisted client-side.
+  notifyLevel: NotifyLevel
+  // Running sum of per-run USD cost for the current calendar day (drives the home
+  // "today $"). Reset when the supplied dayKey changes (App passes the day in).
+  todayCostUsd: number
+  // Calendar-day key todayCostUsd is accumulating against (e.g. "2026-07-18").
+  // Null until the first run_usage frame carries a dayKey.
+  todayCostDayKey?: string | null
+  // Run ids already folded into todayCostUsd, so an SSE reconnect/replay of a
+  // run_usage frame for the same run can't double-count. Reset on day change.
+  countedCostRunIds: string[]
+  // Epoch ms the live pending gate was raised; drives the home NEEDS YOU age.
+  pendingGateSinceMs?: number | null
+  // Epoch ms the active run started; drives the home ACTIVE elapsed label.
+  activeRunSinceMs?: number | null
+  // The most recent run that failed (not cancelled) and still wants the user.
+  // Cleared on run_started. Drives a home NEEDS YOU "failed" row.
+  lastFailedRun?: { threadId?: string | null; runId?: string | null; detail: string; sinceMs: number } | null
 }
 
 export const initialUiState: UiState = {
@@ -88,6 +108,13 @@ export const initialUiState: UiState = {
   runUsageCost: null,
   lastTerminalRunId: null,
   approvalCount: 0,
+  notifyLevel: "blockers",
+  todayCostUsd: 0,
+  todayCostDayKey: null,
+  countedCostRunIds: [],
+  pendingGateSinceMs: null,
+  activeRunSinceMs: null,
+  lastFailedRun: null,
 }
 
 export type UiAction =
@@ -98,11 +125,14 @@ export type UiAction =
   | { type: "older_history"; history: HistoryResponse }
   | { type: "run_started"; threadId?: string | null; runId?: string | null; status?: string | null }
   | { type: "user_sent"; content: string; threadId?: string | null }
-  | { type: "event"; event: AppEvent }
+  // `dayKey` is the current calendar-day key (e.g. "2026-07-18") that App stamps
+  // so the reducer stays free of Date.now(); used by run_usage cost accumulation.
+  | { type: "event"; event: AppEvent; dayKey?: string | null }
   | { type: "gate_cleared" }
   | { type: "session"; session: SessionResponse }
   | { type: "notice"; message: string | null }
   | { type: "approval_count"; count: number }
+  | { type: "set_notify_level"; level: NotifyLevel }
 
 export function reduceUiState(state: UiState, action: UiAction): UiState {
   switch (action.type) {
@@ -134,6 +164,20 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         hasOlderHistory: Boolean(action.history.next_cursor),
         runUsageCost: threadSwitched ? null : state.runUsageCost,
         pendingGate,
+        // Preserve the gate age only for the same thread; a switched-to thread's
+        // gate must start fresh rather than inherit the previous thread's stamp.
+        pendingGateSinceMs: pendingGate
+          ? threadSwitched
+            ? Date.now()
+            : state.pendingGateSinceMs ?? Date.now()
+          : null,
+        // Adopt an in-progress run's start time from the server so the home
+        // ACTIVE elapsed label is correct for runs picked up via sync/history;
+        // no in-progress run means nothing is active, so clear it.
+        activeRunSinceMs: action.history.in_progress
+          ? parseStartedAtMs(action.history.in_progress.started_at) ??
+            (threadSwitched ? null : state.activeRunSinceMs ?? null)
+          : null,
         activeRunId: pendingGate?.run_id ?? (action.history.in_progress ? state.activeRunId : null),
         status: action.history.in_progress ? action.history.in_progress.state : "idle",
         isThinking: pendingGate
@@ -157,6 +201,9 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
       // state object (and the render it triggers). Return the same reference.
       if (state.approvalCount === action.count) return state
       return { ...state, approvalCount: action.count }
+    case "set_notify_level":
+      if (state.notifyLevel === action.level) return state
+      return { ...state, notifyLevel: action.level }
     case "run_started":
       return {
         ...state,
@@ -167,6 +214,17 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         notice: null,
         runUsageCost: null,
         lastTerminalRunId: null,
+        activeRunSinceMs: Date.now(),
+        // Only clear a recorded failure when the new run is on the SAME thread as
+        // that failure — starting a run on thread B must not wipe thread A's
+        // still-unaddressed failure from NEEDS YOU.
+        lastFailedRun:
+          state.lastFailedRun &&
+          state.lastFailedRun.threadId &&
+          action.threadId &&
+          state.lastFailedRun.threadId !== action.threadId
+            ? state.lastFailedRun
+            : null,
       }
     case "user_sent":
       return {
@@ -188,13 +246,13 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         ],
       }
     case "gate_cleared":
-      return { ...state, pendingGate: null }
+      return { ...state, pendingGate: null, pendingGateSinceMs: null }
     case "event":
-      return applyEvent(state, action.event)
+      return applyEvent(state, action.event, action.dayKey)
   }
 }
 
-function applyEvent(state: UiState, event: AppEvent): UiState {
+function applyEvent(state: UiState, event: AppEvent, dayKey?: string | null): UiState {
   switch (event.type) {
     case "heartbeat":
       return { ...state, connected: true }
@@ -245,11 +303,23 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
         runFailureMessage(statusKey(cancelledStatus)),
       )
     }
-    case "run_usage":
+    case "run_usage": {
+      const acc = accumulateTodayCost(
+        state.todayCostUsd,
+        state.todayCostDayKey,
+        state.countedCostRunIds,
+        event.run_id,
+        runCostUsd(event.cost),
+        dayKey,
+      )
       return {
         ...state,
         runUsageCost: { runId: event.run_id, threadId: event.thread_id, usage: event.usage, cost: event.cost },
+        todayCostUsd: acc.total,
+        todayCostDayKey: acc.dayKey,
+        countedCostRunIds: acc.countedRunIds,
       }
+    }
     case "notice":
       return { ...state, notice: event.message }
     case "stream_chunk":
@@ -316,10 +386,11 @@ function applyEvent(state: UiState, event: AppEvent): UiState {
         status: "waiting for approval",
         activeRunId: pendingGate.run_id ?? state.activeRunId,
         pendingGate,
+        pendingGateSinceMs: Date.now(),
       }
     }
     case "gate_resolved":
-      return { ...state, pendingGate: null, status: event.message, isThinking: true }
+      return { ...state, pendingGate: null, pendingGateSinceMs: null, status: event.message, isThinking: true }
     case "onboarding_state":
       return {
         ...state,
@@ -430,9 +501,14 @@ function applyTerminalRun(
     status,
     isThinking: false,
     activeRunId: null,
+    activeRunSinceMs: null,
     pendingGate: null,
+    pendingGateSinceMs: null,
     lastError: cancelled ? state.lastError : detail,
     lastTerminalRunId: resolvedRunId,
+    lastFailedRun: cancelled
+      ? null
+      : { threadId: threadId ?? state.activeThreadId, runId: resolvedRunId, detail, sinceMs: Date.now() },
     transcript,
     activity: upsertActivity(state.activity, {
       id,
@@ -489,7 +565,9 @@ function historyShowsRunSettled(history: HistoryResponse): boolean {
   return false
 }
 
-function isTerminalRunState(status: string): boolean {
+// Terminal run-state membership. Exported so homeData.ts shares the exact set
+// instead of re-declaring it (its ACTIVE filter adds "idle" on top of this).
+export function isTerminalRunState(status: string): boolean {
   return [
     "completed",
     "done",
@@ -864,9 +942,48 @@ function statusLabel(status: string): string {
   return status.replaceAll("_", " ")
 }
 
-function statusKey(status: string): string {
-  return status
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .replace(/[-\s]+/g, "_")
-    .toLowerCase()
+// Extract a finite USD amount from a run-cost frame (amounts are wire strings);
+// non-finite/missing values contribute nothing to the running total.
+function runCostUsd(cost?: RebornRunCost | null): number {
+  const total = Number(cost?.total_cost_usd)
+  return Number.isFinite(total) ? total : 0
+}
+
+// Cap on the tracked counted-run-id list so a long-lived session can't grow it
+// without bound; reconnect/replay only ever concerns recent runs.
+const COUNTED_COST_RUN_CAP = 500
+
+// Pure accumulator for today's USD spend. Deduplicates by run id (a replayed
+// run_usage frame for an already-counted run adds nothing) and rolls the total
+// over when the calendar day changes. `dayKey` is supplied by the caller (App)
+// so this stays free of Date.now(); when omitted, no day rollover occurs and the
+// previous key is preserved (accumulate + dedup only).
+export function accumulateTodayCost(
+  prevTotal: number,
+  prevDayKey: string | null | undefined,
+  countedRunIds: string[],
+  runId: string | null | undefined,
+  costUsd: number,
+  dayKey?: string | null,
+): { total: number; dayKey: string | null; countedRunIds: string[] } {
+  const dayChanged = dayKey != null && prevDayKey != null && dayKey !== prevDayKey
+  const baseTotal = dayChanged ? 0 : prevTotal
+  const baseCounted = dayChanged ? [] : countedRunIds
+  const nextDayKey = dayKey ?? prevDayKey ?? null
+  // Already folded in — a reconnect/replay of this run's cost must not re-add it.
+  if (runId != null && baseCounted.includes(runId)) {
+    return { total: baseTotal, dayKey: nextDayKey, countedRunIds: baseCounted }
+  }
+  const total = baseTotal + costUsd
+  const countedNext =
+    runId != null ? [...baseCounted, runId].slice(-COUNTED_COST_RUN_CAP) : baseCounted
+  return { total, dayKey: nextDayKey, countedRunIds: countedNext }
+}
+
+// Parse an ISO timestamp (server in_progress.started_at) to epoch ms; empty or
+// unparseable input yields null.
+function parseStartedAtMs(value?: string | null): number | null {
+  if (!value) return null
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? ms : null
 }

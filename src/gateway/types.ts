@@ -935,9 +935,13 @@ export type PlanStepDto = {
   result?: string | null
 }
 
+// `replayed` marks an event sourced from a projection_snapshot replay (sent on
+// every SSE (re)connect) rather than a live incremental update. The UI uses it
+// to suppress notifications for backlog it has already surfaced, so a reconnect
+// does not re-page the user for old replies/gates/failures.
 export type AppEvent =
-  | { type: "response"; content: string; thread_id: string }
-  | { type: "run_status"; status: string; run_id?: string | null; thread_id?: string | null; failure_category?: string | null }
+  | { type: "response"; content: string; thread_id: string; replayed?: boolean }
+  | { type: "run_status"; status: string; run_id?: string | null; thread_id?: string | null; failure_category?: string | null; replayed?: boolean }
   | { type: "thinking"; message: string; thread_id?: string | null }
   | { type: "thinking_update"; id: string; content: string; thread_id?: string | null }
   | { type: "work_summary_update"; id: string; run_id?: string | null; phase: string; content: string; thread_id?: string | null }
@@ -977,7 +981,7 @@ export type AppEvent =
   | { type: "stream_chunk"; content: string; thread_id?: string | null }
   | { type: "status"; message: string; thread_id?: string | null }
   | { type: "approval_needed"; request_id: string; tool_name: string; description: string; parameters: string; thread_id?: string | null; allow_always: boolean }
-  | { type: "gate_required"; request_id: string; gate_name: string; tool_name: string; description: string; parameters: string; extension_name?: string | null; provider?: string | null; account_label?: string | null; challenge_kind?: string | null; authorization_url?: string | null; expires_at?: string | null; allow_always?: boolean; approval_context?: ApprovalContext | null; resume_kind: unknown; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null }
+  | { type: "gate_required"; request_id: string; gate_name: string; tool_name: string; description: string; parameters: string; extension_name?: string | null; provider?: string | null; account_label?: string | null; challenge_kind?: string | null; authorization_url?: string | null; expires_at?: string | null; allow_always?: boolean; approval_context?: ApprovalContext | null; resume_kind: unknown; thread_id?: string | null; run_id?: string | null; gate_ref?: string | null; replayed?: boolean }
   | { type: "gate_resolved"; request_id: string; gate_name: string; tool_name: string; resolution: string; message: string; thread_id?: string | null }
   | { type: "onboarding_state"; extension_name: string; state: "setup_required" | "auth_required" | "pairing_required" | "ready" | "failed"; request_id?: string | null; message?: string | null; instructions?: string | null; auth_url?: string | null; setup_url?: string | null; onboarding?: unknown; thread_id?: string | null }
   | { type: "reasoning_update"; narrative: string; decisions: ToolDecisionDto[]; thread_id?: string | null }

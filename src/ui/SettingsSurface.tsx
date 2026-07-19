@@ -1,12 +1,25 @@
 import type { ClientConfig } from "../config"
 import type { LlmConfigSnapshot, SessionResponse } from "../gateway/types"
+import type { NotifyLevel } from "./notify"
 import { theme } from "./theme"
 import { Field, padEnd, Surface, truncate, wrapIndex } from "./pixel"
 
-export type SettingsSection = "Profile" | "Connection" | "Providers" | "Extensions" | "Channels" | "Skills" | "Automations" | "Tools" | "Outbound"
+export type SettingsSection = "Profile" | "Connection" | "Providers" | "Extensions" | "Channels" | "Skills" | "Automations" | "Tools" | "Outbound" | "Notifications"
 type SettingsMenuItem = { label: SettingsSection; meta: string }
 
-const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Providers", "Extensions", "Channels", "Skills", "Automations", "Tools", "Outbound"]
+const SETTINGS_SECTIONS: SettingsSection[] = ["Profile", "Connection", "Providers", "Extensions", "Channels", "Skills", "Automations", "Tools", "Outbound", "Notifications"]
+
+// Human-readable summary of a notify level, reused by the menu meta + preview.
+export function notifyLevelLabel(level: NotifyLevel): string {
+  switch (level) {
+    case "off":
+      return "off"
+    case "all":
+      return "all activity"
+    default:
+      return "blockers only"
+  }
+}
 
 export const SETTINGS_SECTION_COUNT = SETTINGS_SECTIONS.length
 
@@ -31,6 +44,7 @@ export function SettingsSurface({
   channelCount = 0,
   skillCount = 0,
   skillsRemote = false,
+  notifyLevel = "blockers",
   status,
   width,
 }: {
@@ -50,6 +64,7 @@ export function SettingsSurface({
   channelCount?: number
   skillCount?: number
   skillsRemote?: boolean
+  notifyLevel?: NotifyLevel
   status: string
   width: number
 }) {
@@ -74,6 +89,7 @@ export function SettingsSurface({
       serverState,
       profileName,
       operatorOnly,
+      notifyLevel,
     }),
   }))
   const selectedItem = menu[wrapIndex(selectedIndex, menu.length)] ?? menu[0]
@@ -94,6 +110,7 @@ export function SettingsSurface({
       extensionSetupCount={extensionSetupCount}
       skillCount={skillCount}
       skillsRemote={skillsRemote}
+      notifyLevel={notifyLevel}
       selectedModel={selectedModel}
       selectedProvider={selectedProvider}
       sourcePath={sourcePath}
@@ -165,6 +182,7 @@ function SettingsPreview({
   extensionSetupCount,
   skillCount,
   skillsRemote,
+  notifyLevel,
   selectedModel,
   selectedProvider,
   sourcePath,
@@ -185,6 +203,7 @@ function SettingsPreview({
   extensionSetupCount: number
   skillCount: number
   skillsRemote: boolean
+  notifyLevel: NotifyLevel
   selectedModel: string
   selectedProvider: string
   sourcePath: string
@@ -205,6 +224,7 @@ function SettingsPreview({
     extensionSetupCount,
     skillCount,
     skillsRemote,
+    notifyLevel,
     selectedModel,
     selectedProvider,
     sourcePath,
@@ -239,12 +259,15 @@ function settingsMenuMeta(
     selectedProvider: string
     serverState: string
     operatorOnly: boolean
+    notifyLevel: NotifyLevel
   },
 ) {
-  const { automationCount, channelCount, config, extensionCount, extensionSetupCount, profileName, selectedModel, selectedProvider, serverState, skillCount, skillsRemote, operatorOnly } = context
+  const { automationCount, channelCount, config, extensionCount, extensionSetupCount, profileName, selectedModel, selectedProvider, serverState, skillCount, skillsRemote, operatorOnly, notifyLevel } = context
   switch (section) {
     case "Connection":
       return serverState
+    case "Notifications":
+      return notifyLevelLabel(notifyLevel)
     case "Providers":
       return operatorOnly ? "operator only" : selectedProvider ? `${selectedModel} · ${selectedProvider}` : selectedModel
     case "Extensions":
@@ -280,13 +303,14 @@ function settingsFieldsForSection(
     extensionSetupCount: number
     skillCount: number
     skillsRemote: boolean
+    notifyLevel: NotifyLevel
     selectedModel: string
     selectedProvider: string
     sourcePath: string
     status: string
   },
 ) {
-  const { authState, automationCount, channelCount, config, connected, extensionCount, extensionSetupCount, llmConfig, llmConfigError, session, operatorOnly, selectedModel, selectedProvider, skillCount, skillsRemote, sourcePath, status } = context
+  const { authState, automationCount, channelCount, config, connected, extensionCount, extensionSetupCount, llmConfig, llmConfigError, session, operatorOnly, notifyLevel, selectedModel, selectedProvider, skillCount, skillsRemote, sourcePath, status } = context
   switch (section) {
     case "Connection":
       return [
@@ -353,6 +377,13 @@ function settingsFieldsForSection(
         { label: "modality", value: "server default (read-only)" },
         { label: "source", value: "WebChat v2 outbound preferences" },
       ]
+    case "Notifications":
+      return [
+        { label: "level", value: notifyLevelLabel(notifyLevel) },
+        { label: "blockers", value: "gate · auth · failed → bell + OS popup" },
+        { label: "all", value: "also final replies + approval inbox" },
+        { label: "terminal title", value: "shows pending gate/approval count" },
+      ]
     default:
       return [
         { label: "mode", value: config.mode },
@@ -382,6 +413,8 @@ function settingsActionHint(section: SettingsSection): string {
       return "enter opens per-tool permissions"
     case "Outbound":
       return "enter opens delivery defaults"
+    case "Notifications":
+      return "enter cycles off → blockers → all"
     case "Connection":
       return "connection is read-only"
     default:

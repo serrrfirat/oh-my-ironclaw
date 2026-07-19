@@ -36,12 +36,36 @@ import { activeProfileFromCliResult, shouldUseLocalDevYoloSplash } from "../rebo
 import { formatLocalCliResult, formatRebornCliCommand, runRebornCli } from "../rebornCli"
 import { filterSkills, parseSkillListOutput, skillDetailPath, type SkillListItem, type SkillListResult } from "../skillList"
 import { initialUiState, reduceUiState, type ActivityItem } from "../state"
-import { filterThreads, sortThreadsByRecent, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
+import { filterThreads, sortThreadsByRecent, threadDisplayTitle, threadPreviewFromHistory, type ThreadPreviewMap } from "../threadPreviews"
+import { loadUiPrefs, saveNotifyLevel } from "../uiPrefs"
 import { AutomationsSurface } from "./AutomationsSurface"
 import { ChannelsSurface } from "./ChannelsSurface"
 import { ExtensionsSurface, extensionRows, type ExtensionRow } from "./ExtensionsSurface"
 import { LlmProvidersSurface, type LlmProviderFormView } from "./LlmProvidersSurface"
-import { ConversationSurface, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
+import { ConversationSurface, ThreadsSidebar, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
+import { computeSidebarLayout } from "./threadsSidebar"
+import { HomeSurface, type HomeSection } from "./HomeSurface"
+import {
+  buildActiveRows,
+  buildAutomationsSummary,
+  buildNeedsYou,
+  buildVitals,
+  formatUsd,
+  resolveHomeTarget,
+  type HomeInputs,
+} from "./homeData"
+import {
+  clearTitle,
+  makeNotifyGate,
+  notify,
+  notifyDedupKey,
+  pendingApprovalTitleCount,
+  setPendingTitle,
+  shouldNotify,
+  type NotifyEvent,
+  type NotifyKind,
+  type NotifyLevel,
+} from "./notify"
 import { SettingsSurface, SETTINGS_SECTION_COUNT, settingsSectionAt } from "./SettingsSurface"
 import { SkillsSurface, type SkillDetailView } from "./SkillsSurface"
 import { SkillsRemoteSurface, type RemoteSkillDetail, type SkillInstallState } from "./SkillsRemoteSurface"
@@ -105,6 +129,7 @@ type LlmProviderFormState = {
   defaults: Partial<Record<LlmProviderFormField, string>>
 }
 const INPUT_HISTORY_LIMIT = 100
+const HOME_RECENT_LIMIT = 6
 
 export function App({ config }: AppProps) {
   const renderer = useRenderer()
@@ -126,6 +151,10 @@ export function App({ config }: AppProps) {
   const [authTokenSubmitting, setAuthTokenSubmitting] = useState(false)
   const [selectedThreadIndex, setSelectedThreadIndex] = useState(0)
   const [selectedGateAction, setSelectedGateAction] = useState<GateAction>("approved")
+  // --- Persistent threads sidebar (conversation view) ---
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarFocused, setSidebarFocused] = useState(false)
+  const [sidebarIndex, setSidebarIndex] = useState(0)
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   const [activeOverlay, setActiveOverlay] = useState<ActiveOverlay>(null)
   const [paletteThreads, setPaletteThreads] = useState<ThreadInfo[]>([])
@@ -177,6 +206,30 @@ export function App({ config }: AppProps) {
   const [llmProviderForm, setLlmProviderForm] = useState<LlmProviderFormState | null>(null)
   const [selectedLlmProviderIndex, setSelectedLlmProviderIndex] = useState(0)
   const [nowMs, setNowMs] = useState(() => Date.now())
+  // --- Home (control room) surface ---
+  const [showHome, setShowHome] = useState(false)
+  const [selectedHomeIndex, setSelectedHomeIndex] = useState(0)
+  const [homeCreditsUsd, setHomeCreditsUsd] = useState<number | null>(null)
+  // Refs mirror render state so the SSE consumer / poll effects read fresh
+  // values without re-subscribing. threadsRef/threadPreviewsRef feed notification
+  // titles; the visibility refs gate notification suppression + title updates.
+  const threadsRef = useRef<ThreadInfo[]>([])
+  const threadPreviewsRef = useRef<ThreadPreviewMap>({})
+  const notifyLevelRef = useRef<NotifyLevel>(state.notifyLevel)
+  const conversationVisibleRef = useRef(false)
+  const activeOverlayRef = useRef<ActiveOverlay>(null)
+  const notifyGateRef = useRef(makeNotifyGate())
+  // -1 is a sentinel meaning "no baseline yet for this connection": the first
+  // poll after (re)connect seeds the baseline instead of paging the whole
+  // pre-existing approval backlog.
+  const prevApprovalCountRef = useRef(-1)
+  // Thread ids currently in the approval inbox. Drives new-approval detection
+  // (page only genuinely-new background threads) and the title count (so the
+  // active thread's own live gate is not double-counted).
+  const approvalThreadIdsRef = useRef<ReadonlySet<string>>(new Set())
+  const titleCountRef = useRef<number>(-1)
+  const automationsSigRef = useRef<string>("")
+  const homeCreditsSigRef = useRef<string>("")
   // --- Attachments staged for the next send ---
   const [stagedAttachments, setStagedAttachments] = useState<StagedAttachment[]>([])
   // --- Remote skills surface ---
@@ -280,6 +333,84 @@ export function App({ config }: AppProps) {
   const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
   const canCancelRun = Boolean((state.pendingGate?.thread_id || state.activeThreadId) && (state.pendingGate?.run_id || state.activeRunId))
 
+  // --- Threads sidebar layout (persistent, collapsible, responsive) ---
+  // Reuses state.threads (the same list the ctrl+t palette shows) — no new fetch.
+  const sidebarThreads = useMemo(() => sortThreadsByRecent(state.threads), [state.threads])
+  const sidebarLayout = computeSidebarLayout(width, sidebarCollapsed)
+  const sidebarActive = sidebarLayout.visible && sidebarFocused
+  const chatContentWidth = Math.max(1, sidebarLayout.chatWidth - 4)
+  // Threads currently awaiting approval — drives the sidebar's warn status dot.
+  const approvalThreadIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (state.pendingGate?.thread_id) ids.add(state.pendingGate.thread_id)
+    return ids
+  }, [state.pendingGate?.thread_id])
+
+  // --- Home (control room) view-model, assembled from UiState + fetched lists ---
+  const homeRecentThreads = useMemo(() => sortThreadsByRecent(state.threads).slice(0, HOME_RECENT_LIMIT), [state.threads])
+  const homeHeldAutomations = useMemo(
+    () =>
+      automations
+        .filter((automation) => automation.last_status === "error")
+        .map((automation) => ({
+          automationId: automation.automation_id,
+          name: automation.name,
+          detail: "last run errored",
+          sinceMs: automation.last_run_at ? Date.parse(automation.last_run_at) : null,
+        })),
+    [automations],
+  )
+  const homeInputs: HomeInputs = {
+    connected: state.connected,
+    model: selectedModel,
+    credits: formatUsd(homeCreditsUsd),
+    todayCost: state.todayCostUsd > 0 ? formatUsd(state.todayCostUsd) : null,
+    pendingApprovals: state.approvalCount,
+    gates: state.pendingGate
+      ? [
+          {
+            threadId: state.pendingGate.thread_id,
+            threadTitle: threadTitleFor(state.pendingGate.thread_id),
+            challengeKind:
+              state.pendingGate.gate_name === "auth"
+                ? state.pendingGate.challenge_kind || "auth"
+                : state.pendingGate.challenge_kind ?? null,
+            detail: state.pendingGate.description || state.pendingGate.tool_name,
+            sinceMs: state.pendingGateSinceMs ?? null,
+          },
+        ]
+      : [],
+    failedRuns: state.lastFailedRun
+      ? [
+          {
+            threadId: state.lastFailedRun.threadId ?? "",
+            threadTitle: threadTitleFor(state.lastFailedRun.threadId),
+            detail: state.lastFailedRun.detail,
+            sinceMs: state.lastFailedRun.sinceMs,
+          },
+        ]
+      : [],
+    activeRuns:
+      state.isThinking && state.activeThreadId
+        ? [
+            {
+              threadId: state.activeThreadId,
+              threadTitle: threadTitleFor(state.activeThreadId),
+              status: state.status,
+              startedAtMs: state.activeRunSinceMs ?? null,
+            },
+          ]
+        : [],
+    heldAutomations: homeHeldAutomations,
+  }
+  const homeNeedsYou = buildNeedsYou(homeInputs, nowMs)
+  const homeActive = buildActiveRows(homeInputs, nowMs)
+  const homeSelectableTotal = homeNeedsYou.length + homeActive.length + homeRecentThreads.length
+  const homeIndex = homeSelectableTotal > 0 ? wrapIndex(selectedHomeIndex, homeSelectableTotal) : -1
+  const homeSchedulerEnabled = automations.some(
+    (automation) => automation.is_active || automation.state === "active" || automation.state === "scheduled",
+  )
+
   const toggleActivityExpanded = (id: string) => {
     setExpandedActivityIds((current) => {
       const next = new Set(current)
@@ -296,8 +427,34 @@ export function App({ config }: AppProps) {
     copyTextToClipboard(selectedText)
   })
 
+  // Whether a free-text field currently owns keyboard input. The global ctrl+h
+  // home-toggle must not fire in these contexts: some terminals send Backspace as
+  // ^H, and there editing (of the composer / a rename / token / target / search
+  // field) must win over toggling home. The /home command still reaches home.
+  const isTextInputFocused = (): boolean => {
+    // When the threads sidebar owns focus, the composer is not the text sink, so
+    // global toggles (ctrl+h) should fire rather than being treated as edits.
+    if (sidebarActive) return false
+    // Conversation composer — also the sink for the slash-command palette and
+    // inline "/…" filtering, both of which keep activeOverlay null.
+    if (!showHome && activeOverlay === null) return true
+    if (activeOverlay === "commands") return true // slash palette filters the composer
+    if (activeOverlay === "threads") return true // thread palette search box
+    if (activeOverlay === "skills") return true // local skill search-as-you-type
+    if (automationRenameActive) return true // automation rename field
+    if (extensionSetupInputKey !== null) return true // extension setup field
+    if (llmProviderSetupInputKey !== null || llmProviderForm !== null || nearAiWalletInputActive) return true
+    if (logEditingTarget) return true // log target filter field
+    if (remoteSkillSearching || skillInstall !== null) return true // remote skill search / install form
+    if (activeOverlay === "projects" && projectsView === "create") return true // new-project name field
+    // Manual-token auth gate exposes a live token input.
+    if (state.pendingGate && isAuthGate(state.pendingGate) && isManualTokenGate(state.pendingGate)) return true
+    return false
+  }
+
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") {
+      clearTitle()
       renderer.destroy()
       return
     }
@@ -305,6 +462,59 @@ export function App({ config }: AppProps) {
       key.preventDefault()
       key.stopPropagation()
       copyTextToClipboard(lastSelectedTextRef.current || textareaRef.current?.plainText || input)
+      return
+    }
+    // ctrl+h toggles the home control room from anywhere (closing any overlay),
+    // except while a text input is focused: some terminals send Backspace as ^H,
+    // and there the keystroke must edit text, not toggle home (the /home command
+    // still opens home from a text field). From non-input contexts ctrl+h works.
+    if (key.ctrl && key.name === "h" && !isTextInputFocused()) {
+      key.preventDefault()
+      key.stopPropagation()
+      toggleHome()
+      return
+    }
+    // --- Threads sidebar (conversation view only; no overlay/home on top) ---
+    const inConversationView = !showHome && activeOverlay === null
+    // ctrl+b collapses/expands the sidebar regardless of which pane has focus.
+    if (inConversationView && key.ctrl && key.name === "b") {
+      key.preventDefault()
+      key.stopPropagation()
+      setSidebarCollapsed((collapsed) => !collapsed)
+      setSidebarFocused(false)
+      return
+    }
+    // While the sidebar owns focus, it captures navigation keys (up/down select,
+    // enter opens, tab/esc returns focus to the chat) and swallows the rest so
+    // they never reach the composer.
+    if (inConversationView && sidebarLayout.visible && sidebarFocused) {
+      if (key.name === "tab" || key.name === "escape") {
+        key.preventDefault(); key.stopPropagation(); setSidebarFocused(false); return
+      }
+      if (key.name === "up" || key.name === "k") {
+        key.preventDefault(); key.stopPropagation()
+        setSidebarIndex((index) => wrapIndex(index - 1, sidebarThreads.length)); return
+      }
+      if (key.name === "down" || key.name === "j") {
+        key.preventDefault(); key.stopPropagation()
+        setSidebarIndex((index) => wrapIndex(index + 1, sidebarThreads.length)); return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault(); key.stopPropagation()
+        const thread = sidebarThreads[wrapIndex(sidebarIndex, sidebarThreads.length)]
+        if (thread) void loadThread(thread.id)
+        setSidebarFocused(false)
+        return
+      }
+      return
+    }
+    // From the chat, tab moves focus into the sidebar (unless a gate or the slash
+    // palette is claiming tab), seeding the cursor on the active thread.
+    if (inConversationView && sidebarLayout.visible && !sidebarFocused && key.name === "tab" && !state.pendingGate && !showSlashCommands) {
+      key.preventDefault(); key.stopPropagation()
+      const activeIndex = sidebarThreads.findIndex((thread) => thread.id === state.activeThreadId)
+      setSidebarIndex(activeIndex >= 0 ? activeIndex : 0)
+      setSidebarFocused(true)
       return
     }
     if (showAutomations) {
@@ -1002,6 +1212,33 @@ export function App({ config }: AppProps) {
       }
       return
     }
+    if (showHome) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        setShowHome(false)
+        return
+      }
+      if (key.name === "up" || key.name === "k") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedHomeIndex((index) => wrapIndex(index - 1, Math.max(1, homeSelectableTotal)))
+        return
+      }
+      if (key.name === "down" || key.name === "j" || key.name === "tab") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedHomeIndex((index) => wrapIndex(index + 1, Math.max(1, homeSelectableTotal)))
+        return
+      }
+      if (isPlainEnter(key)) {
+        key.preventDefault()
+        key.stopPropagation()
+        void openHomeSelection()
+        return
+      }
+      return
+    }
     if (key.name === "escape") {
       key.preventDefault()
       key.stopPropagation()
@@ -1232,12 +1469,58 @@ export function App({ config }: AppProps) {
     activeThreadIdRef.current = state.activeThreadId
   }, [state.activeThreadId])
 
+  // Mirror render state into refs the SSE / poll effects read.
   useEffect(() => {
-    if (!state.isThinking) return
+    threadsRef.current = state.threads
+  }, [state.threads])
+  useEffect(() => {
+    threadPreviewsRef.current = threadPreviews
+  }, [threadPreviews])
+  useEffect(() => {
+    notifyLevelRef.current = state.notifyLevel
+  }, [state.notifyLevel])
+  useEffect(() => {
+    activeOverlayRef.current = activeOverlay
+    // The conversation is the visible surface only when neither the home surface
+    // nor any overlay is on top of it — drives notification suppression.
+    conversationVisibleRef.current = !showHome && activeOverlay === null
+  }, [activeOverlay, showHome])
+
+  // Load persisted client prefs once and apply the saved notify level.
+  useEffect(() => {
+    const prefs = loadUiPrefs()
+    dispatch({ type: "set_notify_level", level: prefs.notifyLevel })
+  }, [])
+
+  // Keep the terminal (and tmux window) title flagged with the count of things
+  // waiting on the user: pending approvals across threads + the live gate.
+  useEffect(() => {
+    // The approval inbox already counts the active thread's own gate, so add the
+    // live gate only when its thread is not already represented (avoids the
+    // "⚑ 2 when 1 pending" double-count). See pendingApprovalTitleCount.
+    const total = pendingApprovalTitleCount({
+      approvalCount: state.approvalCount,
+      pendingGateThreadId: state.pendingGate?.thread_id ?? null,
+      approvalThreadIds: approvalThreadIdsRef.current,
+    })
+    if (total === titleCountRef.current) return
+    titleCountRef.current = total
+    setPendingTitle(total)
+  }, [state.approvalCount, state.pendingGate])
+
+  // Reset the title when the TUI unmounts (quit).
+  useEffect(() => {
+    return () => clearTitle()
+  }, [])
+
+  useEffect(() => {
+    // Tick the shared clock while a run is thinking (spinner/elapsed) or while
+    // the home surface is up (so its ages stay live). Idle + not-home: no timer.
+    if (!state.isThinking && !showHome) return
     setNowMs(Date.now())
     const timer = setInterval(() => setNowMs(Date.now()), 250)
     return () => clearInterval(timer)
-  }, [state.isThinking])
+  }, [state.isThinking, showHome])
 
   useEffect(() => {
     let cancelled = false
@@ -1292,20 +1575,82 @@ export function App({ config }: AppProps) {
     }
   }, [client, state.connected])
 
-  // Poll the approval inbox for the status-bar badge.
+  // Poll the approval inbox for the status-bar badge, and piggyback a cheap
+  // refresh of the home control-room data (automations + trace credits) on the
+  // same 30s cadence. Each fetch is guarded so an unchanged result never spawns
+  // a re-render, and the automations/credits fetches are skipped while their own
+  // overlays are open so a background poll can't clobber in-overlay state.
   useEffect(() => {
     if (!state.connected) return
     let cancelled = false
+    // Re-establish the approval baseline for this connection so a reconnect
+    // doesn't page the whole backlog that accumulated while disconnected.
+    prevApprovalCountRef.current = -1
     async function pollInbox() {
       try {
         const inbox = await client.approvalInbox()
-        if (!cancelled) dispatch({ type: "approval_count", count: inbox.count })
+        if (cancelled) return
+        const prevCount = prevApprovalCountRef.current
+        const prevIds = approvalThreadIdsRef.current
+        // Genuinely-new pending approvals on *background* threads (not the active
+        // thread, whose own gate already pages over SSE). A pending approval is a
+        // blocker, so kind "inbox" is classified blocking (notify.ts) and pages
+        // at the default "blockers" level — the whole point of the inbox badge.
+        const newBackground = inbox.threads.filter(
+          (thread) => thread.thread_id !== activeThreadIdRef.current && !prevIds.has(thread.thread_id),
+        )
+        // Skip the first poll of a connection (prevCount < 0 baseline): only page
+        // once a baseline exists, so a genuinely-new arrival pages and pre-existing
+        // backlog does not.
+        if (prevCount >= 0 && newBackground.length > 0) {
+          const first = newBackground[0]
+          maybeNotify({
+            kind: "inbox",
+            threadId: first.thread_id,
+            threadTitle: threadTitleFor(first.thread_id),
+            summary: inbox.count === 1 ? "1 thread needs approval" : `${inbox.count} threads need approval`,
+          })
+        }
+        prevApprovalCountRef.current = inbox.count
+        approvalThreadIdsRef.current = new Set(inbox.threads.map((thread) => thread.thread_id))
+        dispatch({ type: "approval_count", count: inbox.count })
       } catch {
         // ignore; badge stays at its last value
       }
     }
+    async function pollHomeData() {
+      if (activeOverlayRef.current !== "automations" && activeOverlayRef.current !== "settings") {
+        try {
+          const response = await client.automations()
+          const list = response.automations ?? []
+          const sig = list.map((a) => `${a.automation_id}:${a.state}:${a.last_status ?? ""}:${a.next_run_at ?? ""}`).join("|")
+          if (!cancelled && sig !== automationsSigRef.current) {
+            automationsSigRef.current = sig
+            setAutomations(list)
+          }
+        } catch {
+          // leave automations at their last value
+        }
+      }
+      if (activeOverlayRef.current !== "traces") {
+        try {
+          const credits = await client.traceCredits()
+          const sig = String(credits.final_credit)
+          if (!cancelled && sig !== homeCreditsSigRef.current) {
+            homeCreditsSigRef.current = sig
+            setHomeCreditsUsd(credits.final_credit)
+          }
+        } catch {
+          // leave credits at their last value
+        }
+      }
+    }
     void pollInbox()
-    const timer = setInterval(() => void pollInbox(), 30_000)
+    void pollHomeData()
+    const timer = setInterval(() => {
+      void pollInbox()
+      void pollHomeData()
+    }, 30_000)
     return () => {
       cancelled = true
       clearInterval(timer)
@@ -1336,8 +1681,21 @@ export function App({ config }: AppProps) {
             if (cancelled || activeThreadIdRef.current !== threadId) break
             const eventThreadId = threadIdFromEvent(event)
             if (eventThreadId && eventThreadId !== activeThreadIdRef.current) continue
-            if (event.type === "response") applyModelCommandResponse(event.content)
-            dispatch({ type: "event", event })
+            // A slash-command ack (e.g. /model, model list) arrives as a
+            // `response` frame and is consumed here; don't also page it as a
+            // "reply ready" final_reply. Genuine assistant replies also arrive as
+            // `response` frames but are not consumed, so they still page.
+            const consumedAsCommand = event.type === "response" ? applyModelCommandResponse(event.content) : false
+            // Stamp the calendar day so the (pure) run_usage cost reducer can
+            // dedup by run_id and roll over "today $" at midnight without Date().
+            dispatch({ type: "event", event, dayKey: currentDayKey() })
+            if (!consumedAsCommand) {
+              // Events replayed from a projection_snapshot on (re)connect are old
+              // backlog; maybeNotify records their dedup key but never pages, so a
+              // reconnect can't burst notifications for gates/replies/failures the
+              // user already saw.
+              maybeNotify(notifyEventForAppEvent(event, eventThreadId), { replayed: eventIsReplayed(event) })
+            }
             if (isTerminalRunStatusEvent(event)) void refreshThreadFromEvent(eventThreadId)
           }
           reconnectDelayMs = SSE_CONSUMER_MIN_MS
@@ -1357,6 +1715,94 @@ export function App({ config }: AppProps) {
     }
   }, [client, state.activeThreadId])
 
+  // Resolve a display title for a thread id from the mirrored refs (usable from
+  // the SSE / poll effects). Falls back to the id, then a generic label.
+  function threadTitleFor(threadId?: string | null): string {
+    if (!threadId) return "New session"
+    const thread = threadsRef.current.find((item) => item.id === threadId)
+    return thread ? threadDisplayTitle(thread, threadPreviewsRef.current) : threadId
+  }
+
+  // Map an SSE frame to a NotifyEvent, or null when the frame is not page-worthy.
+  function notifyEventForAppEvent(event: AppEvent, eventThreadId: string | null): NotifyEvent | null {
+    switch (event.type) {
+      case "gate_required": {
+        const kind: NotifyKind = event.gate_name === "auth" || event.challenge_kind ? "auth" : "gate"
+        return {
+          kind,
+          threadId: eventThreadId ?? "",
+          threadTitle: threadTitleFor(eventThreadId),
+          summary: event.description || event.tool_name || (kind === "auth" ? "authentication required" : "approval required"),
+          runId: event.run_id ?? null,
+        }
+      }
+      case "approval_needed":
+        return {
+          kind: "gate",
+          threadId: eventThreadId ?? "",
+          threadTitle: threadTitleFor(eventThreadId),
+          summary: event.description || event.tool_name || "approval required",
+        }
+      case "run_status":
+        if (!isFailedNotifyStatus(event.status)) return null
+        return {
+          kind: "failed",
+          threadId: eventThreadId ?? "",
+          threadTitle: threadTitleFor(eventThreadId),
+          summary: event.failure_category ? `run failed: ${event.failure_category}` : "run failed",
+          runId: event.run_id ?? null,
+        }
+      case "response":
+        return {
+          kind: "final_reply",
+          threadId: eventThreadId ?? "",
+          threadTitle: threadTitleFor(eventThreadId),
+          summary: firstLine(event.content) || "reply ready",
+        }
+      default:
+        return null
+    }
+  }
+
+  // Page the user for an event, gated by their notify level, whether they're
+  // already looking at the thread, and the per-run debounce.
+  function maybeNotify(nev: NotifyEvent | null, options?: { replayed?: boolean }) {
+    if (!nev) return
+    const isActiveThreadVisible =
+      Boolean(nev.threadId) && nev.threadId === activeThreadIdRef.current && conversationVisibleRef.current
+    const allowed = shouldNotify({ event: nev, level: notifyLevelRef.current, isActiveThreadVisible })
+    // Record the dedup key regardless of whether we page right now, so a later
+    // un-suppression (surface switch, reconnect replay) can't replay the backlog.
+    // The key includes the run id, so an identical event in a *later* run is not
+    // swallowed as a repeat while a burst within one run still collapses to one.
+    const firstSeen = notifyGateRef.current.seen(notifyDedupKey(nev))
+    // Never page for replayed/snapshot backlog; seen() above still records it.
+    if (options?.replayed) return
+    if (!allowed) return
+    if (!firstSeen) return
+    notify(nev)
+  }
+
+  // Toggle the home control room from anywhere, closing any open overlay.
+  function toggleHome() {
+    setActiveOverlay(null)
+    setSelectedHomeIndex(0)
+    setShowHome((visible) => !visible)
+  }
+
+  // Enter on the flat home selection: open the target thread (or /automations for
+  // a held-automation row).
+  async function openHomeSelection() {
+    const target = resolveHomeTarget(homeInputs, homeRecentThreads.map((thread) => thread.id), nowMs, homeIndex)
+    if (!target) return
+    setShowHome(false)
+    if (target.kind === "automations") {
+      await openAutomationsOverlay()
+      return
+    }
+    await loadThread(target.threadId)
+  }
+
   async function startNewThreadOnConnect(): Promise<string | null> {
     const response = await client.threads()
     const existingThreads = sortThreadsByRecent([response.assistant_thread, ...response.threads].filter(Boolean) as ThreadInfo[])
@@ -1367,6 +1813,10 @@ export function App({ config }: AppProps) {
     dispatch({ type: "threads", threads, activeThreadId: thread.id })
     setSelectedThreadIndex(0)
     await loadThread(thread.id)
+    // Land on the home control room once the session is ready, rather than
+    // dropping straight into the (empty) conversation.
+    setShowHome(true)
+    setSelectedHomeIndex(0)
     return thread.id
   }
 
@@ -1616,9 +2066,20 @@ export function App({ config }: AppProps) {
       case "Outbound":
         await openOutboundOverlay()
         return
+      case "Notifications":
+        cycleNotifyLevel()
+        return
       default:
         return
     }
+  }
+
+  // Cycle the notify level off → blockers → all, persisting the choice.
+  function cycleNotifyLevel() {
+    const order: NotifyLevel[] = ["off", "blockers", "all"]
+    const next = order[(order.indexOf(state.notifyLevel) + 1) % order.length] ?? "blockers"
+    dispatch({ type: "set_notify_level", level: next })
+    saveNotifyLevel(next)
   }
 
   async function setSelectedLlmProviderActive() {
@@ -2175,6 +2636,12 @@ export function App({ config }: AppProps) {
   async function runSlashCommand(command: SlashCommand | undefined, args = "") {
     if (!command) return
     switch (command.action) {
+      case "home":
+        clearComposer()
+        setActiveOverlay(null)
+        setSelectedHomeIndex(0)
+        setShowHome(true)
+        return
       case "threads":
         clearComposer()
         await openThreadPalette()
@@ -2273,6 +2740,7 @@ export function App({ config }: AppProps) {
         }
         break
       case "quit":
+        clearTitle()
         renderer.destroy()
         return
     }
@@ -3137,7 +3605,6 @@ export function App({ config }: AppProps) {
 
   const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
   const composerWidth = clamp(width - 8, 42, 82)
-  const conversationWidth = Math.max(1, width - 4)
   const turnElapsedMs = state.isThinking ? activeTurnElapsedMs(state.transcript, nowMs) : null
   const handleInputChange = () => {
     setInput(textareaRef.current?.plainText ?? "")
@@ -3259,6 +3726,7 @@ export function App({ config }: AppProps) {
           selectedProvider={providerLabel(config.provider)}
           skillCount={config.mode === "local" ? skillList.configured : remoteSkills.length}
           skillsRemote={config.mode !== "local"}
+          notifyLevel={state.notifyLevel}
           status={state.status}
           width={width}
         />
@@ -3357,29 +3825,59 @@ export function App({ config }: AppProps) {
           width={width}
           height={height}
         />
-      ) : hasConversation ? (
-        <ConversationSurface
-          contentWidth={conversationWidth}
-          composer={composer}
-          composerWidth={conversationWidth}
+      ) : showHome ? (
+        <HomeSurface
+          needsYou={homeNeedsYou}
+          active={homeActive}
+          automations={buildAutomationsSummary(automations, homeSchedulerEnabled)}
+          recent={homeRecentThreads}
+          threadPreviews={threadPreviews}
+          vitals={buildVitals(homeInputs)}
+          selectedIndex={homeIndex}
+          focused={homeFocusSection(homeIndex, homeNeedsYou.length, homeActive.length)}
+          width={width}
           height={height}
-          lastError={state.lastError}
-          markdownStyle={markdownStyle}
-          pendingGate={state.pendingGate ?? null}
-          selectedGateAction={selectedGateAction}
-          authTokenInput={authTokenInput}
-          authTokenError={authTokenError}
-          authTokenSubmitting={authTokenSubmitting}
-          showOlderHistoryHint={state.hasOlderHistory}
-          transcript={state.transcript}
-          expandedActivityIds={expandedActivityIds}
-          onToggleActivityExpanded={toggleActivityExpanded}
-          onResolve={(action) => void resolveGate(action)}
-          onSelectGateAction={setSelectedGateAction}
-          onSubmitAuthToken={() => void submitAuthToken()}
-          onCancelAuthGate={() => void cancelAuthGate()}
-          onOpenAuthUrl={(gate) => void openAuthUrl(gate)}
         />
+      ) : hasConversation ? (
+        <box style={{ width, height, flexDirection: "row", backgroundColor: theme.bg }}>
+          {sidebarLayout.visible ? (
+            <ThreadsSidebar
+              threads={sidebarThreads}
+              activeThreadId={state.activeThreadId}
+              selectedIndex={sidebarIndex}
+              focused={sidebarFocused}
+              threadPreviews={threadPreviews}
+              dotContext={{ activeThreadId: state.activeThreadId, activeRunning: state.isThinking, approvalThreadIds }}
+              width={sidebarLayout.sidebarWidth}
+              height={height}
+            />
+          ) : null}
+          <box style={{ flexGrow: 1, height, flexDirection: "column" }}>
+            <ConversationSurface
+              contentWidth={chatContentWidth}
+              composer={composer}
+              composerWidth={chatContentWidth}
+              chatFocused={!sidebarActive}
+              height={height}
+              lastError={state.lastError}
+              markdownStyle={markdownStyle}
+              pendingGate={state.pendingGate ?? null}
+              selectedGateAction={selectedGateAction}
+              authTokenInput={authTokenInput}
+              authTokenError={authTokenError}
+              authTokenSubmitting={authTokenSubmitting}
+              showOlderHistoryHint={state.hasOlderHistory}
+              transcript={state.transcript}
+              expandedActivityIds={expandedActivityIds}
+              onToggleActivityExpanded={toggleActivityExpanded}
+              onResolve={(action) => void resolveGate(action)}
+              onSelectGateAction={setSelectedGateAction}
+              onSubmitAuthToken={() => void submitAuthToken()}
+              onCancelAuthGate={() => void cancelAuthGate()}
+              onOpenAuthUrl={(gate) => void openAuthUrl(gate)}
+            />
+          </box>
+        </box>
       ) : (
         <WelcomeSurface
           baseUrl={config.baseUrl}
@@ -3612,9 +4110,42 @@ function isTerminalRunStatusEvent(event: AppEvent): event is Extract<AppEvent, {
   return ["completed", "failed", "cancelled", "killed"].includes(event.status)
 }
 
+// Run statuses that page the user as a "failed" notification. Cancelled is a
+// user-initiated stop and never pages.
+function isFailedNotifyStatus(status: string): boolean {
+  return ["failed", "killed", "recovery_required"].includes(status.trim().toLowerCase().replace(/[-\s]+/g, "_"))
+}
+
+// Which home section the flat selection index falls in, for header emphasis.
+function homeFocusSection(index: number, needsYouLen: number, activeLen: number): HomeSection | undefined {
+  if (index < 0) return undefined
+  if (index < needsYouLen) return "needsYou"
+  if (index < needsYouLen + activeLen) return "active"
+  return "recent"
+}
+
+function firstLine(text: string): string {
+  const line = (text ?? "").split("\n").find((part) => part.trim().length > 0) ?? ""
+  const trimmed = line.trim()
+  return trimmed.length > 80 ? `${trimmed.slice(0, 77)}...` : trimmed
+}
+
 function threadIdFromEvent(event: AppEvent): string | null {
   if (!("thread_id" in event)) return null
   return typeof event.thread_id === "string" ? event.thread_id : null
+}
+
+// True for an event replayed from a projection_snapshot on (re)connect (old
+// backlog) rather than a live incremental update. Used to suppress re-paging.
+function eventIsReplayed(event: AppEvent): boolean {
+  return (event as { replayed?: boolean }).replayed === true
+}
+
+// Current calendar-day key (e.g. "2026-07-18"), stamped onto event dispatch so
+// the pure run_usage cost reducer can roll "today $" over at midnight and dedup
+// by run_id without reaching for Date() itself.
+function currentDayKey(): string {
+  return new Date().toISOString().slice(0, 10)
 }
 
 function isAuthGate(gate: PendingGateInfo): boolean {

@@ -10,6 +10,12 @@ export const theme = {
   bgSoft: "#131316", // hover/selection fallback surface
   border: "#232326", // hairline (white 10% on canvas)
   borderSoft: "#1c1c1f", // white 8%
+  // Glass elevation: framed panels/cards sit on a slightly lifted fill with a
+  // marginally brighter edge than the flat hairline, so a bordered card reads as
+  // "above" the canvas rather than drawn on it.
+  cardBg: "#16191d", // card / tool-output well fill (elevated over canvas)
+  cardBorder: "#2c2c31", // card frame edge (a touch brighter than border)
+  barBg: "#0e0e11", // glass bar fill (top/status bars, composer)
   text: "#e0e0e0",
   textStrong: "#fafafa",
   textMuted: "#a1a1aa",
@@ -53,8 +59,9 @@ export function toneColors(tone: Tone): { fg: string; bg: string } {
   }
 }
 
-// Normalize an arbitrary status string to a canon key.
-function statusKey(status: string): string {
+// Normalize an arbitrary status string to a canon key. Single source of truth —
+// state.ts and homeData.ts import this rather than re-declaring it.
+export function normalizeStatusKey(status: string): string {
   return status
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[-\s]+/g, "_")
@@ -63,7 +70,7 @@ function statusKey(status: string): string {
 
 // Map any run/job/tool/automation status to its canon tone.
 export function statusTone(status: string): Tone {
-  switch (statusKey(status)) {
+  switch (normalizeStatusKey(status)) {
     case "info":
     case "running":
     case "in_progress":
