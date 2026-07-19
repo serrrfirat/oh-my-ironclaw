@@ -12,6 +12,7 @@ export function TracesSurface({
   error,
   width,
   height,
+  onHoldClick,
 }: {
   credits: TraceCreditsResponse | null
   account: AccountTracesResponse | null
@@ -22,6 +23,9 @@ export function TracesSurface({
   error: string | null
   width: number
   height: number
+  // Select-only: click highlights a hold (then `a` authorizes it) — a click
+  // never authorizes on its own, since that is a consequential single action.
+  onHoldClick?: (index: number) => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   const holds = credits?.holds ?? []
@@ -52,6 +56,7 @@ export function TracesSurface({
             text={` ${truncate(`${hold.submission_id} · ${hold.reason}`, Math.max(8, contentWidth - 12))}`}
             textWidth={contentWidth}
             width={contentWidth}
+            onMouseDown={onHoldClick ? () => onHoldClick(index) : undefined}
           />
         ))
       ) : (

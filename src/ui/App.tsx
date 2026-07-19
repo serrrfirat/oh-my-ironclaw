@@ -44,6 +44,9 @@ import { ExtensionsSurface, extensionRows, type ExtensionRow } from "./Extension
 import { LlmProvidersSurface, type LlmProviderFormView } from "./LlmProvidersSurface"
 import { ConversationSurface, ThreadsSidebar, WelcomeSurface, type ComposerCommonProps, type GateAction } from "./MainSurfaces"
 import { computeSidebarLayout } from "./threadsSidebar"
+import { groupTranscriptEntries } from "./activityGroups"
+import { copyTextForItem, moveSelection, searchTranscript, selectableTranscriptIds } from "./transcriptNav"
+import { transcriptActivityLines } from "../transcript"
 import { HomeSurface, type HomeSection } from "./HomeSurface"
 import {
   buildActiveRows,
@@ -167,6 +170,14 @@ export function App({ config }: AppProps) {
   const [selectedModelIndex, setSelectedModelIndex] = useState(() => modelIndex(config.models, config.model))
   const [selectedModel, setSelectedModel] = useState(config.model)
   const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(() => new Set())
+  // --- Transcript navigation + in-thread search (opencode-style) ---
+  // navSelectedId is the id of the highlighted transcript message; non-null means
+  // the conversation is in transcript-navigation focus mode. Search reuses the
+  // same highlight: the active match becomes the selection.
+  const [navSelectedId, setNavSelectedId] = useState<string | null>(null)
+  const [searchActive, setSearchActive] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [searchMatchIndex, setSearchMatchIndex] = useState(0)
   const [skillList, setSkillList] = useState<SkillListResult>({ configured: 0, source: "", skills: [], details: {} })
   const [skillSearch, setSkillSearch] = useState("")
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0)
@@ -332,12 +343,19 @@ export function App({ config }: AppProps) {
   const showSlashCommands = showCommandPalette || (isSlashCommandInput(input) && slashCommands.length > 0)
   const localDevYolo = shouldUseLocalDevYoloSplash(config.mode, activeRebornProfile)
   const canCancelRun = Boolean((state.pendingGate?.thread_id || state.activeThreadId) && (state.pendingGate?.run_id || state.activeRunId))
+  // A conversation is on screen (ConversationSurface + its sidebar) only with a
+  // transcript or a live gate; otherwise the WelcomeSurface (empty composer) shows
+  // and the sidebar is NOT rendered — so sidebar focus/keys must be gated on this.
+  const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
 
   // --- Threads sidebar layout (persistent, collapsible, responsive) ---
   // Reuses state.threads (the same list the ctrl+t palette shows) — no new fetch.
   const sidebarThreads = useMemo(() => sortThreadsByRecent(state.threads), [state.threads])
   const sidebarLayout = computeSidebarLayout(width, sidebarCollapsed)
-  const sidebarActive = sidebarLayout.visible && sidebarFocused
+  // The sidebar is only truly on screen when a conversation is showing; in the
+  // welcome/empty-thread state it isn't rendered even if the layout leaves room.
+  const sidebarVisible = sidebarLayout.visible && hasConversation
+  const sidebarActive = sidebarVisible && sidebarFocused
   const chatContentWidth = Math.max(1, sidebarLayout.chatWidth - 4)
   // Threads currently awaiting approval — drives the sidebar's warn status dot.
   const approvalThreadIds = useMemo(() => {
@@ -420,6 +438,161 @@ export function App({ config }: AppProps) {
     })
   }
 
+  // --- Transcript navigation / search derived state ---
+  const transcriptEntries = useMemo(() => groupTranscriptEntries(state.transcript), [state.transcript])
+  // Activity groups the user has collapsed: their inner activities are unmounted,
+  // so selection/search represent them by the group id (a rendered anchor) rather
+  // than a hidden child. A group is collapsed when its id is in expandedActivityIds
+  // (which tracks the *toggled* state; groups render expanded by default).
+  const collapsedGroupIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const entry of transcriptEntries) {
+      if (entry.kind === "activity_group" && expandedActivityIds.has(entry.id)) ids.add(entry.id)
+    }
+    return ids
+  }, [transcriptEntries, expandedActivityIds])
+  // Ordered ids the nav cursor can land on (rendered anchors only).
+  const selectableTranscriptIdList = useMemo(
+    () => selectableTranscriptIds(transcriptEntries, collapsedGroupIds),
+    [transcriptEntries, collapsedGroupIds],
+  )
+  const searchMatchIdList = useMemo(
+    () => (searchActive ? searchTranscript(transcriptEntries, searchQuery, collapsedGroupIds) : []),
+    [searchActive, searchQuery, transcriptEntries, collapsedGroupIds],
+  )
+  const searchMatchIdSet = useMemo(() => new Set(searchMatchIdList), [searchMatchIdList])
+  const navMode = !showHome && activeOverlay === null && !sidebarActive && (navSelectedId !== null || searchActive)
+  const inConversationView = !showHome && activeOverlay === null
+
+  // Keep the search cursor pointed at a real match, and mirror it into the shared
+  // highlight/selection so the matched message scrolls into view. Clamp the active
+  // index when the match list shrinks mid-stream (the transcript can grow/trim
+  // without a keystroke) so the counter, highlight, and next-jump target agree.
+  useEffect(() => {
+    if (!searchActive) return
+    const count = searchMatchIdList.length
+    const clamped = count === 0 ? 0 : Math.min(searchMatchIndex, count - 1)
+    if (clamped !== searchMatchIndex) setSearchMatchIndex(clamped)
+    setNavSelectedId(searchMatchIdList[clamped] ?? null)
+  }, [searchActive, searchMatchIdList, searchMatchIndex])
+
+  // Drop a stale selection (e.g. after switching threads or trimming history).
+  useEffect(() => {
+    if (navSelectedId && !selectableTranscriptIdList.includes(navSelectedId)) setNavSelectedId(null)
+  }, [selectableTranscriptIdList, navSelectedId])
+
+  // Leaving the conversation surface (overlay / home / sidebar) exits nav + search.
+  useEffect(() => {
+    if (showHome || activeOverlay !== null || sidebarActive) {
+      setNavSelectedId(null)
+      setSearchActive(false)
+    }
+  }, [showHome, activeOverlay, sidebarActive])
+
+  // A thread switch clears any transcript selection / open search.
+  useEffect(() => {
+    setNavSelectedId(null)
+    setSearchActive(false)
+    setSearchQuery("")
+    setSearchMatchIndex(0)
+  }, [state.activeThreadId])
+
+  // A pending gate owns keyboard input: drop any transcript nav / open search the
+  // moment a gate arrives so the gate's approve/deny/enter/token keys can't be
+  // swallowed by nav- or search-mode key handling.
+  useEffect(() => {
+    if (state.pendingGate) {
+      setNavSelectedId(null)
+      setSearchActive(false)
+    }
+  }, [state.pendingGate?.request_id])
+
+  function enterTranscriptNav() {
+    if (selectableTranscriptIdList.length === 0) return
+    const last = selectableTranscriptIdList[selectableTranscriptIdList.length - 1] ?? null
+    setNavSelectedId(last)
+  }
+
+  function exitTranscriptNav() {
+    setNavSelectedId(null)
+    setSearchActive(false)
+  }
+
+  function moveTranscriptSelection(delta: number) {
+    setNavSelectedId((current) => moveSelection(selectableTranscriptIdList, current, delta))
+  }
+
+  function jumpTranscriptSelection(edge: "top" | "bottom") {
+    if (selectableTranscriptIdList.length === 0) return
+    const id = edge === "top"
+      ? selectableTranscriptIdList[0]
+      : selectableTranscriptIdList[selectableTranscriptIdList.length - 1]
+    setNavSelectedId(id ?? null)
+  }
+
+  function selectedTranscriptItem() {
+    return state.transcript.find((item) => item.id === navSelectedId) ?? null
+  }
+
+  // `y` — copy the selected message (message text, or an activity card's rendered
+  // command + output) to the clipboard via OSC 52.
+  function copySelectedTranscriptItem() {
+    const item = selectedTranscriptItem()
+    if (!item) return
+    const detailLines = item.role === "activity" ? transcriptActivityLines(item.activity) : undefined
+    const text = copyTextForItem(item, detailLines)
+    if (!text) return
+    copyTextToClipboard(text)
+    dispatch({ type: "notice", message: "copied to clipboard" })
+  }
+
+  // `e` — edit & resend: repopulate the composer with a user message and hand
+  // focus back to it. Sending is a normal new turn; the original stays put.
+  function editSelectedTranscriptItem() {
+    const item = selectedTranscriptItem()
+    if (!item || item.role !== "user") return
+    exitTranscriptNav()
+    setComposerText(item.text)
+    textareaRef.current?.focus()
+  }
+
+  // `enter` — expand/collapse a tool/activity card (no-op on text messages). When
+  // the selection is a collapsed activity group (represented by its group id, not
+  // a hidden child), enter expands the group.
+  function activateSelectedTranscriptItem() {
+    if (navSelectedId && collapsedGroupIds.has(navSelectedId)) {
+      toggleActivityExpanded(navSelectedId)
+      return
+    }
+    const item = selectedTranscriptItem()
+    if (item?.role === "activity") toggleActivityExpanded(item.id)
+  }
+
+  function openTranscriptSearch() {
+    setNavSelectedId(null)
+    setSearchQuery("")
+    setSearchMatchIndex(0)
+    setSearchActive(true)
+  }
+
+  function closeTranscriptSearch() {
+    setSearchActive(false)
+    setSearchQuery("")
+    setSearchMatchIndex(0)
+    setNavSelectedId(null)
+  }
+
+  function jumpSearchMatch(delta: number) {
+    if (searchMatchIdList.length === 0) return
+    setSearchMatchIndex((index) => wrapIndex(index + delta, searchMatchIdList.length))
+  }
+
+  const transcriptNavHint = searchActive
+    ? null
+    : navSelectedId !== null
+      ? `↑↓ select · enter ${selectedTranscriptItem()?.role === "activity" ? "expand" : "·"} · y copy${selectedTranscriptItem()?.role === "user" ? " · e edit" : ""} · ^f search · esc exit`
+      : null
+
   useSelectionHandler((selection) => {
     const selectedText = selection.getSelectedText()
     if (!selectedText) return
@@ -435,6 +608,8 @@ export function App({ config }: AppProps) {
     // When the threads sidebar owns focus, the composer is not the text sink, so
     // global toggles (ctrl+h) should fire rather than being treated as edits.
     if (sidebarActive) return false
+    // The in-thread transcript search owns a live text input.
+    if (searchActive) return true
     // Conversation composer — also the sink for the slash-command palette and
     // inline "/…" filtering, both of which keep activeOverlay null.
     if (!showHome && activeOverlay === null) return true
@@ -475,7 +650,6 @@ export function App({ config }: AppProps) {
       return
     }
     // --- Threads sidebar (conversation view only; no overlay/home on top) ---
-    const inConversationView = !showHome && activeOverlay === null
     // ctrl+b collapses/expands the sidebar regardless of which pane has focus.
     if (inConversationView && key.ctrl && key.name === "b") {
       key.preventDefault()
@@ -487,7 +661,7 @@ export function App({ config }: AppProps) {
     // While the sidebar owns focus, it captures navigation keys (up/down select,
     // enter opens, tab/esc returns focus to the chat) and swallows the rest so
     // they never reach the composer.
-    if (inConversationView && sidebarLayout.visible && sidebarFocused) {
+    if (inConversationView && sidebarVisible && sidebarFocused) {
       if (key.name === "tab" || key.name === "escape") {
         key.preventDefault(); key.stopPropagation(); setSidebarFocused(false); return
       }
@@ -510,12 +684,61 @@ export function App({ config }: AppProps) {
     }
     // From the chat, tab moves focus into the sidebar (unless a gate or the slash
     // palette is claiming tab), seeding the cursor on the active thread.
-    if (inConversationView && sidebarLayout.visible && !sidebarFocused && key.name === "tab" && !state.pendingGate && !showSlashCommands) {
+    if (inConversationView && sidebarVisible && !sidebarFocused && key.name === "tab" && !state.pendingGate && !showSlashCommands) {
       key.preventDefault(); key.stopPropagation()
       const activeIndex = sidebarThreads.findIndex((thread) => thread.id === state.activeThreadId)
       setSidebarIndex(activeIndex >= 0 ? activeIndex : 0)
       setSidebarFocused(true)
       return
+    }
+    // --- In-thread transcript search (ctrl+f) ---
+    // Opens from the composer or from nav mode. The search field captures typing,
+    // so `n`/`N` can't drive the jumps (they're valid query chars) — enter /
+    // shift+enter jump next / prev instead.
+    // Gated on !pendingGate (like up-into-nav): search must not open over an
+    // auth/token gate and steal the gate's input.
+    if (inConversationView && !sidebarActive && !state.pendingGate && key.ctrl && key.name === "f") {
+      key.preventDefault(); key.stopPropagation()
+      openTranscriptSearch()
+      return
+    }
+    if (inConversationView && !sidebarActive && searchActive) {
+      if (key.name === "escape") { key.preventDefault(); key.stopPropagation(); closeTranscriptSearch(); return }
+      // Backspace deletes the last query char. Some terminals send Backspace as
+      // ^H ({ctrl, name:"h"}) — treat that as backspace too so chars can be deleted.
+      if (key.name === "backspace" || key.name === "delete" || (key.ctrl && key.name === "h")) {
+        key.preventDefault(); key.stopPropagation()
+        setSearchQuery((q) => q.slice(0, -1)); setSearchMatchIndex(0); return
+      }
+      if (key.ctrl && key.name === "u") { key.preventDefault(); key.stopPropagation(); setSearchQuery(""); setSearchMatchIndex(0); return }
+      if ((key.name === "return" || key.name === "kpenter" || key.name === "linefeed")) {
+        key.preventDefault(); key.stopPropagation(); jumpSearchMatch(key.shift ? -1 : 1); return
+      }
+      const searchText = printableKeyText(key)
+      if (searchText) { key.preventDefault(); key.stopPropagation(); setSearchQuery((q) => q + searchText); setSearchMatchIndex(0); return }
+      // Swallow other *plain* keys so they can't leak to the composer, but let
+      // global ctrl/meta shortcuts (gate approve/deny, ^x cancel, ^t/^m pickers,
+      // …) fall through to their handlers below instead of being trapped here.
+      if (!key.ctrl && !key.meta) { key.preventDefault(); key.stopPropagation(); return }
+    }
+    // --- Transcript navigation focus mode ---
+    // Reached only when a message is selected (composer / sidebar keep their own
+    // focus otherwise). Swallows keys so they never leak to the composer / history.
+    if (inConversationView && !sidebarActive && navSelectedId !== null) {
+      if (key.name === "escape") { key.preventDefault(); key.stopPropagation(); exitTranscriptNav(); return }
+      if (key.name === "up" || key.name === "k") { key.preventDefault(); key.stopPropagation(); moveTranscriptSelection(-1); return }
+      if (key.name === "down" || key.name === "j") { key.preventDefault(); key.stopPropagation(); moveTranscriptSelection(1); return }
+      if (isPlainEnter(key)) { key.preventDefault(); key.stopPropagation(); activateSelectedTranscriptItem(); return }
+      const navText = printableKeyText(key)
+      if (navText === "g") { key.preventDefault(); key.stopPropagation(); jumpTranscriptSelection("top"); return }
+      if (navText === "G") { key.preventDefault(); key.stopPropagation(); jumpTranscriptSelection("bottom"); return }
+      if (navText === "y") { key.preventDefault(); key.stopPropagation(); copySelectedTranscriptItem(); return }
+      if (navText === "e") { key.preventDefault(); key.stopPropagation(); editSelectedTranscriptItem(); return }
+      // pageup keeps loading older history (handled below). Swallow other *plain*
+      // keys so they can't leak to the composer / input history, but let global
+      // ctrl/meta shortcuts (gate approve/deny, ^x cancel, ^t/^m pickers, ^b, ^h)
+      // fall through to their handlers below.
+      if (key.name !== "pageup" && !key.ctrl && !key.meta) { key.preventDefault(); key.stopPropagation(); return }
     }
     if (showAutomations) {
       if (key.name === "escape") {
@@ -1403,6 +1626,14 @@ export function App({ config }: AppProps) {
     if (key.name === "up") {
       key.preventDefault()
       key.stopPropagation()
+      // Empty composer: up enters transcript-navigation focus mode (selecting the
+      // last message). With text in the composer, up keeps recalling input history
+      // (never hijacked). `k` is not an entry key — it would shadow typing "k" —
+      // but it moves the cursor once nav mode is active.
+      if (inConversationView && !sidebarActive && !state.pendingGate && input.trim().length === 0 && selectableTranscriptIdList.length > 0) {
+        enterTranscriptNav()
+        return
+      }
       navigateInputHistory("up")
       return
     }
@@ -1792,8 +2023,8 @@ export function App({ config }: AppProps) {
 
   // Enter on the flat home selection: open the target thread (or /automations for
   // a held-automation row).
-  async function openHomeSelection() {
-    const target = resolveHomeTarget(homeInputs, homeRecentThreads.map((thread) => thread.id), nowMs, homeIndex)
+  async function openHomeSelection(index: number = homeIndex) {
+    const target = resolveHomeTarget(homeInputs, homeRecentThreads.map((thread) => thread.id), nowMs, index)
     if (!target) return
     setShowHome(false)
     if (target.kind === "automations") {
@@ -2038,8 +2269,8 @@ export function App({ config }: AppProps) {
     return providers[wrapIndex(selectedLlmProviderIndex, providers.length)] ?? null
   }
 
-  async function openSelectedSettingsSection() {
-    switch (settingsSectionAt(selectedSettingsIndex)) {
+  async function openSelectedSettingsSection(index: number = selectedSettingsIndex) {
+    switch (settingsSectionAt(index)) {
       case "Providers":
         if (operatorOnly) {
           dispatch({ type: "notice", message: "LLM providers require the operator capability." })
@@ -2423,8 +2654,8 @@ export function App({ config }: AppProps) {
     }
   }
 
-  async function openSelectedSkillDetail() {
-    const skill = filteredSkillList[wrapIndex(selectedSkillIndex, filteredSkillList.length)]
+  async function openSelectedSkillDetail(index: number = selectedSkillIndex) {
+    const skill = filteredSkillList[wrapIndex(index, filteredSkillList.length)]
     if (!skill) return
     const path = skillDetailPath(skill, skillList.details)
     setSkillDetail({ skill, content: skill.content ?? "", error: null, loading: true, path, offset: 0 })
@@ -2454,19 +2685,19 @@ export function App({ config }: AppProps) {
     await loadThread(thread.id)
   }
 
-  function selectedExtension(): ExtensionRow | null {
-    return extensionList[wrapIndex(selectedExtensionIndex, extensionList.length)] ?? null
+  function selectedExtension(index: number = selectedExtensionIndex): ExtensionRow | null {
+    return extensionList[wrapIndex(index, extensionList.length)] ?? null
   }
 
-  async function runSelectedExtensionDefaultAction() {
-    const row = selectedExtension()
+  async function runSelectedExtensionDefaultAction(index: number = selectedExtensionIndex) {
+    const row = selectedExtension(index)
     if (!row) return
     if (!row.installed) {
       await runExtensionAction(() => client.installExtension(row.entry.package_ref))
       return
     }
     if (row.needsSetup) {
-      await loadSelectedExtensionSetup()
+      await loadSelectedExtensionSetup(index)
       return
     }
     if (!row.active) {
@@ -2480,8 +2711,8 @@ export function App({ config }: AppProps) {
     await runExtensionAction(() => client.removeExtension(row.id))
   }
 
-  async function loadSelectedExtensionSetup() {
-    const row = selectedExtension()
+  async function loadSelectedExtensionSetup(index: number = selectedExtensionIndex) {
+    const row = selectedExtension(index)
     if (!row) return
     setExtensionsLoading(true)
     setExtensionsError(null)
@@ -3027,12 +3258,12 @@ export function App({ config }: AppProps) {
     }
   }
 
-  function selectedRemoteSkill(): SkillInfo | null {
-    return filteredRemoteSkills[wrapIndex(remoteSkillIndex, filteredRemoteSkills.length)] ?? null
+  function selectedRemoteSkill(index: number = remoteSkillIndex): SkillInfo | null {
+    return filteredRemoteSkills[wrapIndex(index, filteredRemoteSkills.length)] ?? null
   }
 
-  async function openRemoteSkillDetail() {
-    const skill = selectedRemoteSkill()
+  async function openRemoteSkillDetail(index: number = remoteSkillIndex) {
+    const skill = selectedRemoteSkill(index)
     if (!skill) return
     setRemoteSkillDetail({ name: skill.name, content: "", loading: true, error: null, offset: 0 })
     try {
@@ -3234,9 +3465,9 @@ export function App({ config }: AppProps) {
     }
   }
 
-  async function openFsEntry() {
+  async function openFsEntry(index: number = fsSelectedIndex) {
     if (workspaceView.kind !== "browse") return
-    const entry = fsEntries[wrapIndex(fsSelectedIndex, fsEntries.length)]
+    const entry = fsEntries[wrapIndex(index, fsEntries.length)]
     if (!entry) return
     if (entry.kind === "directory") {
       await browseFs(workspaceView.mount, entry.path)
@@ -3379,8 +3610,8 @@ export function App({ config }: AppProps) {
     }
   }
 
-  async function cycleSelectedToolPermission() {
-    const row = toolRows[wrapIndex(selectedToolIndex, toolRows.length)]
+  async function cycleSelectedToolPermission(index: number = selectedToolIndex) {
+    const row = toolRows[wrapIndex(index, toolRows.length)]
     if (!row || !row.mutable) return
     const next = nextToolPermission(row.permission)
     setToolRows((rows) => rows.map((item) => (item.capabilityId === row.capabilityId ? { ...item, permission: next } : item)))
@@ -3432,8 +3663,8 @@ export function App({ config }: AppProps) {
     }
   }
 
-  async function setSelectedOutboundTarget() {
-    const option = outboundTargets[wrapIndex(selectedOutboundIndex, outboundTargets.length)]
+  async function setSelectedOutboundTarget(index: number = selectedOutboundIndex) {
+    const option = outboundTargets[wrapIndex(index, outboundTargets.length)]
     if (!option) return
     try {
       const prefs = await client.setOutboundPreferences(option.target.target_id)
@@ -3603,7 +3834,6 @@ export function App({ config }: AppProps) {
     await resolveGate("cancelled")
   }
 
-  const hasConversation = state.transcript.length > 0 || Boolean(state.pendingGate)
   const composerWidth = clamp(width - 8, 42, 82)
   const turnElapsedMs = state.isThinking ? activeTurnElapsedMs(state.transcript, nowMs) : null
   const handleInputChange = () => {
@@ -3639,6 +3869,61 @@ export function App({ config }: AppProps) {
     threadDeleteConfirm,
     onInputChange: handleInputChange,
     onSubmit: submit,
+    onModelRowClick: (index: number) => void selectModel(index),
+    onThreadRowClick: (index: number) => void selectThread(index),
+    onSlashCommandClick: (command: SlashCommand) => void runSlashCommand(command),
+  }
+
+  // --- Mouse: per-surface row click handlers ---
+  // A left click reuses the SAME selection index + activate path the keyboard
+  // uses: it sets the surface's selected index and (for navigation/picker rows)
+  // runs that row's primary/enter action with the clicked index. Multi-action
+  // surfaces (Automations, Projects, LLM providers, Channels, Traces holds) are
+  // select-only — a click just moves the highlight, leaving the destructive /
+  // ambiguous action keys to the user.
+  const onHomeRowClick = (index: number) => { setSelectedHomeIndex(index); void openHomeSelection(index) }
+  const onSettingsRowClick = (index: number) => { setSelectedSettingsIndex(index); void openSelectedSettingsSection(index) }
+  const onSkillRowClick = (index: number) => { setSelectedSkillIndex(index); void openSelectedSkillDetail(index) }
+  const onRemoteSkillRowClick = (index: number) => { setRemoteSkillIndex(index); void openRemoteSkillDetail(index) }
+  const onToolRowClick = (index: number) => { setSelectedToolIndex(index); void cycleSelectedToolPermission(index) }
+  const onOutboundRowClick = (index: number) => { setSelectedOutboundIndex(index); void setSelectedOutboundTarget(index) }
+  const onExtensionRowClick = (index: number) => {
+    setSelectedExtensionIndex(index)
+    setExtensionSetup(null)
+    void runSelectedExtensionDefaultAction(index)
+  }
+  const onWorkspaceRowClick = (index: number) => {
+    setFsSelectedIndex(index)
+    if (workspaceView.kind === "mounts") {
+      const mount = fsMounts[index]
+      if (mount) void browseFs(mount.mount, "")
+    } else if (workspaceView.kind === "browse") {
+      void openFsEntry(index)
+    }
+  }
+  const onSidebarThreadClick = (threadId: string) => { setSidebarFocused(false); void loadThread(threadId) }
+  // Select-only surfaces.
+  const onAutomationRowClick = (index: number) => setSelectedAutomationIndex(index)
+  const onChannelRowClick = (index: number) => setSelectedChannelIndex(index)
+  const onProjectRowClick = (index: number) => setSelectedProjectIndex(index)
+  const onTraceHoldClick = (index: number) => setSelectedHoldIndex(index)
+  const onLlmProviderRowClick = (index: number) => {
+    setSelectedLlmProviderIndex(index)
+    setLlmProviderModels([])
+    setLlmProviderSetupInputKey(null)
+    setLlmProviderForm(null)
+    setNearAiWalletInputActive(false)
+    setNearAiWalletInput("")
+  }
+  // Transcript: clicking a text message enters transcript-nav on it. A pending
+  // gate owns interaction, so a click must not steal the gate's input; and the
+  // id must be a real selectable anchor. (Tool/activity cards keep their own
+  // expand-toggle click.)
+  const onSelectTranscriptMessage = (id: string) => {
+    if (state.pendingGate) return
+    if (!selectableTranscriptIdList.includes(id)) return
+    setSearchActive(false)
+    setNavSelectedId(id)
   }
 
   return (
@@ -3655,6 +3940,7 @@ export function App({ config }: AppProps) {
           confirmingDelete={automationConfirmDelete}
           message={automationMessage}
           width={width}
+          onRowClick={onAutomationRowClick}
         />
       ) : showChannels ? (
         <ChannelsSurface
@@ -3664,6 +3950,7 @@ export function App({ config }: AppProps) {
           loading={channelsLoading}
           selectedIndex={wrapIndex(selectedChannelIndex, channels.length)}
           width={width}
+          onRowClick={onChannelRowClick}
         />
       ) : showExtensions ? (
         <ExtensionsSurface
@@ -3677,6 +3964,7 @@ export function App({ config }: AppProps) {
           setupInput={extensionSetupInput}
           setupInputLabel={extensionSetupInputLabel(extensionSetup, extensionSetupInputKey)}
           width={width}
+          onRowClick={onExtensionRowClick}
         />
       ) : showSkills ? (
         <SkillsSurface
@@ -3691,6 +3979,7 @@ export function App({ config }: AppProps) {
           source={skillList.source}
           totalCount={skillList.configured}
           width={width}
+          onRowClick={onSkillRowClick}
         />
       ) : showLlmProviders ? (
         <LlmProvidersSurface
@@ -3707,6 +3996,7 @@ export function App({ config }: AppProps) {
           setupInputLabel={llmProviderSetupInputKey ? "API key" : null}
           snapshot={llmConfig}
           width={width}
+          onRowClick={onLlmProviderRowClick}
         />
       ) : showSettings ? (
         <SettingsSurface
@@ -3729,6 +4019,7 @@ export function App({ config }: AppProps) {
           notifyLevel={state.notifyLevel}
           status={state.status}
           width={width}
+          onRowClick={onSettingsRowClick}
         />
       ) : showRemoteSkills ? (
         <SkillsRemoteSurface
@@ -3745,6 +4036,7 @@ export function App({ config }: AppProps) {
           markdownStyle={markdownStyle}
           width={width}
           height={height}
+          onRowClick={onRemoteSkillRowClick}
         />
       ) : showLogs ? (
         <LogsSurface
@@ -3761,6 +4053,11 @@ export function App({ config }: AppProps) {
           error={logsError}
           width={width}
           height={height}
+          onScroll={(direction) =>
+            direction === "up"
+              ? setLogOffset((o) => Math.min(o + 3, Math.max(0, logEntries.length - 1)))
+              : setLogOffset((o) => Math.max(0, o - 3))
+          }
         />
       ) : showTraces ? (
         <TracesSurface
@@ -3773,6 +4070,7 @@ export function App({ config }: AppProps) {
           error={tracesError}
           width={width}
           height={height}
+          onHoldClick={onTraceHoldClick}
         />
       ) : showWorkspace ? (
         <WorkspaceSurface
@@ -3787,6 +4085,7 @@ export function App({ config }: AppProps) {
           error={workspaceError}
           width={width}
           height={height}
+          onRowClick={onWorkspaceRowClick}
         />
       ) : showProjects ? (
         <ProjectsSurface
@@ -3801,6 +4100,7 @@ export function App({ config }: AppProps) {
           error={projectsError}
           width={width}
           height={height}
+          onRowClick={onProjectRowClick}
         />
       ) : showTools ? (
         <ToolsSurface
@@ -3813,6 +4113,7 @@ export function App({ config }: AppProps) {
           error={toolsError}
           width={width}
           height={height}
+          onRowClick={onToolRowClick}
         />
       ) : showOutbound ? (
         <OutboundSurface
@@ -3824,6 +4125,7 @@ export function App({ config }: AppProps) {
           error={outboundError}
           width={width}
           height={height}
+          onRowClick={onOutboundRowClick}
         />
       ) : showHome ? (
         <HomeSurface
@@ -3837,6 +4139,7 @@ export function App({ config }: AppProps) {
           focused={homeFocusSection(homeIndex, homeNeedsYou.length, homeActive.length)}
           width={width}
           height={height}
+          onRowClick={onHomeRowClick}
         />
       ) : hasConversation ? (
         <box style={{ width, height, flexDirection: "row", backgroundColor: theme.bg }}>
@@ -3850,6 +4153,7 @@ export function App({ config }: AppProps) {
               dotContext={{ activeThreadId: state.activeThreadId, activeRunning: state.isThinking, approvalThreadIds }}
               width={sidebarLayout.sidebarWidth}
               height={height}
+              onSelect={onSidebarThreadClick}
             />
           ) : null}
           <box style={{ flexGrow: 1, height, flexDirection: "column" }}>
@@ -3857,7 +4161,7 @@ export function App({ config }: AppProps) {
               contentWidth={chatContentWidth}
               composer={composer}
               composerWidth={chatContentWidth}
-              chatFocused={!sidebarActive}
+              chatFocused={!sidebarActive && !navMode}
               height={height}
               lastError={state.lastError}
               markdownStyle={markdownStyle}
@@ -3869,7 +4173,14 @@ export function App({ config }: AppProps) {
               showOlderHistoryHint={state.hasOlderHistory}
               transcript={state.transcript}
               expandedActivityIds={expandedActivityIds}
+              selectedTranscriptId={navSelectedId}
+              searchMatchIds={searchMatchIdSet}
+              searchActive={searchActive}
+              searchQuery={searchQuery}
+              searchMatchIndex={searchMatchIndex}
+              navHint={transcriptNavHint}
               onToggleActivityExpanded={toggleActivityExpanded}
+              onSelectMessage={onSelectTranscriptMessage}
               onResolve={(action) => void resolveGate(action)}
               onSelectGateAction={setSelectedGateAction}
               onSubmitAuthToken={() => void submitAuthToken()}

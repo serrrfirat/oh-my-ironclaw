@@ -22,6 +22,7 @@ export function WorkspaceSurface({
   error,
   width,
   height,
+  onRowClick,
 }: {
   view: WorkspaceView
   mounts: FsMountInfo[]
@@ -34,6 +35,7 @@ export function WorkspaceSurface({
   error: string | null
   width: number
   height: number
+  onRowClick?: (index: number) => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   const meta = view.kind === "mounts" ? `${mounts.length} mounts` : `${view.mount}:${view.path || "/"}`
@@ -43,9 +45,9 @@ export function WorkspaceSurface({
       {view.kind === "file" ? (
         <FilePane stat={stat} content={fileContent} offset={fileOffset} height={height} width={contentWidth} />
       ) : view.kind === "mounts" ? (
-        <MountList mounts={mounts} selectedIndex={selectedIndex} loading={loading} width={contentWidth} />
+        <MountList mounts={mounts} selectedIndex={selectedIndex} loading={loading} width={contentWidth} onRowClick={onRowClick} />
       ) : (
-        <EntryList entries={entries} selectedIndex={selectedIndex} loading={loading} width={contentWidth} />
+        <EntryList entries={entries} selectedIndex={selectedIndex} loading={loading} width={contentWidth} onRowClick={onRowClick} />
       )}
       <box style={{ flexGrow: 1 }} />
       <Hint text={hintForView(view)} width={contentWidth} />
@@ -59,7 +61,7 @@ function hintForView(view: WorkspaceView): string {
   return "up/down select · enter open · backspace up · esc back"
 }
 
-function MountList({ mounts, selectedIndex, loading, width }: { mounts: FsMountInfo[]; selectedIndex: number; loading: boolean; width: number }) {
+function MountList({ mounts, selectedIndex, loading, width, onRowClick }: { mounts: FsMountInfo[]; selectedIndex: number; loading: boolean; width: number; onRowClick?: (index: number) => void }) {
   const selected = wrapIndex(selectedIndex, mounts.length)
   if (!mounts.length) return <text fg={theme.textMuted}>{loading ? "loading mounts…" : "no mounts available"}</text>
   return (
@@ -72,13 +74,14 @@ function MountList({ mounts, selectedIndex, loading, width }: { mounts: FsMountI
           textWidth={24}
           suffix={mount.mount}
           width={width}
+          onMouseDown={onRowClick ? () => onRowClick(index) : undefined}
         />
       ))}
     </box>
   )
 }
 
-function EntryList({ entries, selectedIndex, loading, width }: { entries: ProjectFsEntry[]; selectedIndex: number; loading: boolean; width: number }) {
+function EntryList({ entries, selectedIndex, loading, width, onRowClick }: { entries: ProjectFsEntry[]; selectedIndex: number; loading: boolean; width: number; onRowClick?: (index: number) => void }) {
   const selected = wrapIndex(selectedIndex, entries.length)
   const start = Math.min(Math.max(0, selected - ENTRY_VISIBLE_LIMIT + 1), Math.max(0, entries.length - ENTRY_VISIBLE_LIMIT))
   const visible = entries.slice(start, start + ENTRY_VISIBLE_LIMIT)
@@ -96,6 +99,7 @@ function EntryList({ entries, selectedIndex, loading, width }: { entries: Projec
             text={entry.name}
             textWidth={Math.max(4, width - 6)}
             width={width}
+            onMouseDown={onRowClick ? () => onRowClick(start + index) : undefined}
           />
         )
       })}

@@ -27,6 +27,7 @@ export function LlmProvidersSurface({
   setupInputLabel,
   snapshot,
   width,
+  onRowClick,
 }: {
   actionMessage?: string | null
   availableModels?: string[]
@@ -41,6 +42,9 @@ export function LlmProvidersSurface({
   setupInputLabel?: string | null
   snapshot?: LlmConfigSnapshot | null
   width: number
+  // Select-only: provider rows carry many actions (n/e/enter/s/l/g/w/t/m/x), so
+  // a click only moves the highlight and leaves the actions to the key hints.
+  onRowClick?: (index: number) => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   const providers = providerRows(snapshot)
@@ -53,13 +57,13 @@ export function LlmProvidersSurface({
       {error ? <text fg={theme.danger}>{truncate(error, contentWidth)}</text> : actionMessage ? <text fg={theme.accentText}>{truncate(actionMessage, contentWidth)}</text> : null}
       {narrow ? (
         <box style={{ flexDirection: "column" }}>
-          <ProviderList providers={providers} selectedIndex={selectedIndex} width={contentWidth} />
+          <ProviderList providers={providers} selectedIndex={selectedIndex} width={contentWidth} onRowClick={onRowClick} />
           <box style={{ height: 1 }} />
           <ProviderDetail provider={selected} availableModels={availableModels ?? []} form={form} nearAiWalletInput={nearAiWalletInput} nearAiWalletInputActive={nearAiWalletInputActive} setupInput={setupInput} setupInputLabel={setupInputLabel} width={contentWidth} />
         </box>
       ) : (
         <box style={{ flexDirection: "row", width: contentWidth }}>
-          <ProviderList providers={providers} selectedIndex={selectedIndex} width={listWidth} />
+          <ProviderList providers={providers} selectedIndex={selectedIndex} width={listWidth} onRowClick={onRowClick} />
           <box style={{ width: 2 }} />
           <ProviderDetail provider={selected} availableModels={availableModels ?? []} form={form} nearAiWalletInput={nearAiWalletInput} nearAiWalletInputActive={nearAiWalletInputActive} setupInput={setupInput} setupInputLabel={setupInputLabel} width={Math.max(1, contentWidth - listWidth - 2)} />
         </box>
@@ -70,7 +74,7 @@ export function LlmProvidersSurface({
   )
 }
 
-function ProviderList({ providers, selectedIndex, width }: { providers: LlmProviderView[]; selectedIndex: number; width: number }) {
+function ProviderList({ providers, selectedIndex, width, onRowClick }: { providers: LlmProviderView[]; selectedIndex: number; width: number; onRowClick?: (index: number) => void }) {
   const selected = wrapIndex(selectedIndex, providers.length)
   const start = clamp(selected - PROVIDER_VISIBLE_LIMIT + 1, 0, Math.max(0, providers.length - PROVIDER_VISIBLE_LIMIT))
   const visible = providers.slice(start, start + PROVIDER_VISIBLE_LIMIT)
@@ -82,6 +86,7 @@ function ProviderList({ providers, selectedIndex, width }: { providers: LlmProvi
           provider={provider}
           selected={start + index === selected}
           width={width}
+          onMouseDown={onRowClick ? () => onRowClick(start + index) : undefined}
         />
       )) : (
         <box style={{ height: 3, backgroundColor: theme.bgCode, paddingLeft: 2, paddingTop: 1 }}>
@@ -92,11 +97,11 @@ function ProviderList({ providers, selectedIndex, width }: { providers: LlmProvi
   )
 }
 
-function ProviderRow({ provider, selected, width }: { provider: LlmProviderView; selected: boolean; width: number }) {
+function ProviderRow({ provider, selected, width, onMouseDown }: { provider: LlmProviderView; selected: boolean; width: number; onMouseDown?: () => void }) {
   const marker = selected ? ">" : provider.active ? "*" : " "
   const suffix = provider.active ? "active" : providerConfigured(provider) ? "ready" : "setup"
   return (
-    <box style={{ height: 1, flexDirection: "row", backgroundColor: selected ? theme.bgSoft : theme.bgCode, paddingLeft: 2, paddingRight: 2 }}>
+    <box onMouseDown={onMouseDown} style={{ height: 1, flexDirection: "row", backgroundColor: selected ? theme.bgSoft : theme.bgCode, paddingLeft: 2, paddingRight: 2 }}>
       <text fg={selected || provider.active ? theme.accent : theme.textMuted}>{marker} </text>
       <text fg={selected ? theme.textStrong : theme.text}>{truncate(provider.description || provider.id, Math.max(8, width - suffix.length - 10))}</text>
       <text fg={provider.active || providerConfigured(provider) ? theme.accentText : theme.warn}> {truncate(suffix, 12)}</text>

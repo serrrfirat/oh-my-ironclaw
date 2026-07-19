@@ -16,6 +16,7 @@ export function AutomationsSurface({
   confirmingDelete,
   message,
   width,
+  onRowClick,
 }: {
   automations: AutomationInfo[]
   error?: string | null
@@ -28,6 +29,9 @@ export function AutomationsSurface({
   confirmingDelete?: boolean
   message?: string | null
   width: number
+  // Select-only: automation rows have p/r/n/d actions, so a click only moves the
+  // highlight and leaves the action keys to the user.
+  onRowClick?: (index: number) => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   const selected = automations[wrapIndex(selectedIndex, automations.length)] ?? null
@@ -56,13 +60,13 @@ export function AutomationsSurface({
       ) : null}
       {narrow ? (
         <box style={{ flexDirection: "column" }}>
-          <AutomationList automations={automations} selectedIndex={selectedIndex} width={contentWidth} />
+          <AutomationList automations={automations} selectedIndex={selectedIndex} width={contentWidth} onRowClick={onRowClick} />
           <box style={{ height: 1 }} />
           <AutomationDetail automation={selected} confirmingDelete={confirmingDelete} width={contentWidth} />
         </box>
       ) : (
         <box style={{ flexDirection: "row", width: contentWidth }}>
-          <AutomationList automations={automations} selectedIndex={selectedIndex} width={Math.min(56, Math.max(34, Math.floor(contentWidth * 0.46)))} />
+          <AutomationList automations={automations} selectedIndex={selectedIndex} width={Math.min(56, Math.max(34, Math.floor(contentWidth * 0.46)))} onRowClick={onRowClick} />
           <box style={{ width: 2 }} />
           <AutomationDetail automation={selected} confirmingDelete={confirmingDelete} width={Math.max(1, contentWidth - Math.min(56, Math.max(34, Math.floor(contentWidth * 0.46))) - 2)} />
         </box>
@@ -86,7 +90,7 @@ function SummaryStrip({ summary, width }: { summary: { scheduled: number; active
   )
 }
 
-function AutomationList({ automations, selectedIndex, width }: { automations: AutomationInfo[]; selectedIndex: number; width: number }) {
+function AutomationList({ automations, selectedIndex, width, onRowClick }: { automations: AutomationInfo[]; selectedIndex: number; width: number; onRowClick?: (index: number) => void }) {
   const selected = wrapIndex(selectedIndex, automations.length)
   const start = Math.min(Math.max(0, selected - AUTOMATION_VISIBLE_LIMIT + 1), Math.max(0, automations.length - AUTOMATION_VISIBLE_LIMIT))
   const visible = automations.slice(start, start + AUTOMATION_VISIBLE_LIMIT)
@@ -94,7 +98,7 @@ function AutomationList({ automations, selectedIndex, width }: { automations: Au
     <box style={{ width, flexDirection: "column" }}>
       {visible.length ? (
         visible.map((automation, index) => (
-          <AutomationRow key={automation.automation_id} automation={automation} selected={start + index === selected} width={width} />
+          <AutomationRow key={automation.automation_id} automation={automation} selected={start + index === selected} width={width} onMouseDown={onRowClick ? () => onRowClick(start + index) : undefined} />
         ))
       ) : (
         <box style={{ height: 1, paddingLeft: 2 }}>
@@ -105,10 +109,10 @@ function AutomationList({ automations, selectedIndex, width }: { automations: Au
   )
 }
 
-function AutomationRow({ automation, selected, width }: { automation: AutomationInfo; selected: boolean; width: number }) {
+function AutomationRow({ automation, selected, width, onMouseDown }: { automation: AutomationInfo; selected: boolean; width: number; onMouseDown?: () => void }) {
   const state = stateLabel(automation.state)
   return (
-    <box style={{ width, height: 1, flexDirection: "row", backgroundColor: selected ? theme.accentSoftBg : theme.bg }}>
+    <box onMouseDown={onMouseDown} style={{ width, height: 1, flexDirection: "row", backgroundColor: selected ? theme.accentSoftBg : theme.bg }}>
       <box style={{ width: 1, backgroundColor: selected ? theme.accent : theme.border }} />
       <text fg={selected ? theme.accent : theme.textMuted}> {selected ? "›" : " "} </text>
       <text fg={selected ? theme.accentText : theme.text}>{truncate(automation.name || "Untitled automation", Math.max(8, width - 18))}</text>

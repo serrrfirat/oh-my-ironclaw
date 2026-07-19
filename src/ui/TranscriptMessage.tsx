@@ -5,6 +5,24 @@ import { theme } from "./theme"
 
 const ACTIVITY_DETAIL_LINE_LIMIT = 48
 
+// Anchor id given to a message's outermost box so the scrollbox can bring a
+// selected / search-matched message into view (scrollChildIntoView).
+export function transcriptMessageAnchorId(id: string): string {
+  return `msg:${id}`
+}
+
+// Glass highlight for a navigated / searched message. The current selection (nav
+// cursor or the active search match) reads as an accent-tinted fill + accent
+// edge — the same "selected row" language as ListRow, and distinct from both a
+// normal row and the composer's accent-bordered well. Other search matches wear
+// the warn tone so they stand out as "found" without competing with the cursor.
+type MessageHighlight = { bg: string; edge: string } | null
+function messageHighlight(selected: boolean, searchMatch: boolean): MessageHighlight {
+  if (selected) return { bg: theme.accentSoftBg, edge: theme.accent }
+  if (searchMatch) return { bg: theme.warnSoftBg, edge: theme.warn }
+  return null
+}
+
 export function TranscriptMessage({
   item,
   expanded,
@@ -12,7 +30,10 @@ export function TranscriptMessage({
   selectedModel,
   spinner,
   width,
+  selected = false,
+  searchMatch = false,
   onToggleActivityExpanded,
+  onSelectMessage,
 }: {
   item: TranscriptItem
   expanded: boolean
@@ -20,12 +41,22 @@ export function TranscriptMessage({
   selectedModel: string
   spinner: string
   width: number
+  selected?: boolean
+  searchMatch?: boolean
   onToggleActivityExpanded: (id: string) => void
+  // Mouse: clicking a text message enters transcript-nav on it (the App guards
+  // against stealing a pending gate's input). Tool/activity cards keep their own
+  // expand-toggle click instead.
+  onSelectMessage?: (id: string) => void
 }) {
+  const anchorId = transcriptMessageAnchorId(item.id)
+  const highlight = messageHighlight(selected, searchMatch)
+  const selectOnClick = onSelectMessage ? () => onSelectMessage(item.id) : undefined
+
   if (item.role === "user") {
     return (
-      <box style={{ width, flexDirection: "row", backgroundColor: theme.bgSoft, marginBottom: 2 }}>
-        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 3, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
+      <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg ?? theme.bgSoft, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bgSoft, marginBottom: 2 }}>
+        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
           <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
         </box>
       </box>
@@ -34,9 +65,11 @@ export function TranscriptMessage({
 
   if (item.role === "assistant") {
     return (
-      <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
-        <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
-        <BuildLine durationMs={item.meta?.durationMs} selectedModel={selectedModel} />
+      <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bg, marginBottom: 2 }}>
+        <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
+          <markdown content={item.text || " "} syntaxStyle={markdownStyle} />
+          <BuildLine durationMs={item.meta?.durationMs} selectedModel={selectedModel} />
+        </box>
       </box>
     )
   }
@@ -45,8 +78,8 @@ export function TranscriptMessage({
     const lines = item.text.split(/\r?\n/).filter(Boolean)
     const [firstLine, ...rest] = lines.length > 0 ? lines : ["thinking"]
     return (
-      <box style={{ width, flexDirection: "row", marginBottom: 1 }}>
-        <box style={{ width: 1, backgroundColor: theme.border }} />
+      <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, marginBottom: 1 }}>
+        <box style={{ width: 1, backgroundColor: highlight?.edge ?? theme.border }} />
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
           <box style={{ height: 1, flexDirection: "row" }}>
             <text fg={theme.textMuted}>{spinner}</text>
@@ -83,8 +116,9 @@ export function TranscriptMessage({
       // isn't overdrawn by the scrollbar (gate/composer sit outside the scrollbox
       // and don't need this).
       <box
+        id={anchorId}
         onMouseDown={() => onToggleActivityExpanded(item.id)}
-        style={{ width: Math.max(1, width - 1), flexDirection: "row", backgroundColor: theme.cardBg, border: true, borderStyle: "rounded", borderColor: theme.cardBorder, marginBottom: 1 }}
+        style={{ width: Math.max(1, width - 1), flexDirection: "row", backgroundColor: highlight?.bg ?? theme.cardBg, border: true, borderStyle: "rounded", borderColor: highlight?.edge ?? theme.cardBorder, marginBottom: 1 }}
       >
         <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 1 }}>
           <box style={{ height: 1, flexDirection: "row" }}>
@@ -110,8 +144,10 @@ export function TranscriptMessage({
   }
 
   return (
-    <box style={{ width, flexDirection: "column", paddingLeft: 3, paddingRight: 2, marginBottom: 2 }}>
-      <text fg={theme.warn}>{item.text || " "}</text>
+    <box id={anchorId} onMouseDown={selectOnClick} style={{ width, flexDirection: "row", backgroundColor: highlight?.bg, border: ["left"], borderStyle: "single", borderColor: highlight?.edge ?? theme.bg, marginBottom: 2 }}>
+      <box style={{ flexGrow: 1, flexDirection: "column", paddingLeft: 2, paddingRight: 2 }}>
+        <text fg={theme.warn}>{item.text || " "}</text>
+      </box>
     </box>
   )
 }

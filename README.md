@@ -142,6 +142,8 @@ The settings surface is functional: the **Tools** section cycles per-tool permis
 - `ctrl+t`: thread picker (`ctrl+d` deletes the selected thread with a `y`/`n` confirm)
 - `ctrl+b`: collapse / expand the persistent threads sidebar (conversation view)
 - `tab`: move focus between the threads sidebar and the chat; when the sidebar is focused, `↑`/`↓` select a thread and `enter` opens it
+- `↑`/`↓`: recall input history whenever the composer has text, or when the thread has no transcript yet — history recall is never hijacked in those cases. With an **empty** composer over a non-empty transcript, `↑` instead enters transcript-navigation focus mode on the last message (see below); to bring a previous message back from there, select it and press `e` (edit & resend), which supersedes empty-composer history recall.
+- `ctrl+f`: open in-thread transcript search
 - `ctrl+m`: model picker
 - `ctrl+n`: new thread
 - `ctrl+x`: cancel active run
@@ -155,6 +157,38 @@ The settings surface is functional: the **Tools** section cycles per-tool permis
 - `ctrl+c`: quit
 
 Surface-local keys are shown in each surface's footer hint (e.g. logs: `l` level · `t` target · `f` follow · `↑`/`↓` scroll · `o` older; tools: `enter` cycle · `g` global auto-approve; automations: `p` pause / `r` resume / `n` rename / `d` delete / `g` refresh; workspace: `enter` descend · `backspace` up). In automations, `d` (delete) asks for a `y`/`n` confirm; `p`/`r`/`n` apply immediately.
+
+## Mouse
+
+The whole TUI is operable with the mouse in addition to the keyboard — the mouse is purely additive, so every keyboard flow keeps working. It needs a mouse-reporting terminal (iTerm2, Kitty, WezTerm, Alacritty, modern xterm, Windows Terminal, tmux with `mouse on`, …); this works over SSH in most terminals since mouse reports travel as normal escape sequences.
+
+- **Click a row to select + activate it** — a single left click does the same thing as moving the cursor there and pressing `enter`: opening a thread (sidebar / thread picker), picking a model, running a command-palette entry, opening a Home row, opening a Settings section, viewing a skill, cycling a tool's permission, setting an outbound target, descending into / viewing a workspace entry, or running an extension's primary (install / activate) action.
+- **Select-only rows** — surfaces whose rows carry several distinct action keys don't guess an action on click; a click only moves the highlight, then you use the footer hint keys. These are Automations (`p`/`r`/`n`/`d`), Projects (`n`/`m`/`d`), LLM providers (`enter`/`e`/`s`/`l`/`g`/`w`/`t`/`m`/`x`), Channels (metadata only), and Traces holds (`a` authorizes).
+- **Buttons run their action** — approval gate **Approve / Always / Deny**, and auth panels **Open / Use token / Cancel / Checking**.
+- **Transcript** — clicking a text message enters transcript-navigation on it; clicking a tool/activity card toggles its expand/collapse. A pending gate owns interaction, so a click can't steal the gate's input.
+- **Scroll wheel** — the conversation transcript is a scroll box, so the wheel scrolls it natively (OpenTUI routes wheel events to the focused scroll box). The Logs list isn't a scroll box (it renders a windowed slice), so its wheel is wired to the same older/newer offset the `↑`/`↓` keys drive.
+
+## Transcript navigation, per-message actions & search
+
+The conversation transcript is operable, not just a read-only scroll. Focus moves in a ring: **composer ⇄ transcript ⇄ sidebar** (`tab` toggles composer ↔ sidebar as before; the transcript is entered from the composer as described below).
+
+**Navigation focus mode.** With an **empty** composer, `↑` enters transcript-navigation mode and selects the last message; the selected message is highlighted in the Glass "selected row" language (an accent-tinted fill + accent left edge, distinct from a normal row and from the composer's accent-bordered well). `esc` exits back to the composer. While navigating:
+
+- `↑`/`k` and `↓`/`j` move the selection by one message (clamped — no wrapping past the ends). `k` is intentionally **not** an entry key (it would shadow typing "k"); entry is via `↑` only, and `j`/`k` move once nav mode is active.
+- `g` / `G` jump to the top / bottom message.
+- `enter` expands/collapses a selected tool/activity card (no-op on text messages). A **collapsed** activity group is selectable as a whole (its hidden tools aren't individually navigable while unmounted); `enter` on it expands the group.
+- `pageup` still loads older history.
+
+**Per-message actions** (on the selected message, shown in the footer hint):
+
+- `y` — copy to the clipboard over OSC 52. For a user/assistant message this copies the message text; for a tool/activity card it copies the rendered command + output. A brief "copied to clipboard" notice confirms.
+- `e` — edit & resend a **user** message: its text is loaded back into the composer, focus returns to the composer, and nav mode exits. Sending is a normal new turn (the server has no edit); the original message is left in place.
+
+**In-thread search.** `ctrl+f` opens a transcript search field (distinct from the `ctrl+t` thread search). Typing filters case-insensitively over message text + tool titles/output; every match is highlighted in the warn tone and the active match is highlighted like the nav selection and scrolled into view. A match inside a collapsed activity group maps to the group's (rendered) summary row so a jump never targets an unmounted tool. `enter` / `shift+enter` jump to the next / previous match (they wrap); `esc` closes search and clears the highlight. `ctrl+h` (some terminals' Backspace) and `backspace` delete the last query char. (`n`/`N` are not used for jumping because they are valid query characters typed into the live search field — `enter` / `shift+enter` drive the jumps instead.)
+
+**A pending gate takes precedence.** When an approval or auth/token gate arrives it owns keyboard input: any open transcript nav / search is closed, `ctrl+f` won't open search over a gate, and the gate keys (`ctrl+a`/`ctrl+d`/`enter`, and the token field) plus global shortcuts (`ctrl+x` cancel, `ctrl+t`/`ctrl+m` pickers, `ctrl+b`/`ctrl+h`) are never swallowed by nav- or search-mode key handling.
+
+The pure, unit-tested logic behind all of this lives in `src/ui/transcriptNav.ts` (`selectableTranscriptIds`, `moveSelection`, `searchTranscript`, `copyTextForItem`), covered by `src/ui/transcriptNav.test.ts`.
 
 ## Home
 

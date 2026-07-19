@@ -47,6 +47,7 @@ export function SettingsSurface({
   notifyLevel = "blockers",
   status,
   width,
+  onRowClick,
 }: {
   config: ClientConfig
   connected: boolean
@@ -67,6 +68,8 @@ export function SettingsSurface({
   notifyLevel?: NotifyLevel
   status: string
   width: number
+  // Click a section to select + open it (Notifications cycles its level).
+  onRowClick?: (index: number) => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   const narrow = width < 86
@@ -125,7 +128,7 @@ export function SettingsSurface({
         <box style={{ flexDirection: "column" }}>
           <text fg={theme.textStrong}>Settings</text>
           <box style={{ height: 1 }} />
-          <SettingsMenu items={menu} selectedIndex={selectedIndex} width={contentWidth} />
+          <SettingsMenu items={menu} selectedIndex={selectedIndex} width={contentWidth} onRowClick={onRowClick} />
           <box style={{ height: 1 }} />
           {preview}
         </box>
@@ -134,7 +137,7 @@ export function SettingsSurface({
           <box style={{ width: 32, flexDirection: "column" }}>
             <text fg={theme.textStrong}>Settings</text>
             <box style={{ height: 1 }} />
-            <SettingsMenu items={menu} selectedIndex={selectedIndex} width={32} />
+            <SettingsMenu items={menu} selectedIndex={selectedIndex} width={32} onRowClick={onRowClick} />
           </box>
           <box style={{ width: 2 }} />
           {preview}
@@ -145,20 +148,20 @@ export function SettingsSurface({
   )
 }
 
-function SettingsMenu({ items, selectedIndex, width }: { items: SettingsMenuItem[]; selectedIndex: number; width: number }) {
+function SettingsMenu({ items, selectedIndex, width, onRowClick }: { items: SettingsMenuItem[]; selectedIndex: number; width: number; onRowClick?: (index: number) => void }) {
   return (
     <box style={{ width, flexDirection: "column" }}>
       {items.map((item, index) => (
-        <SettingsMenuRow key={item.label} item={item} selected={index === wrapIndex(selectedIndex, items.length)} width={width} />
+        <SettingsMenuRow key={item.label} item={item} selected={index === wrapIndex(selectedIndex, items.length)} width={width} onMouseDown={onRowClick ? () => onRowClick(index) : undefined} />
       ))}
     </box>
   )
 }
 
-function SettingsMenuRow({ item, selected, width }: { item: SettingsMenuItem; selected: boolean; width: number }) {
+function SettingsMenuRow({ item, selected, width, onMouseDown }: { item: SettingsMenuItem; selected: boolean; width: number; onMouseDown?: () => void }) {
   const metaWidth = Math.max(0, width - 15)
   return (
-    <box style={{ width, height: 1, flexDirection: "row", backgroundColor: selected ? theme.accentSoftBg : theme.bg }}>
+    <box onMouseDown={onMouseDown} style={{ width, height: 1, flexDirection: "row", backgroundColor: selected ? theme.accentSoftBg : theme.bg }}>
       <box style={{ width: 1, backgroundColor: selected ? theme.accent : theme.border }} />
       <text fg={selected ? theme.accent : theme.textMuted}>{selected ? " › " : "   "}</text>
       <text fg={selected ? theme.accentText : theme.text}>{padEnd(item.label, 12)}</text>

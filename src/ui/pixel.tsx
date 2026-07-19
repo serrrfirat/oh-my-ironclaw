@@ -168,6 +168,7 @@ export function ListRow({
   alignSuffix,
   trailing,
   width,
+  onMouseDown,
 }: {
   selected: boolean
   marker?: string
@@ -180,6 +181,10 @@ export function ListRow({
   alignSuffix?: "end"
   trailing?: React.ReactNode
   width: number
+  // Left-click handler. Wiring a row's click to select+activate is done by the
+  // surface (which knows the row's absolute index); the mouse is additive to the
+  // keyboard cursor.
+  onMouseDown?: () => void
 }) {
   // Glass list: only the SELECTED row is emphasised — an accentSoftBg fill with
   // a coloured left edge (railTone recolors it) reads as a filled chip. A true
@@ -192,7 +197,7 @@ export function ListRow({
   const suffixText = suffix ? ` ${suffix}` : ""
   const resolvedTextWidth = textWidth ?? Math.max(4, width - 3 - suffixText.length)
   return (
-    <box style={{ width, height: 1, flexDirection: "row", backgroundColor: bg }}>
+    <box onMouseDown={onMouseDown} style={{ width, height: 1, flexDirection: "row", backgroundColor: bg }}>
       <box style={{ width: 1, backgroundColor: railColor }} />
       <text fg={selected ? theme.accent : theme.textMuted}> {marker ?? (selected ? "›" : " ")} </text>
       {leading}

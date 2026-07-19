@@ -7,7 +7,7 @@ import { formatUsd } from "./homeData"
 import { threadDisplayTitle, type ThreadPreviewMap } from "../threadPreviews"
 import { transcriptItemContentLength, type TranscriptItem } from "../transcript"
 import { activityGroupSummary, groupTranscriptEntries } from "./activityGroups"
-import { TranscriptMessage } from "./TranscriptMessage"
+import { TranscriptMessage, transcriptMessageAnchorId } from "./TranscriptMessage"
 import { sourceColor, type SlashCommand } from "./slashCommands"
 import { theme, toneColors, type Tone } from "./theme"
 import { Card, Tag } from "./pixel"
@@ -21,6 +21,7 @@ export type GateAction = "approved" | "denied" | "always"
 
 const SLASH_COMMAND_POPUP_LIMIT = 8
 const THREAD_PALETTE_LIMIT = 10
+const EMPTY_MATCH_IDS: Set<string> = new Set()
 
 export type ComposerCommonProps = {
   inputRef: RefObject<TextareaRenderable | null>
@@ -51,6 +52,11 @@ export type ComposerCommonProps = {
   threadDeleteConfirm?: boolean
   onInputChange: () => void
   onSubmit: () => void
+  // Mouse: clicking a picker-popup row runs that row's primary action (pick
+  // model / open thread / run command), mirroring the keyboard's enter.
+  onModelRowClick?: (index: number) => void
+  onThreadRowClick?: (index: number) => void
+  onSlashCommandClick?: (command: SlashCommand) => void
 }
 
 export function WelcomeSurface({
@@ -127,7 +133,14 @@ export function ConversationSurface({
   showOlderHistoryHint,
   transcript,
   expandedActivityIds,
+  selectedTranscriptId = null,
+  searchMatchIds,
+  searchActive = false,
+  searchQuery = "",
+  searchMatchIndex = 0,
+  navHint = null,
   onToggleActivityExpanded,
+  onSelectMessage,
   onResolve,
   onSelectGateAction,
   onSubmitAuthToken,
@@ -149,20 +162,30 @@ export function ConversationSurface({
   showOlderHistoryHint: boolean
   transcript: TranscriptItem[]
   expandedActivityIds: Set<string>
+  selectedTranscriptId?: string | null
+  searchMatchIds?: Set<string>
+  searchActive?: boolean
+  searchQuery?: string
+  searchMatchIndex?: number
+  navHint?: string | null
   onToggleActivityExpanded: (id: string) => void
+  onSelectMessage?: (id: string) => void
   onResolve: (action: GateAction) => void
   onSelectGateAction: (action: GateAction) => void
   onSubmitAuthToken: () => void
   onCancelAuthGate: () => void
   onOpenAuthUrl: (gate: PendingGateInfo) => void
 }) {
+  const matchIds = searchMatchIds ?? EMPTY_MATCH_IDS
   const slashPopupHeight = composer.showSlashCommands ? slashCommandPopupHeight(composer.slashCommands) : 0
   const threadPopupHeight = composer.showThreadPalette ? threadPaletteHeight(composer.threads) : 0
   const modelPopupHeight = composer.showModelPalette ? modelPaletteHeight(composer.models) : 0
+  const searchBarHeight = searchActive ? 3 : 0
+  const navHintHeight = navHint ? 1 : 0
   // The framed gate/auth cards are ~2 rows taller than the old flat panels, so
   // reserve a little more room below the transcript when a gate is showing to
   // keep the composer from being pushed off the bottom.
-  const transcriptHeight = Math.max(6, height - (pendingGate ? 20 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight)
+  const transcriptHeight = Math.max(6, height - (pendingGate ? 20 : 8) - slashPopupHeight - threadPopupHeight - modelPopupHeight - searchBarHeight - navHintHeight)
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const transcriptEndKey = transcript.map((item) => `${item.id}:${transcriptItemContentLength(item)}`).join("|")
   const transcriptEntries = groupTranscriptEntries(transcript)
@@ -172,6 +195,13 @@ export function ConversationSurface({
     if (!scrollbox) return
     scrollbox.scrollTo({ x: 0, y: scrollbox.scrollHeight })
   }, [transcriptEndKey, transcriptHeight])
+
+  // Bring the navigated / active-search message into view without disturbing
+  // sticky-bottom auto-scroll when nothing is selected.
+  useEffect(() => {
+    if (!selectedTranscriptId) return
+    transcriptScrollRef.current?.scrollChildIntoView(transcriptMessageAnchorId(selectedTranscriptId))
+  }, [selectedTranscriptId, transcriptHeight])
 
   return (
     <box style={{ height, flexDirection: "column", alignItems: "center", backgroundColor: theme.bg, paddingTop: 1 }}>
@@ -198,7 +228,10 @@ export function ConversationSurface({
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
             width={contentWidth}
+            selectedTranscriptId={selectedTranscriptId}
+            searchMatchIds={matchIds}
             onToggleActivityExpanded={onToggleActivityExpanded}
+            onSelectMessage={onSelectMessage}
           />
         ) : (
           <TranscriptMessage
@@ -209,7 +242,10 @@ export function ConversationSurface({
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
             width={contentWidth}
+            selected={selectedTranscriptId === entry.item.id}
+            searchMatch={matchIds.has(entry.item.id)}
             onToggleActivityExpanded={onToggleActivityExpanded}
+            onSelectMessage={onSelectMessage}
           />
         ))}
         {composer.isThinking ? (
@@ -222,6 +258,19 @@ export function ConversationSurface({
           />
         ) : null}
       </scrollbox>
+      {searchActive ? (
+        <TranscriptSearchBar
+          matchCount={matchIds.size}
+          matchIndex={searchMatchIndex}
+          query={searchQuery}
+          width={composerWidth}
+        />
+      ) : null}
+      {navHint ? (
+        <box style={{ width: composerWidth, height: 1, flexDirection: "row" }}>
+          <text fg={theme.textFaint}>{truncate(navHint, composerWidth)}</text>
+        </box>
+      ) : null}
       {pendingGate ? (
         isAuthGate(pendingGate) ? (
           <AuthGatePanel
@@ -288,6 +337,49 @@ function ThinkingMessage({
   )
 }
 
+// In-thread search input: a framed accent-tone well showing the live query and
+// the match position, mirroring the composer's rounded-glass look.
+function TranscriptSearchBar({
+  matchCount,
+  matchIndex,
+  query,
+  width,
+}: {
+  matchCount: number
+  matchIndex: number
+  query: string
+  width: number
+}) {
+  const position = matchCount > 0 ? `${Math.min(matchIndex + 1, matchCount)}/${matchCount}` : query ? "no matches" : ""
+  const hint = "enter next · shift+enter prev · esc close"
+  const budget = Math.max(1, width - hint.length - position.length - 8)
+  return (
+    <box
+      style={{
+        width,
+        height: 3,
+        flexDirection: "column",
+        backgroundColor: theme.bgSoft,
+        border: true,
+        borderStyle: "rounded",
+        borderColor: theme.accent,
+        paddingLeft: 1,
+        paddingRight: 1,
+      }}
+    >
+      <box style={{ height: 1, flexDirection: "row" }}>
+        <text fg={theme.accent}>search </text>
+        <text fg={query ? theme.textStrong : theme.textMuted}>{truncate(query || "type to search transcript", budget)}</text>
+        <box style={{ flexGrow: 1 }} />
+        {position ? <text fg={matchCount > 0 ? theme.textMuted : theme.warn}>{position}</text> : null}
+      </box>
+      <box style={{ height: 1, flexDirection: "row" }}>
+        <text fg={theme.textFaint}>{truncate(hint, width)}</text>
+      </box>
+    </box>
+  )
+}
+
 function LoadOlderHint({ width }: { width: number }) {
   return (
     <box style={{ width, height: 2, flexDirection: "column", paddingLeft: 3, marginBottom: 1 }}>
@@ -305,7 +397,10 @@ function ActivityGroup({
   selectedModel,
   spinner,
   width,
+  selectedTranscriptId = null,
+  searchMatchIds,
   onToggleActivityExpanded,
+  onSelectMessage,
 }: {
   expanded: boolean
   expandedActivityIds: Set<string>
@@ -315,16 +410,30 @@ function ActivityGroup({
   selectedModel: string
   spinner: string
   width: number
+  selectedTranscriptId?: string | null
+  searchMatchIds?: Set<string>
   onToggleActivityExpanded: (id: string) => void
+  onSelectMessage?: (id: string) => void
 }) {
+  const matchIds = searchMatchIds ?? EMPTY_MATCH_IDS
+  // When collapsed, the group's inner activities are unmounted and nav/search
+  // represent the group by its id, so the summary row carries the selection /
+  // search highlight and is the scroll anchor for scrollChildIntoView.
+  const groupSelected = selectedTranscriptId === groupId
+  const groupHighlight = groupSelected
+    ? { bg: theme.accentSoftBg, edge: theme.accent }
+    : matchIds.has(groupId)
+      ? { bg: theme.warnSoftBg, edge: theme.warn }
+      : null
   return (
     <box style={{ width, flexDirection: "column", marginBottom: 2 }}>
       <box
+        id={transcriptMessageAnchorId(groupId)}
         onMouseDown={() => onToggleActivityExpanded(groupId)}
-        style={{ width, height: 1, flexDirection: "row", paddingLeft: 3, paddingRight: 2 }}
+        style={{ width, height: 1, flexDirection: "row", paddingLeft: 3, paddingRight: 2, backgroundColor: groupHighlight?.bg }}
       >
-        <text fg={theme.textMuted}>{expanded ? "▾ " : "▸ "}</text>
-        <text fg={theme.textMuted}>{truncate(activityGroupSummary(items), Math.max(1, width - 7))}</text>
+        <text fg={groupHighlight ? theme.accent : theme.textMuted}>{expanded ? "▾ " : "▸ "}</text>
+        <text fg={groupHighlight ? theme.textStrong : theme.textMuted}>{truncate(activityGroupSummary(items), Math.max(1, width - 7))}</text>
       </box>
       {expanded ? items.map((item) => (
         <TranscriptMessage
@@ -335,7 +444,10 @@ function ActivityGroup({
           selectedModel={selectedModel}
           spinner={spinner}
           width={width}
+          selected={selectedTranscriptId === item.id}
+          searchMatch={matchIds.has(item.id)}
           onToggleActivityExpanded={onToggleActivityExpanded}
+          onSelectMessage={onSelectMessage}
         />
       )) : null}
     </box>
@@ -384,6 +496,9 @@ function Composer({
   width,
   onInputChange,
   onSubmit,
+  onModelRowClick,
+  onThreadRowClick,
+  onSlashCommandClick,
 }: {
   focused: boolean
   showThinkingStatus?: boolean
@@ -407,6 +522,7 @@ function Composer({
           selectedIndex={selectedModelIndex}
           selectedModel={selectedModel}
           width={width}
+          onRowClick={onModelRowClick}
         />
       ) : null}
       {showThreadPalette ? (
@@ -418,6 +534,7 @@ function Composer({
           threads={threads}
           deleteConfirm={Boolean(threadDeleteConfirm)}
           width={width}
+          onRowClick={onThreadRowClick}
         />
       ) : null}
       {showSlashCommands ? (
@@ -425,6 +542,7 @@ function Composer({
           commands={slashCommands}
           selectedIndex={selectedSlashCommandIndex}
           width={width}
+          onRowClick={onSlashCommandClick}
         />
       ) : null}
       {/* Glass composer: a rounded-border framed well whose edge is the focus /
@@ -495,6 +613,7 @@ export function ThreadsSidebar({
   dotContext,
   width,
   height,
+  onSelect,
 }: {
   threads: ThreadInfo[]
   activeThreadId?: string | null
@@ -504,6 +623,8 @@ export function ThreadsSidebar({
   dotContext: ThreadDotContext
   width: number
   height: number
+  // Mouse: click a thread row to open it (same as moving the cursor + enter).
+  onSelect?: (threadId: string) => void
 }) {
   // Border (1×2) + padding (1×2) inset → inner content width is width - 4.
   const innerWidth = Math.max(1, width - 4)
@@ -542,6 +663,7 @@ export function ThreadsSidebar({
             title={threadDisplayTitle(thread, threadPreviews)}
             dotTone={threadStatusDotTone(thread, dotContext)}
             width={innerWidth}
+            onMouseDown={onSelect ? () => onSelect(thread.id) : undefined}
           />
         ))
       ) : (
@@ -562,6 +684,7 @@ function SidebarThreadRow({
   title,
   dotTone,
   width,
+  onMouseDown,
 }: {
   active: boolean
   cursor: boolean
@@ -569,6 +692,7 @@ function SidebarThreadRow({
   title: string
   dotTone: Tone
   width: number
+  onMouseDown?: () => void
 }) {
   const highlighted = active || (focused && cursor)
   const bg = highlighted ? theme.accentSoftBg : theme.bg
@@ -577,7 +701,7 @@ function SidebarThreadRow({
   // rail(1) + marker(1) + dot(1) + space(1) → title budget is width - 4.
   const titleWidth = Math.max(4, width - 4)
   return (
-    <box style={{ width, height: 1, flexDirection: "row", backgroundColor: bg }}>
+    <box onMouseDown={onMouseDown} style={{ width, height: 1, flexDirection: "row", backgroundColor: bg }}>
       <box style={{ width: 1, backgroundColor: railColor }} />
       <text fg={highlighted ? theme.accent : theme.textMuted}>{marker}</text>
       <text fg={toneColors(dotTone).fg}>●</text>
@@ -594,6 +718,7 @@ function ThreadPalette({
   threads,
   deleteConfirm,
   width,
+  onRowClick,
 }: {
   activeThreadId?: string | null
   selectedIndex: number
@@ -602,6 +727,7 @@ function ThreadPalette({
   threads: ThreadInfo[]
   deleteConfirm?: boolean
   width: number
+  onRowClick?: (index: number) => void
 }) {
   const selectedThreadIndex = wrapIndex(selectedIndex, threads.length)
   const startIndex = Math.min(
@@ -631,6 +757,7 @@ function ThreadPalette({
             threadPreviews={threadPreviews}
             thread={thread}
             width={width}
+            onMouseDown={onRowClick ? () => onRowClick(startIndex + index) : undefined}
           />
         ))
       ) : (
@@ -663,18 +790,20 @@ function ThreadRow({
   thread,
   threadPreviews,
   width,
+  onMouseDown,
 }: {
   active: boolean
   selected: boolean
   thread: ThreadInfo
   threadPreviews: ThreadPreviewMap
   width: number
+  onMouseDown?: () => void
 }) {
   const marker = selected ? ">" : active ? "*" : " "
   const title = threadDisplayTitle(thread, threadPreviews)
   const suffix = active ? " active" : ""
   return (
-    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? theme.accentSoftBg : theme.bgSoft }}>
+    <box onMouseDown={onMouseDown} style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? theme.accentSoftBg : theme.bgSoft }}>
       <text fg={selected ? theme.accentText : active ? theme.accentText : theme.textMuted}>{marker} </text>
       <text fg={selected ? theme.accentText : theme.text}>{truncate(title, Math.max(8, width - suffix.length - 8))}</text>
       <text fg={selected ? theme.accentText : active ? theme.accentText : theme.textMuted}>{suffix}</text>
@@ -687,11 +816,13 @@ function ModelPalette({
   selectedIndex,
   selectedModel,
   width,
+  onRowClick,
 }: {
   models: string[]
   selectedIndex: number
   selectedModel: string
   width: number
+  onRowClick?: (index: number) => void
 }) {
   const visibleModels = models.slice(0, 8)
   const selectedVisibleIndex = wrapIndex(selectedIndex, visibleModels.length)
@@ -708,6 +839,7 @@ function ModelPalette({
           model={model}
           selected={index === selectedVisibleIndex}
           width={width}
+          onMouseDown={onRowClick ? () => onRowClick(index) : undefined}
         />
       ))}
       <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
@@ -722,16 +854,18 @@ function ModelRow({
   model,
   selected,
   width,
+  onMouseDown,
 }: {
   active: boolean
   model: string
   selected: boolean
   width: number
+  onMouseDown?: () => void
 }) {
   const marker = selected ? ">" : active ? "*" : " "
   const suffix = active ? " selected" : ""
   return (
-    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? theme.bgSoft : theme.bgCode }}>
+    <box onMouseDown={onMouseDown} style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? theme.bgSoft : theme.bgCode }}>
       <text fg={selected || active ? theme.accent : theme.textMuted}>{marker} </text>
       <text fg={selected ? theme.textStrong : theme.text}>{truncate(model, Math.max(8, width - suffix.length - 8))}</text>
       <text fg={active ? theme.accentText : theme.textMuted}>{suffix}</text>
@@ -743,10 +877,12 @@ function SlashCommandPopup({
   commands,
   selectedIndex,
   width,
+  onRowClick,
 }: {
   commands: SlashCommand[]
   selectedIndex: number
   width: number
+  onRowClick?: (command: SlashCommand) => void
 }) {
   const selected = wrapIndex(selectedIndex, commands.length)
   const start = clamp(selected - SLASH_COMMAND_POPUP_LIMIT + 1, 0, Math.max(0, commands.length - SLASH_COMMAND_POPUP_LIMIT))
@@ -759,6 +895,7 @@ function SlashCommandPopup({
           command={command}
           selected={start + index === selected}
           width={width}
+          onMouseDown={onRowClick ? () => onRowClick(command) : undefined}
         />
       ))}
       <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2 }}>
@@ -772,17 +909,19 @@ function SlashCommandRow({
   command,
   selected,
   width,
+  onMouseDown,
 }: {
   command: SlashCommand
   selected: boolean
   width: number
+  onMouseDown?: () => void
 }) {
   const marker = selected ? ">" : " "
   const commandWidth = 17
   const sourceWidth = 9
   const descriptionWidth = Math.max(10, width - commandWidth - sourceWidth - 8)
   return (
-    <box style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? theme.bgSoft : theme.bgCode }}>
+    <box onMouseDown={onMouseDown} style={{ height: 1, flexDirection: "row", paddingLeft: 2, paddingRight: 2, backgroundColor: selected ? theme.bgSoft : theme.bgCode }}>
       <text fg={selected ? theme.accent : theme.textMuted}>{marker} </text>
       <text fg={selected ? theme.accentText : theme.text}>{padEnd(command.name, commandWidth)}</text>
       <text fg={sourceColor(command.source)}>{padEnd(command.source, sourceWidth)}</text>

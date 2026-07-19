@@ -18,6 +18,7 @@ export function ProjectsSurface({
   error,
   width,
   height,
+  onRowClick,
 }: {
   view: ProjectsView
   projects: ProjectInfo[]
@@ -30,6 +31,7 @@ export function ProjectsSurface({
   error: string | null
   width: number
   height: number
+  onRowClick?: (index: number) => void
 }) {
   const contentWidth = Math.max(1, width - 4)
   const selected = projects[wrapIndex(selectedIndex, projects.length)] ?? null
@@ -43,7 +45,7 @@ export function ProjectsSurface({
         <MembersPanel project={selected} members={members} loading={loading} width={contentWidth} />
       ) : (
         <box style={{ flexDirection: "row", width: contentWidth }}>
-          <ProjectList projects={projects} selectedIndex={selectedIndex} width={Math.min(48, Math.max(28, Math.floor(contentWidth * 0.45)))} />
+          <ProjectList projects={projects} selectedIndex={selectedIndex} width={Math.min(48, Math.max(28, Math.floor(contentWidth * 0.45)))} onRowClick={onRowClick} />
           <box style={{ width: 2 }} />
           <ProjectDetail project={selected} confirmingDelete={confirmingDelete} width={Math.max(1, contentWidth - Math.min(48, Math.max(28, Math.floor(contentWidth * 0.45))) - 2)} />
         </box>
@@ -61,7 +63,7 @@ function hintForView(view: ProjectsView, confirmingDelete: boolean): string {
   return "up/down select · n new · m members · d delete · r refresh · esc back"
 }
 
-function ProjectList({ projects, selectedIndex, width }: { projects: ProjectInfo[]; selectedIndex: number; width: number }) {
+function ProjectList({ projects, selectedIndex, width, onRowClick }: { projects: ProjectInfo[]; selectedIndex: number; width: number; onRowClick?: (index: number) => void }) {
   const selected = wrapIndex(selectedIndex, projects.length)
   const start = Math.min(Math.max(0, selected - PROJECT_VISIBLE_LIMIT + 1), Math.max(0, projects.length - PROJECT_VISIBLE_LIMIT))
   const visible = projects.slice(start, start + PROJECT_VISIBLE_LIMIT)
@@ -78,6 +80,7 @@ function ProjectList({ projects, selectedIndex, width }: { projects: ProjectInfo
             textWidth={Math.max(6, width - 14)}
             trailing={<text fg={statusColor(project.state)}> {truncate(project.role, 8)}</text>}
             width={width}
+            onMouseDown={onRowClick ? () => onRowClick(start + index) : undefined}
           />
         )
       })}
