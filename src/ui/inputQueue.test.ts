@@ -3,6 +3,9 @@ import {
   clearThreadQueue,
   dequeueOldest,
   enqueue,
+  enqueueFront,
+  isFlushEligible,
+  migrateThreadQueue,
   peekOldest,
   popNewest,
   queueCount,
@@ -116,5 +119,57 @@ describe("inputQueue", () => {
     expect("t1" in cleared).toBe(false)
     expect(cleared.t2?.map((m) => m.text)).toEqual(["b"])
     expect(clearThreadQueue({}, "missing")).toEqual({})
+  })
+
+  test("enqueueFront prepends — a bounced flush preserves FIFO order", () => {
+    let map: QueuedMessageMap = {}
+    map = enqueue(map, "t1", msg("M"))
+    map = enqueue(map, "t1", msg("N"))
+    // Flush pops M (dequeueOldest); its send bounces rejected_busy → re-enqueue front.
+    const afterFlush = dequeueOldest(map, "t1")
+    expect(afterFlush.msg?.text).toBe("M")
+    expect(afterFlush.map.t1?.map((m) => m.text)).toEqual(["N"])
+    const requeued = enqueueFront(afterFlush.map, "t1", msg("M"))
+    expect(requeued.t1?.map((m) => m.text)).toEqual(["M", "N"])
+  })
+
+  test("enqueueFront is immutable and seeds an empty thread", () => {
+    const empty: QueuedMessageMap = {}
+    const next = enqueueFront(empty, "t1", msg("a"))
+    expect(empty).toEqual({})
+    expect(next).not.toBe(empty)
+    expect(next.t1?.map((m) => m.text)).toEqual(["a"])
+  })
+
+  test("migrateThreadQueue moves local entries onto the real thread id (older first)", () => {
+    let map: QueuedMessageMap = {}
+    map = enqueue(map, "local", msg("a"))
+    map = enqueue(map, "local", msg("b"))
+    const moved = migrateThreadQueue(map, "local", "thread-1")
+    expect("local" in moved).toBe(false)
+    expect(moved["thread-1"]?.map((m) => m.text)).toEqual(["a", "b"])
+  })
+
+  test("migrateThreadQueue merges ahead of existing destination entries", () => {
+    let map: QueuedMessageMap = {}
+    map = enqueue(map, "local", msg("a"))
+    map = enqueue(map, "thread-1", msg("z"))
+    const moved = migrateThreadQueue(map, "local", "thread-1")
+    expect(moved["thread-1"]?.map((m) => m.text)).toEqual(["a", "z"])
+  })
+
+  test("migrateThreadQueue is a no-op (same ref) when there is nothing to move", () => {
+    const map: QueuedMessageMap = { "thread-1": [msg("z")] }
+    expect(migrateThreadQueue(map, "local", "thread-1")).toBe(map)
+    expect(migrateThreadQueue(map, "thread-1", "thread-1")).toBe(map)
+  })
+
+  test("isFlushEligible requires idle + completed + non-empty", () => {
+    expect(isFlushEligible({ idle: true, outcome: "completed", queued: 1 })).toBe(true)
+    expect(isFlushEligible({ idle: false, outcome: "completed", queued: 1 })).toBe(false)
+    expect(isFlushEligible({ idle: true, outcome: "failed", queued: 1 })).toBe(false)
+    expect(isFlushEligible({ idle: true, outcome: "cancelled", queued: 1 })).toBe(false)
+    expect(isFlushEligible({ idle: true, outcome: null, queued: 1 })).toBe(false)
+    expect(isFlushEligible({ idle: true, outcome: "completed", queued: 0 })).toBe(false)
   })
 })

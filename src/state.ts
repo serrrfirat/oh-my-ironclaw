@@ -190,6 +190,11 @@ export function reduceUiState(state: UiState, action: UiAction): UiState {
         historyCursor: action.history.next_cursor ?? null,
         hasOlderHistory: Boolean(action.history.next_cursor),
         runUsageCost: threadSwitched ? null : state.runUsageCost,
+        // Drop the settled run outcome when switching to another thread: it belongs
+        // to the thread we left, and leaking a stale "completed" would let the
+        // input-queue flush fire against the wrong thread (or a thread whose run
+        // never cleanly finished). The switched-to thread earns its own outcome.
+        lastRunOutcome: threadSwitched ? null : state.lastRunOutcome,
         pendingGate,
         // Preserve the gate age only for the same thread; a switched-to thread's
         // gate must start fresh rather than inherit the previous thread's stamp.

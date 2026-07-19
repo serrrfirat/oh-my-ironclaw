@@ -92,6 +92,9 @@ import {
   clearThreadQueue,
   dequeueOldest,
   enqueue,
+  enqueueFront,
+  isFlushEligible,
+  migrateThreadQueue,
   peekOldest,
   popNewest,
   queueCount,
@@ -281,7 +284,10 @@ export function App({ config }: AppProps) {
   // a background thread's queue stays dormant until you return to it and its run
   // settles (thread-scoped by state.activeThreadId in the flush effect).
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessageMap>({})
-  const wasThinkingRef = useRef(false)
+  // Guards the condition-based auto-flush so it sends at most ONE queued message
+  // per idle window. Set true after a flush; reset when the thread leaves the
+  // eligible (idle + cleanly completed) state so the next completion can flush.
+  const flushedIdleWindowRef = useRef(false)
   // --- Remote skills surface ---
   const [remoteSkills, setRemoteSkills] = useState<SkillInfo[]>([])
   const [remoteSkillQuery, setRemoteSkillQuery] = useState("")
@@ -1639,6 +1645,14 @@ export function App({ config }: AppProps) {
       key.stopPropagation()
       const queueKey = state.activeThreadId ?? "local"
       if (queueCount(queuedMessages, queueKey) > 0) {
+        // Restore only into an EMPTY composer — never silently overwrite an
+        // in-progress draft (text or freshly staged attachments). If the composer
+        // is dirty, no-op and nudge the user to clear it first; the queued message
+        // stays in the queue, still recoverable.
+        if (input.trim().length > 0 || stagedAttachments.length > 0) {
+          dispatch({ type: "notice", message: "clear the composer before restoring a queued message" })
+          return
+        }
         const { msg, map } = popNewest(queuedMessages, queueKey)
         setQueuedMessages(map)
         if (msg) {
@@ -1810,34 +1824,67 @@ export function App({ config }: AppProps) {
     return () => clearInterval(timer)
   }, [state.isThinking, showHome])
 
-  // Input-queue auto-flush. Fires on the isThinking true→false edge, scoped to the
-  // ACTIVE thread's queue. On a clean completion, dequeue the OLDEST queued
-  // message and send it (replaying its stored attachments) — exactly one per edge,
-  // so chaining is natural: sending starts a new run and the next stays queued
-  // until that run completes. On failure/cancellation the queue is HELD and the
-  // user is nudged to edit/send it with alt+↑. Background-thread queues are not
-  // flushed here; they resume when you switch back and that thread's run settles.
+  // Input-queue auto-flush (CONDITION-based, not edge-based). The active thread's
+  // oldest queued message auto-sends when ALL hold: the thread is FULLY IDLE
+  // (!isThinking && !activeRunId && !pendingGate), its last run settled CLEANLY
+  // (lastRunOutcome === "completed"), and its queue is non-empty. Exactly one
+  // message flushes per idle window — dequeue removes it so it can't re-fire for
+  // the same message, and flushedIdleWindowRef blocks a second flush before the
+  // send starts the next run (which breaks idle and re-arms the guard). Chaining
+  // is natural: each flush starts a run; the next message waits for its clean
+  // completion. A failed/cancelled outcome HOLDS the queue and nudges alt+↑.
+  //
+  // Why a condition (not the isThinking edge): switching away from a running thread
+  // force-clears isThinking, which used to CONSUME the completion edge and strand
+  // the queue forever. lastRunOutcome is now the authoritative "this thread's run
+  // finished cleanly" signal, and it is cleared on thread switch (see the history
+  // reducer) so a stale "completed" can neither leak across threads nor drive a
+  // spurious flush. Consequence, by design: a BACKGROUND thread's queue auto-sends
+  // ONLY when you are on the thread as its run completes cleanly. Switching away
+  // before completion holds the queue — never stranded, always recoverable via the
+  // ⧗ indicator and alt+↑.
   useEffect(() => {
-    const wasThinking = wasThinkingRef.current
-    wasThinkingRef.current = state.isThinking
-    if (!wasThinking || state.isThinking) return
     const key = state.activeThreadId ?? "local"
+    const idle = !state.isThinking && !state.activeRunId && !state.pendingGate
+    const settled =
+      state.lastRunOutcome === "completed" ||
+      state.lastRunOutcome === "failed" ||
+      state.lastRunOutcome === "cancelled"
+    // Leaving the eligible state re-arms the one-shot guard for the next window.
+    if (!idle || !settled) {
+      flushedIdleWindowRef.current = false
+      return
+    }
     const pending = queueCount(queuedMessages, key)
     if (pending === 0) return
-    if (state.lastRunOutcome === "completed") {
+    if (flushedIdleWindowRef.current) return
+    flushedIdleWindowRef.current = true
+    if (isFlushEligible({ idle, outcome: state.lastRunOutcome, queued: pending })) {
       const { msg, map } = dequeueOldest(queuedMessages, key)
       setQueuedMessages(map)
-      if (msg) void submitContent(msg.text, msg.attachments)
-    } else if (state.lastRunOutcome === "failed" || state.lastRunOutcome === "cancelled") {
+      // Route through the same command detection a manual send uses, so a queued
+      // /command executes as a command instead of going out as literal chat text.
+      if (msg) void routeOutgoing(msg.text, msg.attachments)
+    } else {
       dispatch({
         type: "notice",
         message: `run ${state.lastRunOutcome} — ${pending} message(s) still queued; alt+↑ to edit/send`,
       })
     }
-    // submitContent/clearComposer are stable component closures; re-including them
-    // would churn the effect. The queue map + run signals are the real inputs.
+    // routeOutgoing/dispatch are stable component closures; re-including them would
+    // churn the effect. The idle signals + queue map are the real inputs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.isThinking, state.activeThreadId, state.lastRunOutcome, queuedMessages])
+  }, [state.isThinking, state.activeRunId, state.pendingGate, state.lastRunOutcome, state.activeThreadId, queuedMessages])
+
+  // Reconcile the "local" fallback queue onto the real thread id. A message can be
+  // queued under "local" when a run is in flight before activeThreadId is assigned;
+  // once the id resolves (run_started / history), migrate those entries so the
+  // flush and clearThreadQueue see them under the real key instead of stranding.
+  useEffect(() => {
+    const realId = state.activeThreadId
+    if (!realId || realId === "local") return
+    setQueuedMessages((map) => (queueCount(map, "local") > 0 ? migrateThreadQueue(map, "local", realId) : map))
+  }, [state.activeThreadId])
 
   useEffect(() => {
     let cancelled = false
@@ -2901,20 +2948,32 @@ export function App({ config }: AppProps) {
     const content = input.trim()
     if (!content) return
     rememberInput(content)
-    // Single routing path: match the first token against the registry. Commands
-    // that declare `takesArgs` (e.g. /attach, /save) carry their arguments through
-    // one channel; everything else must match the whole line exactly.
-    const matched = matchSlashCommand(content, commandSet)
+    await routeOutgoing(content)
+  }
+
+  // Single outgoing routing path, shared by a manual composer send (submit) and the
+  // input-queue flush. Match the first token against the registry — commands that
+  // declare `takesArgs` (e.g. /attach, /save) carry their arguments through one
+  // channel; everything else must match the whole line exactly — then fall back to
+  // a local CLI command, and finally to a plain content send. Routing the FLUSH
+  // through here (not straight to submitContent) is what makes a queued /command
+  // execute as a command instead of being sent as literal chat text.
+  // `overrideAttachments` (flush-only) replays a queued message's stored
+  // attachments and also flags flush-origin for the rejected_busy backstop.
+  async function routeOutgoing(content: string, overrideAttachments?: StagedAttachment[]) {
+    const trimmed = content.trim()
+    if (!trimmed) return
+    const matched = matchSlashCommand(trimmed, commandSet)
     if (matched) {
       await runSlashCommand(matched.command, matched.args)
       return
     }
-    const localCommand = localCliCommandForInput(content, config.mode)
+    const localCommand = localCliCommandForInput(trimmed, config.mode)
     if (localCommand) {
-      await runLocalCliCommand(content, localCommand)
+      await runLocalCliCommand(trimmed, localCommand)
       return
     }
-    await submitContent(content)
+    await submitContent(content, overrideAttachments)
   }
 
   // `overrideAttachments` lets the input-queue flush replay a queued message with
@@ -2944,9 +3003,17 @@ export function App({ config }: AppProps) {
       // Backstop: a send can still race a run that started between our intercept
       // check and the gateway. Rather than drop the message, queue it the same way
       // so the completion edge auto-sends it. Composer + staged set are cleared.
+      // A FLUSH replay (overrideAttachments provided) that bounces must re-queue to
+      // the FRONT so FIFO order is preserved — [M, N] that flushed M and bounced
+      // stays [M, N], not [N, M]. A fresh user send re-queues to the back.
       if (response.outcome === "rejected_busy") {
         const key = threadId ?? state.activeThreadId ?? "local"
-        setQueuedMessages((map) => enqueue(map, key, { text: content, attachments }))
+        const isFlush = overrideAttachments !== undefined
+        setQueuedMessages((map) =>
+          isFlush
+            ? enqueueFront(map, key, { text: content, attachments })
+            : enqueue(map, key, { text: content, attachments }),
+        )
         clearComposer()
         setStagedAttachments([])
         dispatch({ type: "notice", message: "queued — a run is already active on this thread" })

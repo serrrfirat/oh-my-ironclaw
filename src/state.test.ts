@@ -112,6 +112,35 @@ describe("UI state", () => {
     expect(polled.isThinking).toBe(false)
   })
 
+  test("clears lastRunOutcome when history switches to another thread", () => {
+    const onThread1 = { ...initialUiState, activeThreadId: "thread-1", lastRunOutcome: "completed" as const }
+    const switched = reduceUiState(onThread1, {
+      type: "history",
+      history: {
+        thread_id: "thread-2",
+        turns: [],
+        has_more: false,
+      },
+    })
+    expect(switched.activeThreadId).toBe("thread-2")
+    // The settled outcome belonged to thread-1; it must not leak onto thread-2
+    // (or drive a spurious input-queue flush there).
+    expect(switched.lastRunOutcome).toBeNull()
+  })
+
+  test("keeps lastRunOutcome when history refreshes the same thread", () => {
+    const onThread1 = { ...initialUiState, activeThreadId: "thread-1", lastRunOutcome: "completed" as const }
+    const same = reduceUiState(onThread1, {
+      type: "history",
+      history: {
+        thread_id: "thread-1",
+        turns: [],
+        has_more: false,
+      },
+    })
+    expect(same.lastRunOutcome).toBe("completed")
+  })
+
   test("renders recovery-required run statuses inline", () => {
     const state = reduceUiState(initialUiState, {
       type: "event",

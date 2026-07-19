@@ -20,6 +20,29 @@ export function enqueue(map: QueuedMessageMap, threadId: string, msg: QueuedMess
   return { ...map, [threadId]: [...existing, msg] }
 }
 
+// Prepend a message to the FRONT of a thread's queue (becomes the new oldest).
+// Used when an auto-flushed message's send comes back rejected_busy (the run was
+// still settling): re-queueing it to the front preserves FIFO order so a queue of
+// [M, N] that flushed M and bounced stays [M, N] rather than becoming [N, M].
+export function enqueueFront(map: QueuedMessageMap, threadId: string, msg: QueuedMessage): QueuedMessageMap {
+  const existing = map[threadId] ?? []
+  return { ...map, [threadId]: [msg, ...existing] }
+}
+
+// Move a thread's whole queue from one key to another (used to reconcile messages
+// queued under the "local" fallback key onto the real thread id once it's known).
+// The moved messages are older, so they land in FRONT of any entries already on the
+// destination. A no-op (same map reference) when there is nothing to move.
+export function migrateThreadQueue(map: QueuedMessageMap, fromKey: string, toKey: string): QueuedMessageMap {
+  if (fromKey === toKey) return map
+  const from = map[fromKey]
+  if (!from || from.length === 0) return map
+  const next = { ...map }
+  delete next[fromKey]
+  next[toKey] = [...from, ...(map[toKey] ?? [])]
+  return next
+}
+
 // Remove and return the OLDEST message (front of the FIFO) — the one auto-sent
 // on a clean completion edge. Returns the message (or null when empty) and the
 // map with that entry removed. An emptied thread key is dropped from the map so
@@ -44,6 +67,18 @@ export function popNewest(map: QueuedMessageMap, threadId: string): { msg: Queue
 // How many messages are queued for a thread.
 export function queueCount(map: QueuedMessageMap, threadId: string): number {
   return map[threadId]?.length ?? 0
+}
+
+// Pure predicate for the condition-based auto-flush: the active thread's oldest
+// queued message may auto-send only when the thread is fully idle, its last run
+// settled cleanly (completed), and its queue is non-empty. A failed/cancelled
+// outcome is deliberately NOT eligible — that queue is held for the user.
+export function isFlushEligible(args: {
+  idle: boolean
+  outcome: "completed" | "failed" | "cancelled" | null | undefined
+  queued: number
+}): boolean {
+  return args.idle && args.outcome === "completed" && args.queued > 0
 }
 
 // Peek the oldest queued message (front of the FIFO) without removing it —
