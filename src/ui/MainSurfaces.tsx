@@ -21,6 +21,8 @@ import {
 export type GateAction = "approved" | "denied" | "always"
 
 const SLASH_COMMAND_POPUP_LIMIT = 8
+// Faint "edit" affordance appended to the input-queue indicator row.
+const QUEUE_HINT = " · alt+↑ edit"
 const THREAD_PALETTE_LIMIT = 10
 const EMPTY_MATCH_IDS: Set<string> = new Set()
 
@@ -50,6 +52,10 @@ export type ComposerCommonProps = {
   usageCost?: RunUsageCost | null
   notice?: string | null
   stagedAttachments: StagedAttachment[]
+  // Client-side input-queue indicator: how many messages are queued for the
+  // active thread, and a preview of the oldest (next to auto-send).
+  queuedCount: number
+  queuedPreview?: string | null
   threadDeleteConfirm?: boolean
   onInputChange: () => void
   onSubmit: () => void
@@ -509,6 +515,8 @@ function Composer({
   usageCost,
   notice,
   stagedAttachments,
+  queuedCount,
+  queuedPreview,
   threadDeleteConfirm,
   width,
   onInputChange,
@@ -531,6 +539,14 @@ function Composer({
       {stagedAttachments.length ? (
         <box style={{ width, height: 1, flexDirection: "row" }}>
           <text fg={theme.accentText}>{truncate(stagedAttachments.map((item) => `[${attachmentChipLabel(item)}]`).join(" "), width)}</text>
+        </box>
+      ) : null}
+      {queuedCount > 0 ? (
+        <box style={{ width, height: 1, flexDirection: "row" }}>
+          <text fg={theme.textFaint}>
+            {truncate(`⧗ ${queuedCount} queued · ${queuedPreview ?? ""}`, Math.max(1, width - QUEUE_HINT.length - 1))}
+          </text>
+          <text fg={theme.textFaint}>{QUEUE_HINT}</text>
         </box>
       ) : null}
       {showModelPalette ? (
