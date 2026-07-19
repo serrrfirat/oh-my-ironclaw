@@ -2697,7 +2697,7 @@ export function App({ config }: AppProps) {
       return
     }
     if (row.needsSetup) {
-      await loadSelectedExtensionSetup()
+      await loadSelectedExtensionSetup(index)
       return
     }
     if (!row.active) {
@@ -2711,8 +2711,8 @@ export function App({ config }: AppProps) {
     await runExtensionAction(() => client.removeExtension(row.id))
   }
 
-  async function loadSelectedExtensionSetup() {
-    const row = selectedExtension()
+  async function loadSelectedExtensionSetup(index: number = selectedExtensionIndex) {
+    const row = selectedExtension(index)
     if (!row) return
     setExtensionsLoading(true)
     setExtensionsError(null)
