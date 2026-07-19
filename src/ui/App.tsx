@@ -2991,7 +2991,8 @@ export function App({ config }: AppProps) {
       setQueuedMessages((map) => enqueue(map, key, { text: content, attachments }))
       clearComposer()
       setStagedAttachments([])
-      dispatch({ type: "notice", message: "queued — will send when the current run finishes" })
+      // No notice: the thread-scoped "⧗ N queued" composer indicator is the
+      // accurate, self-clearing signal (a persistent notice lingers past drain).
       return
     }
     try {
@@ -3016,7 +3017,7 @@ export function App({ config }: AppProps) {
         )
         clearComposer()
         setStagedAttachments([])
-        dispatch({ type: "notice", message: "queued — a run is already active on this thread" })
+        // No notice: the "⧗ N queued" indicator is the accurate, self-clearing signal.
         return
       }
       // Accepted (submitted / already_submitted): now commit the optimistic UI —
