@@ -222,6 +222,10 @@ The UI uses the **IronClaw DS "Glass" look** — the same `#09090b` zinc canvas,
 
 The conversation view is a two-pane layout: a persistent **threads sidebar** (`THREADS`, ~28 cols) on the left listing threads with a status dot (running = info, needs-approval = warn, idle = muted), the active thread highlighted, over the conversation on the right. The sidebar reads the same in-memory thread list as the `ctrl+t` picker (no extra fetches). It auto-collapses below ~90 cols (chat takes the full width); `ctrl+b` toggles it, and `tab` moves focus between the sidebar and the chat — when the sidebar is focused, `↑`/`↓` select and `enter` opens the thread.
 
+### Rich rendering
+
+Message markdown is rendered legibly rather than flat. A themed syntax style (`src/ui/syntaxTheme.ts`, mapping tree-sitter + markdown scopes onto the Glass palette — keywords accent, strings ok-green, comments dimmed, numbers/constants warn, functions info, types accent-text, headings/bold strong, links underlined) colors all code (js/ts/zig grammars ship) **and** all prose (headings, bold/italic, links, inline code). Fenced code blocks render as **themed wells**: a rounded `bgCode` box with a header row naming the language and a clickable `⧉ copy` affordance (per-block copy over the same OSC-52 path as `y`, with a "copied to clipboard" notice); the `renderNode` that draws them (`src/ui/codeWell.ts`) leaves every other token native so prose, tables, lists, and streaming stay intact. A ` ```diff ` fence renders through the structured diff view with soft-green/soft-red line tints. Tables render as Glass-tinted aligned columns. Tool-output unified diffs (`src/ui/diffPreview.ts`) carry the same added/removed line-background tints so they read like the assistant's diff renderer. Languages without a shipped grammar (e.g. json, bash) still render as plain, readable text inside the themed well.
+
 ## Configuration
 
 | Environment | Flag | Default | Purpose |

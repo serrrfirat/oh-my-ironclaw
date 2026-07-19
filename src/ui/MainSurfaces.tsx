@@ -7,6 +7,7 @@ import { formatUsd } from "./homeData"
 import { threadDisplayTitle, type ThreadPreviewMap } from "../threadPreviews"
 import { transcriptItemContentLength, type TranscriptItem } from "../transcript"
 import { activityGroupSummary, groupTranscriptEntries } from "./activityGroups"
+import type { MarkdownRenderNode } from "./codeWell"
 import { TranscriptMessage, transcriptMessageAnchorId } from "./TranscriptMessage"
 import { sourceColor, type SlashCommand } from "./slashCommands"
 import { theme, toneColors, type Tone } from "./theme"
@@ -125,6 +126,7 @@ export function ConversationSurface({
   height,
   lastError,
   markdownStyle,
+  markdownRenderNode,
   pendingGate,
   selectedGateAction,
   authTokenInput,
@@ -132,6 +134,7 @@ export function ConversationSurface({
   authTokenSubmitting,
   showOlderHistoryHint,
   transcript,
+  streamingAssistantId = null,
   expandedActivityIds,
   selectedTranscriptId = null,
   searchMatchIds,
@@ -154,6 +157,7 @@ export function ConversationSurface({
   height: number
   lastError?: string | null
   markdownStyle: SyntaxStyle
+  markdownRenderNode?: MarkdownRenderNode
   pendingGate: PendingGateInfo | null
   selectedGateAction: GateAction
   authTokenInput: string
@@ -161,6 +165,9 @@ export function ConversationSurface({
   authTokenSubmitting: boolean
   showOlderHistoryHint: boolean
   transcript: TranscriptItem[]
+  // Id of the actively-streaming assistant bubble; that message renders native
+  // (live) code and remounts into a themed well once it settles.
+  streamingAssistantId?: string | null
   expandedActivityIds: Set<string>
   selectedTranscriptId?: string | null
   searchMatchIds?: Set<string>
@@ -225,6 +232,8 @@ export function ConversationSurface({
             groupId={entry.id}
             items={entry.items}
             markdownStyle={markdownStyle}
+            markdownRenderNode={markdownRenderNode}
+            streamingAssistantId={streamingAssistantId}
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
             width={contentWidth}
@@ -239,6 +248,8 @@ export function ConversationSurface({
             item={entry.item}
             expanded={entry.item.role === "activity" ? !expandedActivityIds.has(entry.item.id) : expandedActivityIds.has(entry.item.id)}
             markdownStyle={markdownStyle}
+            markdownRenderNode={markdownRenderNode}
+            streaming={entry.item.id === streamingAssistantId}
             selectedModel={composer.selectedModel}
             spinner={composer.spinner}
             width={contentWidth}
@@ -394,6 +405,8 @@ function ActivityGroup({
   groupId,
   items,
   markdownStyle,
+  markdownRenderNode,
+  streamingAssistantId = null,
   selectedModel,
   spinner,
   width,
@@ -407,6 +420,8 @@ function ActivityGroup({
   groupId: string
   items: Array<Extract<TranscriptItem, { role: "activity" }>>
   markdownStyle: SyntaxStyle
+  markdownRenderNode?: MarkdownRenderNode
+  streamingAssistantId?: string | null
   selectedModel: string
   spinner: string
   width: number
@@ -441,6 +456,8 @@ function ActivityGroup({
           item={item}
           expanded={!expandedActivityIds.has(item.id)}
           markdownStyle={markdownStyle}
+          markdownRenderNode={markdownRenderNode}
+          streaming={item.id === streamingAssistantId}
           selectedModel={selectedModel}
           spinner={spinner}
           width={width}
