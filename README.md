@@ -1,10 +1,36 @@
 # oh-my-ironclaw
 
-<img width="1325" height="760" alt="oh-my-ironclaw screenshot" src="https://github.com/user-attachments/assets/e52a8757-cf20-4a1e-80dd-47121d2ad8a5" />
+A fast, keyboard- and mouse-driven **OpenTUI** client for the IronClaw Reborn WebChat v2 / Product Workflow API — a terminal cockpit for driving an IronClaw agent.
 
-OpenTUI client for the IronClaw Reborn WebChat v2/Product Workflow API.
+![oh-my-ironclaw — Glass conversation with the threads sidebar and a themed code well](docs/screenshots/glass/01-conversation.png)
 
 The TUI is a separate client. Start an IronClaw Reborn server first, then run this app against that server.
+
+## Highlights
+
+- **Live conversation** — assistant replies stream in smoothly (one bubble grows in place, no flicker), the thinking indicator stays latched with a real elapsed timer, and a running tool shows its command instead of an opaque spinner.
+- **Rich rendering** — themed syntax-highlighted code in copyable wells, green/red diffs, and Glass-tinted tables.
+- **Input queue** — type while the agent is working; your message queues and auto-sends the moment the run finishes (holds on failure).
+- **Home control room** — one screen for what needs you, what's running, automations, and vitals.
+- **Notifications** — bell + OS popup + terminal-title flag when a gate, auth prompt, or failure needs you.
+- **Operable transcript** — keyboard-navigate messages, copy any message/tool output, edit & resend, in-thread search.
+- **Full mouse support** — click any row to select/act, click buttons, wheel-scroll the transcript.
+- **Glass look** — bordered panels and cards on the IronClaw design system, with a persistent threads sidebar.
+- **WebChat v2 parity** — skills, per-tool permissions, automations control, logs, traces, workspace browser, projects, retry, attachments, cost tracking.
+
+## Screenshots
+
+| Live streaming | Rich code & diffs |
+| --- | --- |
+| ![Assistant reply streaming in with the thinking indicator active](docs/screenshots/streaming/01-mid.png) | ![A syntax-highlighted code well with a copy affordance](docs/screenshots/legibility/01-code.png) |
+
+| Home control room | Approval gate |
+| --- | --- |
+| ![Home: needs-you, active runs, automations, vitals](docs/screenshots/home/01-home.png) | ![A framed amber approval gate with Approve/Always/Deny](docs/screenshots/glass/02-gate.png) |
+
+| In-thread search | Input queue |
+| --- | --- |
+| ![Transcript search highlighting matches](docs/screenshots/transcript/03-search.png) | ![A message queued while a run is active](docs/screenshots/queue/01-queued.png) |
 
 ## Requirements
 
